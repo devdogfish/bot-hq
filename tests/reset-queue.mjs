@@ -36,7 +36,7 @@ try {
   assert.deepEqual(listRows(target), []);
 
   dispatchRoomMessage(room, 'Need a reply', enqueue);
-  assert.match(listRows(room)[0].body.text, /maintenance: Target/);
+  assert.match(listRows(room)[0].body.text, /Unavailable Bots: Target/);
 } finally {
   hold.resolve();
   await reset;

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, User } from '@shared/types';
-import { api } from './lib/api';
+import { ApiError, api } from './lib/api';
 
 export type ModalKind = 'create' | 'search' | 'group' | null;
 
@@ -12,6 +12,7 @@ interface State {
   authChecked: boolean;
 
   bots: Bot[];
+  pendingPause: Record<string, boolean | undefined>;
   live: Record<string, LiveState>;
   selectedBotId: string | null;
   transcripts: Record<string, Transcript>;
@@ -31,6 +32,7 @@ interface State {
 
   checkAuth(): Promise<void>;
   loadBots(): Promise<void>;
+  setBotPaused(id: string, paused: boolean): Promise<void>;
   selectBot(id: string): void;
   loadRows(id: string): Promise<void>;
   loadRoutines(id: string): Promise<void>;
@@ -52,6 +54,7 @@ export const useStore = create<State>((set, get) => ({
   devLogin: false,
   authChecked: false,
   bots: [],
+  pendingPause: {},
   live: {},
   selectedBotId: lsGet(LS_SELECTED),
   transcripts: {},
@@ -83,6 +86,29 @@ export const useStore = create<State>((set, get) => ({
     set({ bots, live: liveMap });
     if (selectedBotId !== get().selectedBotId || !get().transcripts[selectedBotId ?? '']) {
       if (selectedBotId) get().selectBot(selectedBotId);
+    }
+  },
+
+  async setBotPaused(id, paused) {
+    if (get().pendingPause[id] !== undefined) return;
+    set((s) => ({ pendingPause: { ...s.pendingPause, [id]: paused } }));
+    try {
+      const saved = await api.setPaused(id, paused);
+      set((s) => ({ bots: s.bots.map((b) => b.id === id ? { ...b, paused: saved.paused } : b) }));
+    } catch (error) {
+      // A missing response may have arrived after the server saved the change.
+      if (!(error instanceof ApiError) || error.status >= 500) {
+        const refreshed = await get().loadBots().then(() => true, () => false);
+        if (refreshed && get().bots.find((b) => b.id === id)?.paused === paused) return;
+        if (!refreshed) throw new Error('Could not check the saved state. Reload before trying again.');
+      }
+      throw error;
+    } finally {
+      set((s) => {
+        const pendingPause = { ...s.pendingPause };
+        delete pendingPause[id];
+        return { pendingPause };
+      });
     }
   },
 

@@ -7,7 +7,7 @@ import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
-import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval } from './agent/loop.js';
+import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, setBotPaused } from './agent/loop.js';
 import { computerState } from './computer.js';
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
@@ -217,6 +217,7 @@ api.post('/bots/:id/messages', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if (b.paused) return c.json({ error: 'This bot is paused.' }, 409);
   if (!text?.trim()) return c.json({ error: 'empty' }, 400);
   const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: text.trim() });
   // Group chats dispatch to their member Bots instead of running their own loop.
@@ -231,6 +232,15 @@ api.post('/bots/:id/interrupt', (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);
   return c.json({ ok: true });
+});
+
+api.patch('/bots/:id/pause', async (c) => {
+  const body = await c.req.json<{ paused?: unknown }>().catch(() => null);
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b || b.kind === 'room') return c.json({ error: 'not found' }, 404);
+  if (typeof body?.paused !== 'boolean') return c.json({ error: 'paused must be a boolean' }, 400);
+  setBotPaused(b.id, body.paused);
+  return c.json({ paused: body.paused });
 });
 
 api.post('/bots/:id/fresh', async (c) => {
@@ -255,6 +265,7 @@ api.post('/bots/:id/cards/:seq/answer', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if (b.paused) return c.json({ error: 'This bot is paused.' }, 409);
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card' || row.body.card !== 'question') return c.json({ error: 'not a question' }, 400);
   updateRow(b.id, row.seq, { ...row.body, status: 'answered', answer });
@@ -268,6 +279,7 @@ api.post('/bots/:id/cards/:seq/dismiss', (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card') return c.json({ error: 'not a card' }, 400);
+  if (row.body.card === 'connect' && b.paused) return c.json({ error: 'This bot is paused.' }, 409);
   const body: any = { ...row.body, status: row.body.card === 'connect' ? 'skipped' : 'dismissed' };
   updateRow(b.id, row.seq, body);
   if (row.body.card === 'connect') enqueue(b.id, { type: 'system', text: `The user skipped connecting ${row.body.toolkitName}. Continue without it.` });
@@ -294,9 +306,10 @@ api.patch('/routines/:id', async (c) => {
 });
 
 api.post('/routines/:id/run', (c) => {
-  const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
+  const r = db.prepare('SELECT r.*, b.paused FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(r.bot_id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if (r.paused) return c.json({ error: 'This bot is paused.' }, 409);
   if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   runRoutine(r.id);
   return c.json({ ok: true });

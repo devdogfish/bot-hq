@@ -70,7 +70,7 @@ export function dispatchRoomMessage(roomId: string, text: string, enqueue: Enque
     if (!accepted) unavailable.push(m.name);
   }
   if (unavailable.length) {
-    appendRow(roomId, 'notice', { type: 'notice', text: `Bots unavailable during maintenance: ${unavailable.join(', ')}. Try again shortly.`, tone: 'warn' });
+    appendRow(roomId, 'notice', { type: 'notice', text: `Unavailable Bots: ${unavailable.join(', ')}. Check whether they are paused or try again shortly.`, tone: 'warn' });
   }
 }
 

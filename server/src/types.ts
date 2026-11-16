@@ -20,6 +20,7 @@ export interface Bot {
   avatarColor: AvatarColor;
   mode: 'personal' | 'teammate';
   isPrimary: boolean;
+  paused: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */
   kind?: 'agent' | 'room';
   pinned: boolean;

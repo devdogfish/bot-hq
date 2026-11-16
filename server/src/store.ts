@@ -25,6 +25,7 @@ export function toBot(r: any): Bot {
     avatarColor: r.avatar_color,
     mode: r.mode,
     isPrimary: !!r.is_primary,
+    paused: !!r.paused,
     kind: r.kind === 'room' ? 'room' : 'agent',
     pinned: !!r.pinned,
     effort: r.effort,
@@ -42,6 +43,13 @@ export function toBot(r: any): Bot {
 }
 
 export const getBotRow = (id: string) => db.prepare('SELECT * FROM bots WHERE id=?').get(id) as any;
+
+export function activePauseRevision(botId: string): number | undefined {
+  const state = db.prepare('SELECT pause_revision FROM bots WHERE id=? AND paused=0').get(botId) as
+    { pause_revision: number } | undefined;
+  return state?.pause_revision;
+}
+
 export const getBot = (id: string) => {
   const r = getBotRow(id);
   return r ? toBot(r) : null;

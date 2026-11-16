@@ -134,6 +134,8 @@ addColumn('bots', 'websockify_url', 'TEXT');
 addColumn('bots', 'vnc_password', 'TEXT');
 addColumn('bots', 'cdp_port', 'INTEGER');
 addColumn('bots', 'screen_revision', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('bots', 'paused', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('bots', 'pause_revision', 'INTEGER NOT NULL DEFAULT 0');
 db.prepare("UPDATE routines SET enabled=0 WHERE schedule LIKE 'event:%' AND enabled=1").run();
 
 export const now = () => Date.now();

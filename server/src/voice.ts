@@ -305,6 +305,7 @@ voiceApi.post('/tool', async (c) => {
   switch (name) {
     case 'send_task': {
       if (isBotResetting(bot.id)) return c.json({ output: 'Bot maintenance is in progress. Ask the user to try again.' });
+      if (bot.paused) return c.json({ output: 'This bot is paused. Ask the user to resume it before handing off work.' });
       const request = String(a.request ?? '').trim();
       if (!request) return c.json({ output: 'Error: request is empty. Ask the user what they want done.' });
       const from: MessageBody['from'] = { kind: 'voice', id: callId ?? 'call', name: 'Voice call' };

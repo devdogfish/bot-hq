@@ -34,6 +34,7 @@ export const api = {
   rows: (id: string) => req<{ generation: number; rows: Row[] }>('GET', `/bots/${id}/rows`),
   send: (id: string, text: string) => req<{ row: Row }>('POST', `/bots/${id}/messages`, { text }),
   interrupt: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/interrupt`),
+  setPaused: (id: string, paused: boolean) => req<{ paused: boolean }>('PATCH', `/bots/${id}/pause`, { paused }),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
 
   approve: (approvalId: string, decision: 'allow' | 'deny') => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),

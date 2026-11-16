@@ -106,7 +106,8 @@ a { color: inherit; }
   display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%;
   height: 30px; padding: 0 10px; border-radius: 6px; font-size: 13px; line-height: 18px; letter-spacing: 0.195px; white-space: nowrap;
 }
-.menu__item:hover { background: var(--color-bg-hover); }
+.menu__item:hover:not(:disabled) { background: var(--color-bg-hover); }
+.menu__item:disabled { opacity: 0.5; }
 .menu__item.is-danger { color: var(--color-danger); }
 .menu__hint { color: var(--color-text-tertiary); font-size: 12px; }
 @keyframes rise { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }

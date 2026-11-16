@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { Hono } from 'hono';
-import { getBotRow } from './store.js';
+import { activePauseRevision, getBotRow } from './store.js';
 import { mcpToken, primaryBotId } from './engine.js';
 import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, turnDepth } from './agent/loop.js';
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
@@ -16,6 +16,7 @@ import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
  */
 
 const SUPPORTED = ['2025-06-18', '2025-03-26', '2024-11-05'];
+const PAUSED = 'This bot is paused.';
 
 interface CallResult { content: { type: 'text'; text: string }[]; isError?: boolean }
 const text = (t: string, isError = false): CallResult => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError: true } : {}) });
@@ -37,9 +38,11 @@ function caller(slug: string, auth: string | undefined): { botId: string | null 
 async function callTool(botId: string | null, rawName: string, args: any): Promise<CallResult> {
   const bot = botId ? getBotRow(botId) : null;
   if (!botId || !bot) return text('The team app has no bot for this agent yet. Ask the user to open the app once, then try again.', true);
+  if (bot.paused) return text(PAUSED, true);
   const userId: string = bot.user_id;
   const name = [...toolMap.keys()].find((k) => k.toLowerCase() === rawName.toLowerCase()) ?? rawName;
   const rowSeq = await claimToolRow(botId, name);
+  if (activePauseRevision(botId) !== bot.pause_revision) return text('This tool call was interrupted by a pause.', true);
   const ctx: ToolCtx = { userId, botId, enqueueBotMessage, depth: turnDepth(botId) };
   try {
     const own = toolMap.get(name);
@@ -85,6 +88,7 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
     case 'ping':
       return { jsonrpc: '2.0', id, result: {} };
     case 'tools/list':
+      if (botId && getBotRow(botId)?.paused) return rpcError(id, -32002, PAUSED);
       return { jsonrpc: '2.0', id, result: { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })) } };
     case 'tools/call': {
       const name = params?.name;
