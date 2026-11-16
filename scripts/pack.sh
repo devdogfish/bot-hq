@@ -9,7 +9,7 @@ rm -rf server/dist web/dist
 npm run build
 tar -czf "$out" \
   package.json package-lock.json .env.example \
-  server/package.json server/dist server/box \
-  web/package.json web/dist web/src/avatar/shapes.gen.ts \
+  server/package.json server/dist \
+  web/package.json web/dist \
   scripts/install-on-computer.sh scripts/add-hq-to-hermes.py scripts/sign-in-link.sh
 echo "packed $(du -h "$out" | cut -f1) -> $out"

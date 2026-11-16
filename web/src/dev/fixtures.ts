@@ -32,7 +32,6 @@ export function injectFixtures() {
     row('card', { type: 'card', card: 'approval', approvalId: 'fx_appr2', title: 'Allow Quinn to create a calendar event?', detail: '', tool: 'GOOGLECALENDAR_CREATE_EVENT', toolkit: 'googlecalendar', args: {}, status: 'always' }, 55_000),
     row('card', { type: 'card', card: 'question', question: 'Which posts should go up?', options: ['1. $12/hr remix', '2. One workflow original', '3. Wrong agent remix'], status: 'pending' }, 54_000),
     row('card', { type: 'card', card: 'question', question: 'Which inbox should I watch?', options: ['Work', 'Personal'], status: 'answered', answer: 'Work' }, 53_000),
-    row('card', { type: 'card', card: 'connect', toolkit: 'slack', toolkitName: 'Slack', logo: 'https://logos.composio.dev/api/slack', reason: 'I need Slack to post the daily digest in #general.', status: 'pending' }, 52_000),
     row('event', { type: 'event', event: 'routine-created', text: 'Routine created: Daily digest · Weekdays at 9:00 AM' }, 51_000),
     row('notice', { type: 'notice', text: "You're at 80% of your weekly usage limit.", tone: 'warn' }, 50_000),
     row('message', { type: 'message', role: 'assistant', text: "The DM didn't go out. Here's the text to paste into a DM to **@alex**:\n\n```\nHey Alex, quick question. Any plans to support more than 3 seats?\n```\n\n> Tip: X only allows message requests from the app.\n\nInline `code` works too." }, 49_000),

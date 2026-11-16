@@ -2,7 +2,6 @@ import { Cron } from 'croner';
 import { db, now } from './db.js';
 import { appendRow } from './store.js';
 import type { Routine } from './types.js';
-import { isEventSchedule, setEventRoutineEnabled } from './triggers.js';
 
 const jobs = new Map<string, Cron>();
 let enqueueFn: ((botId: string, t: any) => void) | null = null;
@@ -15,7 +14,7 @@ export function initRoutines(enqueue: (botId: string, t: any) => void) {
 }
 
 export function scheduleRoutine(r: Pick<Routine, 'id' | 'botId' | 'name' | 'prompt' | 'schedule' | 'timezone'>) {
-  if (isEventSchedule(r.schedule)) { void setEventRoutineEnabled(r.id, true); return; }
+  if (r.schedule.startsWith('event:')) return;
   unscheduleRoutine(r.id);
   try {
     const job = new Cron(r.schedule, { timezone: r.timezone || 'UTC', protect: true }, () => runRoutine(r.id));
@@ -26,15 +25,13 @@ export function scheduleRoutine(r: Pick<Routine, 'id' | 'botId' | 'name' | 'prom
 }
 
 export function unscheduleRoutine(id: string) {
-  const row = db.prepare('SELECT schedule FROM routines WHERE id=?').get(id) as any;
-  if (row && isEventSchedule(row.schedule)) void setEventRoutineEnabled(id, false);
   jobs.get(id)?.stop();
   jobs.delete(id);
 }
 
 export function runRoutine(id: string) {
   const r = db.prepare('SELECT * FROM routines WHERE id=?').get(id) as any;
-  if (!r || !enqueueFn) return;
+  if (!r || !enqueueFn || r.schedule.startsWith('event:')) return;
   db.prepare('UPDATE routines SET last_run_at=? WHERE id=?').run(now(), id);
   appendRow(r.bot_id, 'event', { type: 'event', event: 'routine-run', text: `Running routine: ${r.name}`, ref: id });
   enqueueFn(r.bot_id, { type: 'routine', routineId: id, name: r.name, prompt: r.prompt });

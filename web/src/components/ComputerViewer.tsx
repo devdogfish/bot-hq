@@ -2,16 +2,15 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from 're
 import type RFBType from '@novnc/novnc';
 import type { Bot } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
-import { api } from '../lib/api';
 import { botVars } from '../lib/colors';
-import { computerStatusText, screenSize, screensFull } from '../lib/computer';
+import { screenSize } from '../lib/computer';
 import { configApi } from '../lib/configApi';
 import { useSelectedBot, useStore } from '../store';
 import { Icon } from './Icon';
 
 export type ScreenMode = 'watch' | 'control';
 type Conn = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
-type Phase = 'live' | 'switching' | 'waking' | 'asleep' | 'idle' | 'paused' | 'error';
+type Phase = 'live' | 'switching' | 'waking' | 'idle' | 'paused' | 'error';
 
 interface ScreenProps {
   bot: Bot;
@@ -28,7 +27,7 @@ interface ScreenProps {
 }
 
 /**
- * A bot's screen on the shared computer: noVNC over our relay inside a rounded frame that keeps the
+ * A bot's screen on its Agent machine: noVNC over our relay inside a rounded frame that keeps the
  * screen's aspect ratio. Watching is view-only. Taking control reconnects with mode=control and shows
  * a chin under the frame with the way back.
  */
@@ -38,43 +37,20 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const canvasRef = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<RFBType | null>(null);
   const hadFrame = useRef(false);
-  const autoWoke = useRef(false);
 
   const [mode, setMode] = useState<ScreenMode>(initialMode);
   const [conn, setConn] = useState<Conn>('idle');
   const [attempt, setAttempt] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
-  const [opened, setOpened] = useState(variant === 'stage');
-  const [waking, setWaking] = useState(false);
-  const [wakeError, setWakeError] = useState<string | null>(null);
-  const [resetAsk, setResetAsk] = useState(false);
-  const [resetting, setResetting] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  const status = computer?.status;
-  const running = status === 'running';
-  const busy = status === 'creating' || status === 'starting' || status === 'resuming';
-  const hasScreen = !!computer?.screens.some((s) => s.botId === bot.id);
+  const screen = computer?.screens.find((s) => s.botId === bot.id);
+  const hasScreen = !!screen;
   const { width, height } = screenSize(computer, bot.id, bot.isPrimary);
   const driving = mode === 'control';
   const large = variant === 'stage' || fullscreen;
-  // The small panel view only streams a screen that already exists, so browsing bots never uses up screens.
-  const wantLive = running && !paused && (variant === 'stage' || visible) && (opened || hasScreen);
-
-  const wake = useCallback(() => {
-    setWaking(true); setWakeError(null);
-    api.ensureComputer()
-      .then(() => useStore.getState().loadComputer())
-      .catch((e: Error) => setWakeError(e.message || 'The computer did not start.'))
-      .finally(() => setWaking(false));
-  }, []);
-
-  // Opening the large view is a request to see the computer, so wake it without another click.
-  useEffect(() => {
-    if (variant !== 'stage' || autoWoke.current || !computer) return;
-    if (status === 'suspended' || status === 'stopped' || status === 'absent') { autoWoke.current = true; wake(); }
-  }, [variant, computer, status, wake]);
+  const wantLive = hasScreen && !paused && (variant === 'stage' || visible);
 
   useEffect(() => {
     const on = () => setVisible(document.visibilityState === 'visible');
@@ -116,7 +92,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       rfbRef.current = null;
       el.innerHTML = '';
     };
-  }, [bot.id, wantLive, mode, attempt]);
+  }, [bot.id, wantLive, mode, attempt, screen?.revision]);
 
   useEffect(() => { onModeChange?.(mode); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -139,16 +115,14 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     return () => clearTimeout(t);
   }, [note]);
   useEffect(() => {
-    if (!resetAsk) return;
-    const t = setTimeout(() => setResetAsk(false), 6000);
-    return () => clearTimeout(t);
-  }, [resetAsk]);
+    if (!note) return;
+    const timer = setTimeout(() => setNote(null), 4000);
+    return () => clearTimeout(timer);
+  }, [note]);
 
   let phase: Phase;
   if (paused) phase = 'paused';
-  else if (status === 'error' || wakeError) phase = 'error';
-  else if (!running) phase = busy || waking ? 'waking' : 'asleep';
-  else if (!opened && !hasScreen) phase = 'idle';
+  else if (computer && !hasScreen) phase = 'idle';
   else if (conn === 'error' || conn === 'disconnected') phase = 'error';
   else if (conn === 'connected') phase = 'live';
   else phase = hadFrame.current ? 'switching' : 'waking';
@@ -158,21 +132,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     else setMode('control');
   };
   const retry = () => {
-    setWakeError(null);
-    if (running) setAttempt((n) => n + 1);
-    else wake();
+    setAttempt((n) => n + 1);
   };
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
     else frameRef.current?.requestFullscreen().catch(() => setNote('Full screen isn’t available here.'));
   };
-  const reset = async () => {
-    setResetting(true);
-    try { await configApi.resetScreen(bot.id); setAttempt((n) => n + 1); }
-    catch { setNote('Couldn’t reset the screen.'); }
-    finally { setResetting(false); setResetAsk(false); }
-  };
-
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled;
   const expandable = variant === 'panel' && !fullscreen && phase === 'live';
   const mascot = large ? 64 : 40;
@@ -202,7 +167,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
             <div className="screen__state is-waking" role="status">
               <span className="screen__sweep" aria-hidden />
               <span className="screen__mascot is-bobbing"><BotAvatarFor bot={bot} size={mascot} /></span>
-              <span className="screen__label">Waking {bot.name}’s computer…</span>
+              <span className="screen__label">Connecting to {bot.name}’s screen…</span>
             </div>
           )}
           {phase === 'switching' && (
@@ -210,20 +175,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
               <span className="screen__text">One moment…</span>
             </div>
           )}
-          {phase === 'asleep' && (
-            <div className="screen__state">
-              <span className="screen__mascot is-asleep"><BotAvatarFor bot={bot} size={mascot} /></span>
-              <span className="screen__text">{status === 'suspending' ? 'Going to sleep…' : `${bot.name}’s computer is asleep`}</span>
-              {status !== 'suspending' && <button type="button" className="screen__action" onClick={wake}>Wake it up</button>}
-            </div>
-          )}
           {phase === 'idle' && (
             <div className="screen__state">
               <span className="screen__mascot"><BotAvatarFor bot={bot} size={mascot} /></span>
-              <span className="screen__text">{bot.name} hasn’t opened a screen yet</span>
-              {screensFull(computer, bot.id)
-                ? <span className="screen__sub">All {computer?.maxScreens} screens are in use. Reset one in Settings to free it.</span>
-                : <button type="button" className="screen__action" onClick={() => setOpened(true)}>Open its screen</button>}
+              <span className="screen__text">Register a screen in Agent connection settings</span>
             </div>
           )}
           {phase === 'paused' && (
@@ -234,38 +189,24 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
           {phase === 'error' && (
             <div className="screen__state" role="alert">
               <span className="screen__text">
-                {!running ? `Couldn’t wake ${bot.name}’s computer` : conn === 'disconnected' ? 'The screen disconnected' : `Couldn’t reach ${bot.name}’s screen`}
+                {conn === 'disconnected' ? 'The screen disconnected' : `Couldn’t reach ${bot.name}’s screen`}
               </span>
-              {(wakeError || (status === 'error' && computer?.error)) && <span className="screen__sub">{wakeError ?? computer?.error}</span>}
-              {running && screensFull(computer, bot.id) && <span className="screen__sub">All {computer?.maxScreens} screens are in use. Reset one in Settings to free it.</span>}
               <button type="button" className="screen__action" onClick={retry}>Retry</button>
             </div>
           )}
 
           {phase === 'live' && !driving && (
-            <div className={`screen__pill${resetAsk || note ? ' is-pinned' : ''}`} role="toolbar" aria-label="Screen controls">
-              {note ? <span className="screen__pill-text" role="status">{note}</span> : resetAsk ? (
-                <>
-                  <span className="screen__pill-text">Close all windows?</span>
-                  <button type="button" className="screen__pill-btn is-danger" onClick={reset} disabled={resetting}>{resetting ? 'Resetting…' : 'Reset'}</button>
-                  <button type="button" className="screen__pill-btn" onClick={() => setResetAsk(false)} disabled={resetting}>Cancel</button>
-                </>
-              ) : (
-                <>
-                  <div className="screen__seg" role="group" aria-label="Who is using the screen">
-                    <button type="button" className="screen__seg-btn is-active" aria-pressed="true">{large && <Icon name="eye" size={14} />}Watch</button>
-                    <button type="button" className="screen__seg-btn" aria-pressed="false" onClick={takeControl}>{large && <Icon name="pointer" size={14} />}Take control</button>
-                  </div>
-                  <span className="screen__pill-rule" aria-hidden />
-                  {canFullscreen && (
-                    <button type="button" className="screen__pill-icon" onClick={toggleFullscreen} aria-label={fullscreen ? 'Leave full screen' : 'Full screen'} title={fullscreen ? 'Leave full screen' : 'Full screen'}>
-                      <Icon name={fullscreen ? 'shrink' : 'expand'} size={15} />
-                    </button>
-                  )}
-                  <button type="button" className="screen__pill-icon" onClick={() => setResetAsk(true)} aria-label="Reset screen" title="Reset: close everything on this screen">
-                    <Icon name="refresh" size={15} />
-                  </button>
-                </>
+            <div className={`screen__pill${note ? ' is-pinned' : ''}`} role="toolbar" aria-label="Screen controls">
+              {note && <span className="screen__pill-text" role="status">{note}</span>}
+              <div className="screen__seg" role="group" aria-label="Who is using the screen">
+                <button type="button" className="screen__seg-btn is-active" aria-pressed="true">{large && <Icon name="eye" size={14} />}Watch</button>
+                <button type="button" className="screen__seg-btn" aria-pressed="false" onClick={takeControl}>{large && <Icon name="pointer" size={14} />}Take control</button>
+              </div>
+              <span className="screen__pill-rule" aria-hidden />
+              {canFullscreen && (
+                <button type="button" className="screen__pill-icon" onClick={toggleFullscreen} aria-label={fullscreen ? 'Leave full screen' : 'Full screen'} title={fullscreen ? 'Leave full screen' : 'Full screen'}>
+                  <Icon name={fullscreen ? 'shrink' : 'expand'} size={15} />
+                </button>
               )}
             </div>
           )}
@@ -335,7 +276,7 @@ export function ComputerViewer() {
         <div className="viewer__title">
           <BotAvatarFor bot={bot} size={24} />
           <span>{bot.name}’s computer</span>
-          <span className="viewer__status">{computerStatusText(computer)}</span>
+          <span className="viewer__status">{computer?.screens.some((screen) => screen.botId === bot.id) ? 'Screen configured' : 'No screen configured'}</span>
         </div>
         <button type="button" className="viewer__close" onClick={close} aria-label="Close computer"><Icon name="close" color="#FFFFFF" /></button>
       </div>

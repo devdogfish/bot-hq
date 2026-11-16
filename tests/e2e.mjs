@@ -117,14 +117,6 @@ await step('search palette opens the main bot', async () => {
   await shot('07-search');
 });
 
-await step('connect apps modal lists Gmail', async () => {
-  await page.getByLabel('Connect apps').first().click();
-  await page.getByPlaceholder(/Search apps/).fill('gmail');
-  await page.getByText('Gmail', { exact: true }).first().waitFor({ timeout: 20000 });
-  await shot('08-apps');
-  await page.keyboard.press('Escape');
-});
-
 await step('voice: session secret + realtime greeting audio', async () => {
   const sess = await (await api('/api/voice/session', { method: 'POST', body: JSON.stringify({ botId }) })).json();
   if (!sess.clientSecret) throw new Error('no client secret: ' + JSON.stringify(sess).slice(0, 200));

@@ -1,12 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { Routine } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
-import { api, openPopup } from '../lib/api';
+import { api } from '../lib/api';
 import { botVars } from '../lib/colors';
-import { computerStatusText } from '../lib/computer';
 import { displayName, useSelectedBot, useStore } from '../store';
 import { Icon } from './Icon';
-import { ToolkitLogo } from './ToolkitLogo';
 import { VoiceSettings } from './VoiceSettings';
 import { ComputerScreen, type ScreenMode } from './ComputerViewer';
 import { EngineSettings } from './EngineSettings';
@@ -16,8 +14,6 @@ import { Glyph } from './config/glyphs';
 import { LibraryTab } from './config/LibraryTab';
 import { BotTasks } from './config/TasksView';
 
-// Other files import this from here; it lives in lib/computer so the viewer can use it too.
-export { computerStatusText };
 
 function Toggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }) {
   return (
@@ -53,15 +49,9 @@ export function DetailsPanel() {
   const viewerOpen = useStore((s) => s.viewerOpen);
   const set = useStore((s) => s.set);
   const [tab, setTab] = useState<'activity' | 'tasks' | 'library'>('activity');
-  const [hideSuggested, setHideSuggested] = useState(() => { try { return localStorage.getItem('grokbot.hideSuggested') === '1'; } catch { return false; } });
   if (!bot) return null;
 
   const openComputer = (mode: ScreenMode) => set({ viewerOpen: true, viewerMode: mode, viewerHint: null });
-  const addSlack = async () => {
-    const popup = openPopup('about:blank');
-    try { const { redirectUrl } = await api.connect('slack'); if (popup) popup.location.href = redirectUrl; } catch { popup?.close(); }
-  };
-
   return (
     <aside className="details" style={botVars(bot.avatarColor)} aria-label="Conversation details">
       <div className="details__top">
@@ -88,7 +78,7 @@ export function DetailsPanel() {
                   <span className="details__who-name" title={displayName(bot)}>{displayName(bot)}</span>
                   {bot.model && <span className="details__model" title={bot.provider ? `${bot.provider} · ${bot.model}` : bot.model}>{bot.model}</span>}
                 </div>
-                <div className="details__who-sub">Computer {computerStatusText(computer).toLowerCase()}</div>
+                <div className="details__who-sub">{computer?.screens.some((screen) => screen.botId === bot.id) ? 'Screen configured' : 'No screen configured'}</div>
               </div>
               <button type="button" className="btn btn--sm btn--secondary details__open" onClick={() => openComputer('watch')}>Open</button>
             </div>
@@ -118,21 +108,6 @@ export function DetailsPanel() {
               <section>
                 <div className="section-label">Members</div>
                 <MembersCard room={bot} />
-              </section>
-            )}
-            {bot.kind !== 'room' && !hideSuggested && (
-              <section>
-                <div className="section-label section-label--row">
-                  <span>Suggested</span>
-                  <button type="button" className="link-btn link-btn--small" onClick={() => { setHideSuggested(true); try { localStorage.setItem('grokbot.hideSuggested', '1'); } catch { /* ignore */ } }}>Hide</button>
-                </div>
-                <div className="panel-card">
-                  <button type="button" className="panel-row panel-row--link" onClick={addSlack}>
-                    <span className="panel-row__glyph"><ToolkitLogo name="Slack" logo="/assets/icons/slack.svg" size={16} radius={4} /></span>
-                    <span className="panel-row__title" style={{ flex: 1 }}>Add to Slack</span>
-                    <Icon name="chev_right" size={12} opacity={0.56} />
-                  </button>
-                </div>
               </section>
             )}
             {bot.kind !== 'room' && (

@@ -1,4 +1,4 @@
-import type { Bot, ComputerState, LiveState, Routine, Row, Toolkit, User } from '@shared/types';
+import type { Bot, ComputerState, LiveState, Routine, Row, User } from '@shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -20,7 +20,6 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   return res.json() as Promise<T>;
 }
 
-export interface AppsResponse { apps: Toolkit[]; connected: string[]; categories: string[]; total: number }
 
 export interface RoomMember { id: string; name: string; label: string; avatarShape: string; avatarColor: string }
 
@@ -37,7 +36,7 @@ export const api = {
   interrupt: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/interrupt`),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
 
-  approve: (approvalId: string, decision: 'allow' | 'always' | 'deny') => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
+  approve: (approvalId: string, decision: 'allow' | 'deny') => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
   answer: (id: string, seq: number, answer: string) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/answer`, { answer }),
   dismiss: (id: string, seq: number) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/dismiss`),
 
@@ -45,21 +44,9 @@ export const api = {
   setRoutine: (rid: string, enabled: boolean) => req<{ routine: Routine }>('PATCH', `/routines/${rid}`, { enabled }),
 
   computer: () => req<{ computer: ComputerState }>('GET', '/computer'),
-  ensureComputer: () => req<{ computer: ComputerState }>('POST', '/computer/ensure'),
 
-  apps: (search = '', category = '') => req<AppsResponse>('GET', `/apps?search=${encodeURIComponent(search)}&category=${encodeURIComponent(category)}`),
-  connect: (slug: string, botId?: string, seq?: number) => req<{ redirectUrl: string }>('POST', `/apps/${slug}/connect`, { botId, seq }),
-  disconnect: (slug: string) => req<{ ok: true }>('DELETE', `/apps/${slug}`),
 
   roomMembers: (id: string) => req<{ members: RoomMember[] }>('GET', `/rooms/${id}/members`),
   setRoomMembers: (id: string, botIds: string[]) => req<{ ok: true; members: string[] }>('PUT', `/rooms/${id}/members`, { botIds }),
   createRoom: (name: string, botIds: string[]) => req<{ id: string }>('POST', '/rooms', { name, botIds }),
 };
-
-/** Open a Composio redirect in a centered popup. */
-export function openPopup(url: string) {
-  const w = 520, h = 680;
-  const left = window.screenX + (window.outerWidth - w) / 2;
-  const top = window.screenY + (window.outerHeight - h) / 2;
-  return window.open(url, 'grokbot-connect', `width=${w},height=${h},left=${left},top=${top}`);
-}

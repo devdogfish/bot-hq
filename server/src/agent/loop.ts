@@ -3,18 +3,17 @@ import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
-import { toolkitInfo } from '../composio.js';
-import { screenForWork } from '../computer.js';
 import { engineFor } from '../engine.js';
+import { HermesRun, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
-import { activityFor, appToolName, humanizeSlug, policyFor } from './tools.js';
+import { activityFor, appToolName } from './tools.js';
 
 /**
  * A turn: one message handed to the bot's Hermes engine and streamed back into the conversation.
  *
  * Hermes owns the agent loop, the history and the tools. This file only
  *  - queues turns so a bot handles one at a time,
- *  - posts the trigger to the engine's /v1/responses endpoint and turns the event stream into
+ *  - posts the trigger to Hermes and turns the event stream into
  *    rows (assistant messages, tool calls) and live state (what the bot is doing right now),
  *  - keeps the bookkeeping the app's own tools need while a turn runs (see mcp.ts): which tool-call
  *    row a call belongs to, and approvals the user has to answer before a call goes ahead.
@@ -30,6 +29,7 @@ export type Trigger =
 
 const queues = new Map<string, Promise<void>>();
 const aborts = new Map<string, AbortController>();
+const remoteRuns = new Map<string, HermesRun>();
 
 export function enqueue(botId: string, trigger: Trigger) {
   // A new message from the user supersedes whatever is waiting for their approval.
@@ -42,7 +42,9 @@ export function enqueue(botId: string, trigger: Trigger) {
 
 export function interrupt(botId: string) {
   expireApprovals(botId);
-  aborts.get(botId)?.abort();
+  const run = remoteRuns.get(botId);
+  if (run) run.stop();
+  else aborts.get(botId)?.abort();
 }
 
 /** Run a job in the bot's serial queue, after any running turn. */
@@ -136,7 +138,11 @@ export type ApprovalDecision = 'allow' | 'deny' | 'expired';
 /** Longest a tool call waits for the user. Kept under the engines' 30 minute tool timeout. */
 const APPROVAL_WAIT_MS = 25 * 60_000;
 
-const waiters = new Map<string, { botId: string; resolve: (d: ApprovalDecision) => void }>();
+const waiters = new Map<string, {
+  resolve: (decision: ApprovalDecision) => void;
+  send: (choice: 'once' | 'deny') => Promise<void>;
+  sending?: Promise<void>;
+}>();
 
 function setApprovalCard(botId: string, rowSeq: number, approvalId: string, status: string) {
   const card = getRow(botId, rowSeq);
@@ -148,29 +154,28 @@ function setApprovalCard(botId: string, rowSeq: number, approvalId: string, stat
 const pendingApprovals = (botId: string) => db.prepare("SELECT * FROM approvals WHERE bot_id=? AND status='pending'").all(botId) as any[];
 
 /** Put an approval card in the conversation and wait for the user's answer. */
-export async function requestApproval(
+async function requestApproval(
   who: { userId: string; botId: string },
-  pol: { key: string; toolkit?: string; title: string },
-  args: any,
+  prompt: ApprovalPrompt,
+  send: (choice: 'once' | 'deny') => Promise<void>,
   rowSeq: number | null,
 ): Promise<ApprovalDecision> {
   const { userId, botId } = who;
   const approvalId = newId('apr');
-  const tk = pol.toolkit ? await toolkitInfo(pol.toolkit).catch(() => undefined) : undefined;
   const card = appendRow(botId, 'card', {
-    type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to ${pol.title.split(': ')[1] ?? pol.title}?`,
-    detail: describeArgs(args), tool: pol.key, toolkit: pol.toolkit, toolkitName: tk?.name, logo: tk?.logo, args, status: 'pending',
+    type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to perform this action?`,
+    detail: [prompt.description, prompt.command].filter(Boolean).join('\n'), tool: 'Hermes approval', args: {}, status: 'pending',
   });
-  db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', pol.key, 'pending', now());
+  db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', 'hermes', 'pending', now());
   db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
   if (rowSeq !== null) patchToolRow(botId, rowSeq, { status: 'awaiting-approval' });
-  setLive(botId, { isRunning: false, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: humanizeSlug(pol.key), since: now() } });
+  setLive(botId, { isRunning: true, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: 'Hermes approval', since: now() } });
   hub.emit(userId, { type: 'tasks', botId });
   emitBot(botId);
 
   let timer: NodeJS.Timeout | undefined;
   const decision = await new Promise<ApprovalDecision>((resolve) => {
-    waiters.set(approvalId, { botId, resolve });
+    waiters.set(approvalId, { resolve, send });
     timer = setTimeout(() => expireApproval(approvalId), APPROVAL_WAIT_MS);
   });
   clearTimeout(timer);
@@ -181,7 +186,7 @@ export async function requestApproval(
     else noteToolOutcome(botId, rowSeq, { status: 'denied', summary: decision === 'deny' ? 'Not allowed' : 'Skipped' });
   }
   if (!pendingApprovals(botId).length) {
-    if (turns.has(botId)) setLive(botId, { isRunning: true, activity: { kind: decision === 'allow' ? 'connecting_service' : 'thinking', detail: decision === 'allow' ? tk?.name : undefined, since: now() }, awaiting: null });
+    if (turns.has(botId)) setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null });
     else setLive(botId, { isRunning: false, activity: null, awaiting: null, startedAt: null });
   }
   hub.emit(userId, { type: 'tasks', botId });
@@ -207,24 +212,27 @@ export function expireStaleApprovals() {
 }
 
 /** Resolve an approval card from the UI. */
-export function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'always' | 'deny') {
+export async function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'deny') {
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
-  if (!ap || ap.user_id !== userId) throw new Error('not found');
-  if (ap.status !== 'pending') return;
+  if (!ap || ap.user_id !== userId) return 'not found';
+  if (ap.status !== 'pending') return null;
   const waiter = waiters.get(approvalId);
-  if (!waiter) return expireApproval(approvalId);
-  const status = decision === 'deny' ? 'denied' : decision === 'always' ? 'always' : 'allowed';
-  db.prepare('UPDATE approvals SET status=?, resolved_at=? WHERE id=?').run(status, now(), approvalId);
-  if (decision === 'always') db.prepare("INSERT OR REPLACE INTO policies(user_id,tool,mode) VALUES (?,?,'always_allow')").run(userId, ap.tool);
-  setApprovalCard(ap.bot_id, ap.row_seq, approvalId, status);
-  waiter.resolve(decision === 'deny' ? 'deny' : 'allow');
-}
-
-function describeArgs(args: any): string {
-  if (!args || typeof args !== 'object') return '';
-  const inner = Array.isArray(args.tools) ? args.tools.map((t: any) => t.arguments ?? t.args ?? t) : [args];
-  const flat = inner.map((a: any) => Object.entries(a ?? {}).filter(([, v]) => typeof v !== 'object' || v === null).slice(0, 6).map(([k, v]) => `${k}: ${String(v).slice(0, 160)}`).join('\n'));
-  return flat.join('\n\n').slice(0, 1200);
+  if (!waiter) { expireApproval(approvalId); return null; }
+  if (waiter.sending) return 'Approval decision is already being sent.';
+  try {
+    waiter.sending = waiter.send(decision === 'allow' ? 'once' : 'deny');
+    await waiter.sending;
+    const status = decision === 'deny' ? 'denied' : 'allowed';
+    const update = db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), approvalId);
+    if (!update.changes) return 'This approval expired.';
+    setApprovalCard(ap.bot_id, ap.row_seq, approvalId, status);
+    waiter.resolve(decision);
+    return null;
+  } catch (e: any) {
+    return String(e?.message ?? e);
+  } finally {
+    waiter.sending = undefined;
+  }
 }
 
 // ---------- the engine's event stream ----------
@@ -251,9 +259,31 @@ async function* sseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<Stre
       if (raw === '[DONE]') continue;
       try {
         const json = JSON.parse(raw);
-        yield { type: event || json?.type || '', data: json };
+        yield { type: event || json?.type || json?.event || '', data: json };
       } catch { /* not ours to understand */ }
     }
+  }
+}
+
+function normalizeRunEvent(ev: StreamEvent): StreamEvent {
+  const d = ev.data;
+  switch (ev.type) {
+    case 'message.delta':
+      return { type: 'response.output_text.delta', data: d };
+    case 'message.interim':
+      return d.already_streamed ? ev : { type: 'response.output_item.done', data: {
+        item: { type: 'message', phase: 'commentary', content: [{ text: d.text }] },
+      } };
+    case 'tool.started':
+      return { type: 'response.output_item.added', data: {
+        item: { type: 'function_call', name: d.tool, call_id: d.tool_call_id, arguments: { preview: d.preview } },
+      } };
+    case 'tool.completed':
+      return { type: 'response.output_item.done', data: {
+        item: { type: 'function_call_output', call_id: d.tool_call_id, output: d.error ? 'Tool error: ' + (d.preview ?? '') : d.preview },
+      } };
+    default:
+      return ev;
   }
 }
 
@@ -348,10 +378,12 @@ async function runTurn(botId: string, trigger: Trigger) {
   const outputsSeen = new Set<string>();
   let steps = 0;
   let failed = false;
+  let cancelled = false;
+  let terminal = false;
+  let remote: HermesRun | undefined;
+  const approvals = new Map<string, Promise<void>>();
 
   try {
-    // The screen first: the engine's browser and computer tools point at it.
-    await screenForWork(userId, botId).catch((e) => console.warn(`[computer] screen not ready for ${botId}: ${e?.message ?? e}`));
     const engine = await engineFor(botId);
     if (ctrl.signal.aborted) throw new Error('interrupted');
 
@@ -361,25 +393,32 @@ async function runTurn(botId: string, trigger: Trigger) {
       db.prepare('UPDATE bots SET handback_at=NULL WHERE id=?').run(botId);
     }
 
-    const res = await fetch(`${engine.url}/v1/responses`, {
-      method: 'POST',
-      signal: ctrl.signal,
-      headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...(engine.key ? { authorization: `Bearer ${engine.key}` } : {}) },
-      body: JSON.stringify({
-        model: bot.model || 'hermes-agent',
-        ...(bot.provider ? { provider: bot.provider } : {}),
-        input,
-        instructions: await instructionsFor(userId, botId),
-        // One engine-side thread per conversation; "New chat" bumps the generation and starts another.
-        conversation: `hq-${botId}-g${bot.generation}`,
-        stream: true,
-        store: true,
-        model_options: { reasoning_effort: bot.effort ?? 'medium' },
-      }),
-    });
+    const payload = {
+      model: bot.model || 'hermes-agent',
+      ...(bot.provider ? { provider: bot.provider } : {}),
+      input,
+      instructions: await instructionsFor(userId, botId),
+      model_options: { reasoning_effort: bot.effort ?? 'medium' },
+    };
+    if (ctrl.signal.aborted) throw new Error('interrupted');
+    // A fresh chat increments the generation. Keep the gateway's conversation stable until then.
+    const conversation = `hq-${botId}-g${bot.generation}`;
+    let res: Response;
+    if (engine.kind === 'remote') {
+      remote = new HermesRun(engine);
+      remoteRuns.set(botId, remote);
+      res = await remote.start(payload, conversation);
+    } else {
+      res = await fetch(`${engine.url}/v1/responses`, {
+        method: 'POST', signal: ctrl.signal, redirect: 'error',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...(engine.key ? { authorization: `Bearer ${engine.key}` } : {}) },
+        body: JSON.stringify({ ...payload, conversation, stream: true, store: true }),
+      });
+    }
     if (!res.ok || !res.body) throw new Error(await failureText(res));
 
-    for await (const ev of sseEvents(res.body)) {
+    for await (const raw of sseEvents(res.body)) {
+      const ev = remote ? normalizeRunEvent(raw) : raw;
       const d = ev.data;
       switch (ev.type) {
         case 'response.output_text.delta': {
@@ -435,15 +474,6 @@ async function runTurn(botId: string, trigger: Trigger) {
             if (!getLive(botId).awaiting) setLive(botId, { isRunning: true, activity: { kind, detail, since: now() }, steps, caption: null });
             else setLive(botId, { steps });
             reasoning = '';
-            if (ours && name.startsWith('COMPOSIO_')) {
-              const tk = policyFor(userId, name, args ?? {}).toolkit;
-              if (tk) {
-                void toolkitInfo(tk).then((info) => {
-                  const live = getLive(botId);
-                  if (info?.name && turns.get(botId) === turn && live.activity?.kind === kind && !live.awaiting) setLive(botId, { activity: { ...live.activity, detail: info.name } });
-                }).catch(() => {});
-              }
-            }
           }
           break;
         }
@@ -458,6 +488,55 @@ async function runTurn(botId: string, trigger: Trigger) {
           }
           break;
         }
+
+        case 'approval.request': {
+          if (!remote || remote.stopRequested) break;
+          const run = remote;
+          const prompt: ApprovalPrompt = {
+            promptId: d.prompt_id, generation: d.execution_generation,
+            command: typeof d.command === 'string' ? d.command : '',
+            description: typeof d.description === 'string' ? d.description : '',
+          };
+          if (typeof prompt.promptId !== 'string' || !Number.isInteger(prompt.generation)) {
+            throw new Error('Hermes returned an approval without its prompt identity.');
+          }
+          if (approvals.has(prompt.promptId)) break;
+          const tool = turn.tools.findLast((ref) => !ref.done && ref.name === 'terminal');
+          const send = (choice: 'once' | 'deny') => run.approve(prompt, choice);
+          const decide = async () => {
+            if (trigger.type !== 'user') {
+              await send('deny');
+              appendRow(botId, 'notice', { type: 'notice', text: 'Hermes requested approval during an unattended turn. The command was denied.', tone: 'info' });
+              return;
+            }
+            const decision = await requestApproval({ userId, botId }, prompt, send, tool?.seq ?? null);
+            if (decision === 'expired' && !run.stopRequested) await send('deny');
+          };
+          approvals.set(prompt.promptId, decide().catch(() => {
+            if (!run.stopRequested) {
+              appendRow(botId, 'notice', { type: 'notice', text: 'Could not resolve the Hermes approval. Stopping the turn.', tone: 'error' });
+              run.stop();
+            }
+          }));
+          break;
+        }
+
+        case 'run.completed':
+        case 'run.incomplete':
+          terminal = true;
+          if (!wroteText && typeof d.output === 'string') say(d.output);
+          break;
+
+        case 'run.cancelled':
+        case 'response.cancelled':
+          terminal = true;
+          cancelled = true;
+          throw new Error('interrupted');
+
+        case 'run.failed':
+        case 'run.interrupted':
+          terminal = true;
+          throw new Error(d.error ?? 'Hermes did not complete the turn.');
 
         case 'response.failed':
         case 'error':
@@ -478,19 +557,27 @@ async function runTurn(botId: string, trigger: Trigger) {
         }
       }
     }
+    if (remote && !terminal) throw new Error('Hermes closed the stream without a final run status.');
   } catch (e: any) {
     failed = true;
-    const stopped = ctrl.signal.aborted;
+    const stopped = ctrl.signal.aborted || cancelled;
     closeMessage();
-    appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : `Something went wrong: ${e?.message ?? e}`, tone: stopped ? 'info' : 'error' });
+    appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : `Something went wrong: ${remote?.stopError ?? e?.message ?? e}`, tone: stopped ? 'info' : 'error' });
     if (!stopped) console.error('[agent]', botId, e);
   } finally {
+    if (remote) {
+      expireApprovals(botId);
+      if (!terminal) remote.stop();
+      await remote.close(terminal);
+      await Promise.all(approvals.values());
+      remoteRuns.delete(botId);
+    }
     closeMessage();
     for (const ref of turn.tools) {
       if (ref.done) continue;
       const row = getRow(botId, ref.seq);
       if (row?.body.type !== 'tool-call' || (row.body.status !== 'running' && row.body.status !== 'awaiting-approval')) continue;
-      patchToolRow(botId, ref.seq, failed ? { status: 'error', summary: ctrl.signal.aborted ? 'Stopped' : 'Did not finish' } : { status: 'done' });
+      patchToolRow(botId, ref.seq, failed ? { status: 'error', summary: ctrl.signal.aborted || cancelled ? 'Stopped' : 'Did not finish' } : { status: 'done' });
     }
     if (aborts.get(botId) === ctrl) aborts.delete(botId);
     if (turns.get(botId) === turn) turns.delete(botId);

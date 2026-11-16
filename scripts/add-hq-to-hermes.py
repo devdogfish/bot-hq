@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Give the main Hermes agent the app's tools: add the `hq` MCP server to its config.yaml.
 
-Run on the computer, after install-on-computer.sh:
-    python3 add-hq-to-hermes.py [--config /root/.hermes/config.yaml] [--entry /opt/hq/data/hermes-mcp-hq.yaml] [--remove]
+Run on the Agent with its Hermes Python:
+    python3 add-hq-to-hermes.py [--config PATH] (--entry MCP_YAML | --remove)
 
 The edit is plain text (the file's comments and layout stay as they are), a dated copy of the file
 is kept next to it, and the result is checked before it replaces the original: every other setting
 must read back exactly as before. Hermes notices the change by itself; no restart.
 """
-import argparse, os, re, shutil, sys, time
+import argparse, os, re, shutil, sys, tempfile, time
 
 p = argparse.ArgumentParser()
-p.add_argument('--config', default='/root/.hermes/config.yaml')
-p.add_argument('--entry', default='/opt/hq/data/hermes-mcp-hq.yaml')
-p.add_argument('--remove', action='store_true')
+p.add_argument('--config', default=os.path.join(os.environ.get('HERMES_HOME', os.path.expanduser('~/.hermes')), 'config.yaml'))
+mode = p.add_mutually_exclusive_group(required=True)
+mode.add_argument('--entry')
+mode.add_argument('--remove', action='store_true')
 a = p.parse_args()
 
 try:
@@ -23,7 +24,7 @@ except ImportError:
 
 old = open(a.config, encoding='utf-8').read()
 lines = old.split('\n')
-block = [l for l in open(a.entry, encoding='utf-8').read().split('\n') if l.strip() and not l.lstrip().startswith('#')]
+block = [] if a.remove else [l for l in open(a.entry, encoding='utf-8').read().split('\n') if l.strip() and not l.lstrip().startswith('#')]
 
 def section():
     """Line range (start, end) of the top-level mcp_servers mapping, or None."""
@@ -77,10 +78,12 @@ if not a.remove and not (isinstance(hq, dict) and str(hq.get('url', '')).startsw
 
 backup = f"{a.config}.before-hq-{time.strftime('%Y%m%d-%H%M%S')}"
 shutil.copy2(a.config, backup)
-tmp = a.config + '.hq-tmp'
-with open(tmp, 'w', encoding='utf-8') as f:
+with tempfile.NamedTemporaryFile('w', encoding='utf-8', dir=os.path.dirname(os.path.abspath(a.config)), delete=False) as f:
     f.write(new)
-shutil.copymode(a.config, tmp)
-st = os.stat(a.config); os.chown(tmp, st.st_uid, st.st_gid)
-os.replace(tmp, a.config)
+    tmp = f.name
+try:
+    os.replace(tmp, a.config)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
 print(('removed hq' if a.remove else 'added hq') + f'; previous file kept as {backup}')
