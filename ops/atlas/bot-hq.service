@@ -1,0 +1,22 @@
+[Unit]
+Description=Bot HQ
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=bot-hq
+Group=bot-hq
+WorkingDirectory=/var/lib/bot-hq/current
+ExecStart=/usr/local/bin/node --env-file=/etc/bot-hq/runtime.env server/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bot-hq/data
+
+[Install]
+WantedBy=multi-user.target

@@ -39,6 +39,9 @@ origin, and run `npm start`. With dev login disabled, run
 one-time sign-in link. `scripts/pack.sh` builds an archive, and
 `scripts/install-on-computer.sh` unpacks it into `HQ_INSTALL_DIR`.
 
+The [Atlas runbook](docs/atlas-deploy.md) covers the dedicated VM, release,
+tailnet grants and backup checks.
+
 ## How it works
 
 ```mermaid
