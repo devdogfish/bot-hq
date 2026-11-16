@@ -1,7 +1,7 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
+import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
 import { engineFor } from '../engine.js';
 import { HermesRun, type ApprovalPrompt } from './hermes-run.js';
@@ -52,13 +52,15 @@ function trackQueue(botId: string, queue: BotQueue, tail: Promise<void>) {
 
 /** Reserve a turn synchronously; accepted work starts after the caller records its row. */
 export function enqueue(botId: string, trigger: Trigger) {
+  if (isBotResetting(botId)) return false;
+  const pauseRevision = activePauseRevision(botId);
+  if (pauseRevision === undefined) return false;
   const queue = queueFor(botId);
-  if (queue.resetting) return false;
   // A new message from the user supersedes an unanswered approval.
   if (trigger.type === 'user') expireApprovals(botId);
   const revision = queue.revision;
   const next = queue.tail.then(() => {
-    if (queue.revision === revision) return runTurn(botId, trigger);
+    if (queue.revision === revision) return runTurn(botId, trigger, pauseRevision);
   }).catch((e) => console.error('[agent] turn failed', botId, e));
   trackQueue(botId, queue, next);
   return true;
@@ -71,6 +73,15 @@ export function interrupt(botId: string) {
   const run = remoteRuns.get(botId);
   if (run) run.stop();
   else aborts.get(botId)?.abort();
+}
+
+export function setBotPaused(botId: string, paused: boolean) {
+  const value = Number(paused);
+  // Invalidate every admitted turn, even if Resume arrives before Stop finishes.
+  const { changes } = db.prepare('UPDATE bots SET paused=?, pause_revision=pause_revision+1 WHERE id=? AND paused<>?')
+    .run(value, botId, value);
+  if (paused) interrupt(botId);
+  if (changes) emitBot(botId);
 }
 
 /** Discard queued turns, stop the active turn and run maintenance before accepting more work. */
@@ -377,9 +388,9 @@ function captionFrom(reasoning: string): string | null {
 /** Hermes' own tool lookup (it loads rarely used tools on demand). */
 const TOOLBOX = new Set(['tool_search', 'tool_describe']);
 
-async function runTurn(botId: string, trigger: Trigger) {
+async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const bot = getBotRow(botId);
-  if (!bot || bot.kind === 'room') return;
+  if (!bot || bot.kind === 'room' || bot.paused || bot.pause_revision !== pauseRevision) return;
   const userId: string = bot.user_id;
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);

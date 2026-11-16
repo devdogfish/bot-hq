@@ -10,15 +10,16 @@ import { useDictation } from '../voice/dictation';
 const MAX_H = 200;
 const drafts = new Map<string, string>();
 
-export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
+export function Composer({ bot, running, pausePending }: { bot: Bot; running: boolean; pausePending: boolean }) {
   const [text, setText] = useState(() => drafts.get(bot.id) ?? '');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const blocked = bot.paused || pausePending;
 
-  // Per-bot drafts.
-  useEffect(() => { setText(drafts.get(bot.id) ?? ''); setError(null); ref.current?.focus(); }, [bot.id]);
+  // ChatView mounts a composer for the selected bot. Drafts survive switching bots.
+  useEffect(() => { ref.current?.focus(); }, []);
   useEffect(() => { drafts.set(bot.id, text); }, [bot.id, text]);
 
   // Auto-grow.
@@ -39,7 +40,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
 
   const send = async () => {
     const t = text.trim();
-    if (!t || sending) return;
+    if (!t || sending || blocked) return;
     setSending(true); setError(null);
     try {
       await api.send(bot.id, t);
@@ -136,7 +137,7 @@ export function Composer({ bot, running }: { bot: Bot; running: boolean }) {
               type="button"
               className="composer__cta"
               onClick={hasText ? send : () => startCall(bot.id)}
-              disabled={hasText && sending}
+              disabled={hasText && (sending || blocked)}
               aria-label={hasText ? 'Send' : `Start voice chat with ${bot.name}`}
               title={hasText ? 'Send (Enter)' : 'Start voice chat'}
             >

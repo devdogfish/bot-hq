@@ -21,6 +21,8 @@
 }
 .chat__pill:hover { background: var(--color-bg-elevated-hover); }
 .chat__pill-name { font-size: 14px; font-weight: 500; line-height: 20px; letter-spacing: 0.14px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat__pill-status { flex-shrink: 0; font-size: var(--text-xs); color: var(--color-text-secondary); white-space: nowrap; }
+.chat__pill-status:empty { position: absolute; }
 .chat__header-right { position: absolute; right: 12px; top: 12px; display: flex; gap: 8px; }
 .share-btn {
   height: 36px; padding: 8px 16px; border-radius: var(--radius-full);
@@ -243,6 +245,7 @@
   background: var(--bot-action, var(--color-primary)); color: var(--bot-on-action, #FFFFFF); flex-shrink: 0; transition: background-color 120ms, transform 120ms;
 }
 .composer__cta:hover:not(:disabled) { background: var(--bot-action-hover, var(--color-bg-primary-hover)); }
+.composer__cta:disabled { opacity: 0.5; }
 .composer__cta:active:not(:disabled) { transform: scale(0.94); }
 .composer__error {
   max-width: 960px; margin: 0 auto 8px; padding: 6px 12px; border-radius: 12px; background: var(--color-danger-bg); color: var(--color-danger-text);

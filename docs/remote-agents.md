@@ -94,6 +94,21 @@ terminal command to write its start marker, invokes Bot HQ's interrupt route,
 checks the same run's Hermes status for `cancelled`, then waits beyond the
 command's original duration and checks that its completion marker is absent.
 
+Install with `npm ci` and build with `npm run build` to test the release.
+With only the test model and Hermes gateway running, use:
+
+```sh
+HQ_TEST_MARKER_DIR=/path/to/test-home node tests/pause.mjs
+```
+
+The Pause test starts Bot HQ on port 18764 with a temporary database. It
+checks three separately registered bots, cancels a live command, verifies
+queued work stays discarded after Resume, and restarts Bot HQ to check
+persistence. Run it separately from the other integration test because
+both use the same Hermes marker files. After installing Chromium with
+`npx playwright install chromium`, add `HQ_TEST_BROWSER=1` to check the
+production UI, including deferred saves, reload and draft preservation.
+
 With the original `/v1/responses` transport, disconnection only reached Hermes
 after the tested terminal command had finished. Remote turns use
 `POST /v1/runs` and its SSE stream. Bot HQ sends `POST /v1/runs/{id}/stop`
