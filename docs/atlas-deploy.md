@@ -57,8 +57,7 @@ iface BOT_HQ_BRIDGE inet static
 ```
 
 Ensure the existing uplink `vmbr0` keeps IPv4 forwarding enabled. Bring up
-only the new bridge with `ifup "$bridge"`. Probe both guests' internet
-egress and check that neither can reach Keep or the LAN before continuing.
+only the new bridge with `ifup "$bridge"`.
 To roll back the network changes, shut down the Bot HQ guest, restore and
 load the saved firewall file, and remove the new bridge.
 
@@ -73,9 +72,12 @@ qm set "$vmid" --cores 2 --memory 4096 --net0 "virtio,bridge=$bridge,firewall=1"
 qm start "$vmid"
 ```
 
-Use the guest console or QEMU agent for the steps below. Install Git,
-curl, CA certificates, and the native Node build prerequisites (Python 3,
-make, g++) from Debian. Install Tailscale via its
+Probe both guests' internet egress and check that neither can reach Keep
+or the LAN before continuing.
+
+Use the guest console or QEMU agent for the steps below. Install Git, curl,
+CA certificates, and the native Node build prerequisites (Python 3, make,
+g++) from Debian. Install Tailscale via its
 [Debian package instructions](https://tailscale.com/kb/1031/install-linux).
 Keep SSH and forwarding of dashboard, MCP, or VNC ports off the LAN uplink.
 Set the guest to reject accepted subnet routes. Leave exit-node use,

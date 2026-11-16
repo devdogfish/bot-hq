@@ -50,9 +50,10 @@ function trackQueue(botId: string, queue: BotQueue, tail: Promise<void>) {
   void tail.then(() => { if (queue.tail === tail) queues.delete(botId); });
 }
 
+/** Reserve a turn synchronously; accepted work starts after the caller records its row. */
 export function enqueue(botId: string, trigger: Trigger) {
   const queue = queueFor(botId);
-  if (queue.resetting) return;
+  if (queue.resetting) return false;
   // A new message from the user supersedes an unanswered approval.
   if (trigger.type === 'user') expireApprovals(botId);
   const revision = queue.revision;
@@ -60,7 +61,10 @@ export function enqueue(botId: string, trigger: Trigger) {
     if (queue.revision === revision) return runTurn(botId, trigger);
   }).catch((e) => console.error('[agent] turn failed', botId, e));
   trackQueue(botId, queue, next);
+  return true;
 }
+
+export type EnqueueTurn = typeof enqueue;
 
 export function interrupt(botId: string) {
   expireApprovals(botId);
@@ -91,8 +95,9 @@ export const isBotResetting = (botId: string) => queues.get(botId)?.resetting ==
 
 export function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number) {
   const from = getBotRow(fromBotId);
+  if (!enqueue(toBotId, { type: 'bot', fromBotId, fromName: from.name, text, depth })) return false;
   appendRow(toBotId, 'message', { type: 'message', role: 'user', text, from: { kind: 'bot', id: fromBotId, name: from.name } });
-  enqueue(toBotId, { type: 'bot', fromBotId, fromName: from.name, text, depth });
+  return true;
 }
 
 function triggerText(t: Trigger): string {

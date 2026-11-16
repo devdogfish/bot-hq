@@ -13,7 +13,7 @@ import { Cron } from 'croner';
 export interface ToolCtx {
   userId: string;
   botId: string;
-  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number) => void;
+  enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number) => boolean;
   depth: number;
 }
 
@@ -232,7 +232,9 @@ export const TOOLS: ToolDef[] = [
       if (target.id === ctx.botId) return { output: 'That is you.' };
       if (target.kind === 'room') return { output: `"${target.name}" is a group chat; use post_to_group instead.` };
       if (ctx.depth >= 3) return { output: 'Too many hops between bots; answer the user directly instead.' };
-      ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1);
+      if (!ctx.enqueueBotMessage(ctx.botId, target.id, String(a.message), ctx.depth + 1)) {
+        return { output: `${target.name} is undergoing maintenance. Try again shortly.` };
+      }
       return { output: `Sent to ${target.name}. Their reply will come back to you as a message.`, summary: `Messaged ${target.name}` };
     },
   },

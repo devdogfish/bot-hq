@@ -2,6 +2,7 @@ import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { appendRow } from '../store.js';
+import type { EnqueueTurn } from './loop.js';
 
 /**
  * Group chats ("rooms"; Grok Bot: GrokBotAgent kind=ROOM, member_agent_ids, server turn-taking).
@@ -38,7 +39,7 @@ export function createRoom(userId: string, name: string, memberIds: string[]) {
 }
 
 /** Called instead of the agent loop when the user posts in a room. */
-export function dispatchRoomMessage(roomId: string, text: string, enqueue: (botId: string, t: any) => void) {
+export function dispatchRoomMessage(roomId: string, text: string, enqueue: EnqueueTurn) {
   const room = db.prepare('SELECT * FROM bots WHERE id=?').get(roomId) as any;
   const members = roomMembers(roomId);
   if (!members.length) {
@@ -55,8 +56,9 @@ export function dispatchRoomMessage(roomId: string, text: string, enqueue: (botI
       return `${b.from?.name ?? (b.role === 'user' ? 'User' : 'Bot')}: ${String(b.text).slice(0, 600)}`;
     })
     .join('\n');
+  const unavailable = [];
   for (const m of responders) {
-    enqueue(m.id, {
+    const accepted = enqueue(m.id, {
       type: 'system',
       text:
         `[Group chat "${room.name}"] Members: ${members.map((x) => x.name).join(', ')}. ` +
@@ -65,6 +67,10 @@ export function dispatchRoomMessage(roomId: string, text: string, enqueue: (botI
         `Reply to the group by calling post_to_group with group_name "${room.name}" (use your tools first if the request needs real work). ` +
         `Keep it short and don't repeat what other Bots already said. If you have nothing to add, call stay_silent. Do not write a normal reply.`,
     });
+    if (!accepted) unavailable.push(m.name);
+  }
+  if (unavailable.length) {
+    appendRow(roomId, 'notice', { type: 'notice', text: `Bots unavailable during maintenance: ${unavailable.join(', ')}. Try again shortly.`, tone: 'warn' });
   }
 }
 
