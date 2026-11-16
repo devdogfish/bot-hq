@@ -24,7 +24,7 @@ export const humanizeToolkit = (slug: string) => KNOWN[slug.toLowerCase()] ?? sl
 
 // ---------------- approval ----------------
 
-const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired' };
+const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired', unconfirmed: 'Decision unconfirmed' };
 
 export function ApprovalCard({ body }: { body: Card<'approval'> }) {
   const { busy, error, run } = useBusy();
@@ -51,7 +51,7 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
         </>
       ) : (
         <div className={`card__outcome is-${body.status}`}>
-          <Icon name={body.status === 'denied' || body.status === 'expired' ? 'close' : 'check'} size={12} opacity={0.7} />
+          <Icon name={body.status === 'denied' || body.status === 'expired' || body.status === 'unconfirmed' ? 'close' : 'check'} size={12} opacity={0.7} />
           {APPROVAL_OUTCOME[body.status] ?? body.status}
         </div>
       )}

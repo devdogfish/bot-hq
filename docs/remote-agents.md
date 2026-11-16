@@ -87,7 +87,9 @@ HQ_TEST_MARKER_DIR=/path/to/test-home node tests/remote-hermes.mjs
 ```
 
 The remote integration checks incremental text, chat continuity, Stop, approvals,
-credential isolation and MCP. To verify Stop, the test waits for an actual
+credential isolation and MCP. It also delays an approval acknowledgement,
+truncates a successful run receipt, and queues work ahead of Fresh chat and
+Delete. To verify Stop, the test waits for an actual
 terminal command to write its start marker, invokes Bot HQ's interrupt route,
 checks the same run's Hermes status for `cancelled`, then waits beyond the
 command's original duration and checks that its completion marker is absent.

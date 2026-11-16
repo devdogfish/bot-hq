@@ -12,14 +12,55 @@ cloud-init template with the QEMU guest agent installed and console access.
 Record the template, storage, VMID and network in the go-live record. Start with 2 vCPUs, 4 GiB RAM and a 24 GiB boot disk.
 Keep the QEMU guest agent and Proxmox console available for administration.
 
-Use a dedicated routed/NAT bridge with an unused guest subnet. Follow the
-[Atlas isolation pattern](https://github.com/devdogfish/quantself/tree/main/automation/n8n/assistant-sandbox)
-using Bot HQ's own bridge, subnet and firewall table. At the Atlas boundary
-allow outbound internet and return traffic. Drop guest traffic to Atlas,
-other bridges, private and special-use destinations, the home WAN address,
-and all Keep LAN addresses. Block unsolicited uplink-to-guest traffic and
-IPv6 forwarding. Use public DNS resolvers for uplink traffic. Check these
-rules before starting the guest.
+Reserve an unused private subnet and a dedicated routed/NAT bridge. The
+[existing Atlas sandbox firewall](https://github.com/devdogfish/quantself/tree/main/automation/n8n/assistant-sandbox)
+drops routed traffic from `vmbr0` to other bridges unless the existing
+forward chain accepts it first. Render Bot HQ's rules into that same chain.
+This puts a narrow return rule for the Bot HQ guest before the catch-all
+and retains the n8n rules. An accept in a separate nftables base chain
+cannot bypass this drop.
+
+From the Atlas console, use `bridge`, `guest_cidr` and `guest_gateway` from
+the reserved network. Keep an unmodified copy of
+`/etc/n8n-sandbox/atlas.nft` and compare it with the active ruleset before
+rendering. Use the current installed file as the input on first install.
+
+```sh
+candidate=$(mktemp)
+sudo python3 scripts/render-atlas-firewall.py /etc/n8n-sandbox/atlas.nft \
+  "$bridge" "${guest_cidr%/*}" > "$candidate" &&
+  sudo nft --check --file "$candidate" &&
+  sudo diff -u /etc/n8n-sandbox/atlas.nft "$candidate"
+```
+
+A successful syntax check followed by a nonempty diff is expected. The new bridge permits IPv4 internet egress and
+established replies only for the Bot HQ address. The shared private and
+home-WAN sets block access to Keep, the LAN and the router's WAN address.
+The existing WAN refresh timer also updates the shared set for Bot HQ.
+Host input from the new bridge and other forwarded traffic to or from it
+are dropped, including IPv6 and unsolicited LAN traffic.
+
+At go-live, retain the original file for rollback. Load the checked
+candidate in one `nft -f` transaction and install the same file at
+`/etc/n8n-sandbox/atlas.nft` so the existing sandbox initialization and
+WAN timer retain the rules. Add a stanza like this under
+`/etc/network/interfaces.d/` with the reserved host CIDR and bridge name:
+
+```ini
+auto BOT_HQ_BRIDGE
+iface BOT_HQ_BRIDGE inet static
+    address BOT_HQ_HOST_CIDR
+    bridge-ports none
+    bridge-stp off
+    bridge-fd 0
+    post-up sysctl -qw net.ipv4.conf.BOT_HQ_BRIDGE.forwarding=1 net.ipv6.conf.BOT_HQ_BRIDGE.disable_ipv6=1
+```
+
+Ensure the existing uplink `vmbr0` keeps IPv4 forwarding enabled. Bring up
+only the new bridge with `ifup "$bridge"`. Probe both guests' internet
+egress and check that neither can reach Keep or the LAN before continuing.
+To roll back the network changes, shut down the Bot HQ guest, restore and
+load the saved firewall file, and remove the new bridge.
 
 With the bridge and firewall in place, set the variables from the Atlas
 inventory and clone the template:
@@ -129,6 +170,7 @@ getent passwd bot-hq >/dev/null ||
 sudo install -d -o root -g bot-hq -m 0750 /var/lib/bot-hq /etc/bot-hq
 sudo install -d -o bot-hq -g bot-hq -m 0750 /var/lib/bot-hq/releases /var/lib/bot-hq/data
 sudo install -o root -g root -m 0755 scripts/stage-atlas-release.sh /usr/local/sbin/stage-bot-hq-release
+sudo install -o root -g root -m 0755 scripts/activate-atlas-release.sh /usr/local/sbin/activate-bot-hq-release
 sudo install -o root -g root -m 0644 ops/atlas/bot-hq.service /etc/systemd/system/bot-hq.service
 sudo install -o root -g bot-hq -m 0640 ops/atlas/runtime.env.example /etc/bot-hq/runtime.env
 sudoedit /etc/bot-hq/runtime.env
@@ -140,20 +182,15 @@ MCP credentials. Keep the Database, Library and environment file on the VM's
 backed-up disk. Use the platform's existing credential workflow if enabling
 xAI.
 
-Set `revision` to the full reviewed SHA from the Owner's fork. Stage as the
-service user, then switch the release symlink. Record the previous symlink
-target before switching during an upgrade.
+Set `revision` to the full reviewed SHA from the Owner's fork. The
+activation script stages as the service user, verifies the release files
+and commit, and only then swaps `current` and restarts the service. A
+staging or verification failure leaves the current release and service
+alone. Record the previous target printed by the script.
 
 ```sh
-cd /var/lib/bot-hq
-sudo -H -u bot-hq /usr/bin/env PATH=/usr/local/bin:/usr/bin:/bin /usr/local/sbin/stage-bot-hq-release "$revision"
-sudo ln -sfn "/var/lib/bot-hq/releases/$revision" /var/lib/bot-hq/current.next
-sudo mv -Tf /var/lib/bot-hq/current.next /var/lib/bot-hq/current
-sudo systemctl daemon-reload
-sudo systemctl enable bot-hq.service
-sudo systemctl restart bot-hq.service
-curl -fsS http://127.0.0.1:18787/api/health
-ss -ltn 'sport = :18787'
+sudo /usr/local/sbin/activate-bot-hq-release "$revision" &&
+  ss -ltn 'sport = :18787'
 ```
 
 Confirm Node listens on `127.0.0.1:18787`. Serve the UI and MCP after the
@@ -204,3 +241,8 @@ and restart `bot-hq.service`. Retain the database and use a pre-upgrade
 PBS snapshot if a future schema change requires restoring state. To take
 HQ offline, stop its service and turn off the two Serve handlers during
 the go-live session.
+
+For offline verification, run
+`python3 tests/atlas-ops.py /path/to/unmodified/n8n-sandbox/atlas.nft`.
+This exercises the render against the sandbox rules and checks activation
+failure and success with a temporary release tree and mocked service commands.

@@ -19,8 +19,13 @@ if [[ "$release_dir" != /* ]]; then
 fi
 release="$release_dir/$revision"
 if [[ -e "$release" || -L "$release" ]]; then
-  printf 'Release already exists at %s\n' "$release"
-  exit 0
+  if [[ ! -L "$release" && -s "$release/server/dist/index.js" && -s "$release/web/dist/index.html" &&
+        $(git -C "$release" rev-parse HEAD) == "$revision" ]]; then
+    printf 'Release already exists at %s\n' "$release"
+    exit 0
+  fi
+  printf 'Existing release is incomplete or has the wrong revision: %s\n' "$release" >&2
+  exit 1
 fi
 
 umask 027
