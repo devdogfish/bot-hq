@@ -7,10 +7,12 @@ is no public ingress.
 
 ## Provision the guest
 
-On Atlas, use `qm list` to reserve a free VMID in `3100–3199`. Use a clean Debian 13 amd64
-cloud-init template with the QEMU guest agent installed and console access.
-Record the template, storage, VMID and network in the go-live record. Start with 2 vCPUs, 4 GiB RAM and a 24 GiB boot disk.
-Keep the QEMU guest agent and Proxmox console available for administration.
+On Atlas, use `qm list` and `ip -4 route show table all` to check the VMID
+and subnet. The preflight found VMID 3100 and `172.28.229.8/30` unused,
+with room on `local-lvm`. Recheck before creating anything. Use 2 vCPUs,
+4 GiB RAM and a 24 GiB boot disk. Record the image or template, storage,
+VMID and network in the go-live record. Use the QEMU guest agent for
+administration. The Proxmox console is available for boot diagnostics.
 
 Reserve an unused private subnet and a dedicated routed/NAT bridge. The
 [existing Atlas sandbox firewall](https://github.com/devdogfish/quantself/tree/main/automation/n8n/assistant-sandbox)
@@ -62,20 +64,76 @@ To roll back the network changes, shut down the Bot HQ guest, restore and
 load the saved firewall file, and remove the new bridge.
 
 With the bridge and firewall in place, set the variables from the Atlas
-inventory and clone the template:
+inventory. If using a clean Debian 13 amd64 cloud-init template with the
+QEMU guest agent enabled, clone it:
 
 ```sh
 qm clone "$template_vmid" "$vmid" --full 1 --name bot-hq --storage "$storage"
+```
+
+The preflight found no template on Atlas. Use this fallback with the
+[Debian cloud image](https://www.debian.org/distrib/#cloud) and the
+[Proxmox import procedure](https://github.com/proxmox/pve-docs/blob/master/qm-cloud-init.adoc).
+Allow at least 1 GiB of free space in the staging directory on Atlas.
+The commands assume a checkout of the reviewed Bot HQ revision and
+`local` storage at `/var/lib/vz`. They add the `snippets` content type
+if needed while preserving the existing storage content types.
+
+```sh
+image=debian-13-generic-amd64-20261111-2659.qcow2
+image_dir=$(mktemp -d)
+curl --fail --show-error --silent --location \
+  "https://cloud.debian.org/images/cloud/trixie/20261111-2659/$image" \
+  --output "$image_dir/$image"
+printf '%s  %s\n' \
+  ec8c175e39d59e711798c3a2f22ba11b9aee9bca1887c7e505a800aeffd5d7616099bd0e9fad869efba96100fe09d2c8b49d6d7001d501f0056c556bdc25b605 \
+  "$image_dir/$image" | sha512sum -c -
+```
+
+Continue only after the checksum passes. Install the cloud-init snippet
+from the release checkout before creating the VM. It brings up the guest
+agent and masks SSH without adding login credentials.
+
+```sh
+set -e
+content=$(pvesh get /storage/local --output-format json | \
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["content"])')
+case ",$content," in
+  *,snippets,*) ;;
+  *) pvesm set local --content "$content,snippets" ;;
+esac
+install -d -m 0755 /var/lib/vz/snippets
+snippet="bot-hq-$vmid.yaml"
+test ! -e "/var/lib/vz/snippets/$snippet"
+install -m 0644 ops/atlas/cloud-init.yaml "/var/lib/vz/snippets/$snippet"
+qm create "$vmid" --name bot-hq --ostype l26 --scsihw virtio-scsi-pci \
+  --serial0 socket --vga serial0 --onboot 0
+qm set "$vmid" --scsi0 "$storage:0,import-from=$image_dir/$image" \
+  --ide2 "$storage:cloudinit" --boot order=scsi0 \
+  --cicustom "user=local:snippets/$snippet"
+qm disk resize "$vmid" scsi0 24G
+```
+
+For either path, set the network, then verify `qm config` and the
+generated cloud-init network config before starting. As of the preflight,
+the proposed values were `vmbr3100`, `172.28.229.10/30`, and gateway
+`172.28.229.9`.
+
+```sh
 qm set "$vmid" --cores 2 --memory 4096 --net0 "virtio,bridge=$bridge,firewall=1" \
   --ipconfig0 "ip=$guest_cidr,gw=$guest_gateway,ip6=manual" \
   --nameserver '1.1.1.1 9.9.9.9' --agent enabled=1 --onboot 0
-qm start "$vmid"
+qm config "$vmid"
+qm cloudinit dump "$vmid" network
 ```
 
-Probe both guests' internet egress and check that neither can reach Keep
-or the LAN before continuing.
+Start with `qm start "$vmid"`. Allow cloud-init to finish and use
+`qm guest cmd "$vmid" ping` to check readiness. Probe both guests'
+internet egress and check that neither can reach Keep or the LAN.
+If an import or start fails, check the original Proxmox task and the
+VM's config before retrying.
 
-Use the guest console or QEMU agent for the steps below. Install Git, curl,
+Use the QEMU guest agent for the steps below. Install Git, curl,
 CA certificates, and the native Node build prerequisites (Python 3, make,
 g++) from Debian. Install Tailscale via its
 [Debian package instructions](https://tailscale.com/kb/1031/install-linux).
@@ -231,7 +289,9 @@ configuration workflow. Use the HTTPS MCP endpoint on port 8787.
 | Bot HQ probes known Keep LAN, tailnet and home WAN paths | Keep endpoints unavailable via either path. Home router services unavailable |
 | LAN and off-tailnet probe the guest | HQ ports are inaccessible. Serve status shows private listeners with no Funnel |
 
-Add the VM to Atlas's existing nightly PBS job. Check the VMID in a
+Configure a dedicated nightly Atlas PBS job for the Bot HQ VM on the
+approved encrypted backup storage. Atlas's existing coding VM job has its
+own schedule. Check the Bot HQ VMID in a
 successful encrypted snapshot and restore it into an isolated guest to
 verify that the database, Library, environment and release can be read.
 After acceptance, set `qm set "$vmid" --onboot 1` and verify after a reboot.
