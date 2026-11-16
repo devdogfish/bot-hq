@@ -7,17 +7,14 @@ import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
-import { enqueue, interrupt, resolveApproval } from './agent/loop.js';
-import { computerState, ensureComputer, forgetBotFiles, readyScreen, refreshComputer, releaseScreen, suspendComputer } from './computer.js';
+import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
+import { computerState } from './computer.js';
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
-import { orgo } from './orgo.js';
-import { catalog, connectedToolkits, deleteConnection, disconnect, googleProfile, startConnect, startGoogleLogin, toolkitInfo } from './composio.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
-import { deleteEventTrigger } from './triggers.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
-import type { AvatarColor, AvatarShape, Toolkit } from './types.js';
+import type { AvatarColor, AvatarShape } from './types.js';
 
 export const api = new Hono<AuthVars>();
 
@@ -33,11 +30,8 @@ function hashPick<T>(id: string, list: T[]): T {
 /** Thrown for things the user can fix; the message is shown to them. */
 class UserError extends Error {}
 
-const agentCount = () => (db.prepare("SELECT COUNT(*) n FROM bots WHERE COALESCE(kind,'agent')<>'room' AND COALESCE(hidden,0)=0").get() as any).n as number;
 
 function createBot(userId: string, b: { name: string; label?: string; description?: string; instructions?: string; avatarShape?: string; avatarColor?: string; mode?: string; isPrimary?: boolean }) {
-  // Every bot needs a screen of its own on the one shared computer.
-  if (agentCount() >= env.maxBots) throw new UserError(`The team is full: the computer has room for ${env.maxBots} bots. Remove one to add another.`);
   const id = newId('bot');
   const shape = SHAPES.includes(b.avatarShape as AvatarShape) ? b.avatarShape : hashPick(id, SHAPES.slice(0, 13));
   const color = COLORS.includes(b.avatarColor as AvatarColor) ? b.avatarColor : hashPick(id, COLORS.filter((c) => c !== 'black'));
@@ -65,34 +59,6 @@ function findOrCreateUser(email: string, name?: string, preferId?: string) {
 api.get('/auth/me', (c) => {
   const user = userFromCookieHeader(c.req.header('cookie'));
   return c.json({ user, devLogin: env.devLogin });
-});
-
-api.get('/auth/google/start', async (c) => {
-  const attemptId = newId('login');
-  const provisional = newId('usr');
-  const cb = `${env.serverUrl}/api/auth/google/callback?attempt=${attemptId}`;
-  const { redirectUrl, connectedAccountId } = await startGoogleLogin(provisional, cb);
-  db.prepare('INSERT INTO login_attempts(id,provisional_user_id,connected_account_id,created_at) VALUES (?,?,?,?)').run(attemptId, provisional, connectedAccountId ?? null, now());
-  return c.redirect(redirectUrl);
-});
-
-api.get('/auth/google/callback', async (c) => {
-  const attempt = db.prepare('SELECT * FROM login_attempts WHERE id=?').get(c.req.query('attempt') ?? '') as any;
-  const caId = c.req.query('connected_account_id') ?? attempt?.connected_account_id;
-  if (!attempt || c.req.query('status') === 'failed' || !caId) return c.redirect(`${env.appUrl}/?login=failed`);
-  if (attempt.connected_account_id && caId !== attempt.connected_account_id) return c.redirect(`${env.appUrl}/?login=failed`);
-  db.prepare('DELETE FROM login_attempts WHERE id=?').run(attempt.id);
-  try {
-    const profile = await googleProfile(caId);
-    const { id, isNew } = findOrCreateUser(profile.email, profile.name, attempt.provisional_user_id);
-    // Existing user: the Gmail connection made for sign-in belongs to a throwaway id; remove it.
-    if (!isNew && id !== attempt.provisional_user_id) await deleteConnection(caId);
-    createSession(c, id);
-    return c.redirect(`${env.appUrl}/`);
-  } catch (e: any) {
-    console.error('[auth] google callback', e);
-    return c.redirect(`${env.appUrl}/?login=failed`);
-  }
 });
 
 api.post('/auth/dev', async (c) => {
@@ -144,7 +110,7 @@ api.post('/auth/logout', (c) => { destroySession(c); return c.json({ ok: true })
 
 // everything below requires a session
 api.use('/*', async (c, next) => {
-  if (c.req.path.startsWith('/api/auth/') || c.req.path.startsWith('/api/apps/callback') || c.req.path === '/api/health') return next();
+  if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/health') return next();
   return requireUser(c, next);
 });
 
@@ -199,11 +165,6 @@ api.patch('/bots/:id', async (c) => {
   }
   if (b.kind !== 'room') {
     if (['name', 'label', 'description'].some((k) => p[k] !== undefined)) syncPersona(b.id);
-    // Its desktop carries its name and colour: dress the screen again, if it has one.
-    const looks = ['name', 'label', 'avatarShape', 'avatarColor'].some((k) => p[k] !== undefined);
-    if (looks && db.prepare('SELECT 1 FROM screens WHERE bot_id=?').get(b.id)) {
-      readyScreen(b.user_id, b.id, { redress: true }).catch((e) => console.warn('[computer] redress failed', e?.message ?? e));
-    }
   }
   emitBot(b.id);
   return c.json({ bot: getBot(b.id) });
@@ -215,15 +176,14 @@ api.delete('/bots/:id', async (c) => {
   interrupt(b.id);
   for (const r of listRoutines(b.id)) {
     unscheduleRoutine(r.id);
-    await deleteEventTrigger(r.id).catch(() => {});
   }
   if (b.kind !== 'room') {
     await removeEngine(b.id).catch((e) => console.warn('[engine] remove failed', e?.message ?? e));
-    await releaseScreen(b.id).catch((e) => console.warn('[computer] release failed', e?.message ?? e));
-    await forgetBotFiles(b.id).catch((e) => console.warn('[computer] cleanup failed', e?.message ?? e));
   }
-  db.prepare('DELETE FROM screens WHERE bot_id=?').run(b.id);
-  db.prepare('DELETE FROM bots WHERE id=?').run(b.id);
+  await runInBotQueue(b.id, async () => {
+    db.prepare('DELETE FROM bots WHERE id=?').run(b.id);
+  });
+  hub.emit(b.user_id, { type: 'computer', state: computerState(b.user_id) });
   hub.emit(c.get('user').id, { type: 'roster' });
   return c.json({ ok: true });
 });
@@ -274,18 +234,20 @@ api.post('/bots/:id/interrupt', (c) => {
   return c.json({ ok: true });
 });
 
-api.post('/bots/:id/fresh', (c) => {
+api.post('/bots/:id/fresh', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   interrupt(b.id);
-  clearConversation(b.id);
+  await runInBotQueue(b.id, () => Promise.resolve(clearConversation(b.id)));
   emitBot(b.id);
   return c.json({ ok: true });
 });
 
 api.post('/approvals/:id', async (c) => {
-  const { decision } = await c.req.json<{ decision: 'allow' | 'always' | 'deny' }>();
-  try { resolveApproval(c.get('user').id, c.req.param('id'), decision); } catch { return c.json({ error: 'not found' }, 404); }
+  const { decision } = await c.req.json<{ decision: string }>().catch(() => ({ decision: '' }));
+  if (decision !== 'allow' && decision !== 'deny') return c.json({ error: 'Invalid approval decision.' }, 400);
+  const error = await resolveApproval(c.get('user').id, c.req.param('id'), decision);
+  if (error) return c.json({ error }, error === 'not found' ? 404 : 409);
   return c.json({ ok: true });
 });
 
@@ -323,6 +285,7 @@ api.patch('/routines/:id', async (c) => {
   const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   const { enabled } = await c.req.json<{ enabled: boolean }>();
+  if (enabled && r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   db.prepare('UPDATE routines SET enabled=? WHERE id=?').run(enabled ? 1 : 0, r.id);
   const next = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(r.id));
   enabled ? scheduleRoutine(next) : unscheduleRoutine(r.id);
@@ -333,6 +296,7 @@ api.patch('/routines/:id', async (c) => {
 api.post('/routines/:id/run', (c) => {
   const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
+  if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   runRoutine(r.id);
   return c.json({ ok: true });
 });
@@ -341,7 +305,6 @@ api.delete('/routines/:id', async (c) => {
   const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   unscheduleRoutine(r.id);
-  await deleteEventTrigger(r.id);
   db.prepare('DELETE FROM routines WHERE id=?').run(r.id);
   hub.emit(c.get('user').id, { type: 'routines', botId: r.bot_id });
   return c.json({ ok: true });
@@ -370,97 +333,6 @@ api.delete('/memories/:id', (c) => {
   return c.json({ ok: true });
 });
 
-// ---------- computer ----------
-
-api.get('/computer', async (c) => c.json({ computer: await refreshComputer(c.get('user').id) }));
-
-api.post('/computer/ensure', (c) => {
-  const userId = c.get('user').id;
-  ensureComputer(userId).catch((e) => console.warn('[computer] ensure failed', e.message));
-  return c.json({ computer: computerState(userId) });
-});
-
-api.post('/computer/suspend', async (c) => {
-  await suspendComputer(c.get('user').id);
-  return c.json({ computer: computerState(c.get('user').id) });
-});
-
-api.get('/bots/:id/screenshot', async (c) => {
-  const user = c.get('user');
-  const b = ownBot(user.id, c.req.param('id'));
-  if (!b) return c.json({ error: 'not found' }, 404);
-  const scr = db.prepare('SELECT screen_id FROM screens WHERE bot_id=?').get(b.id) as any;
-  if (!env.orgoComputerId || computerState(user.id).status !== 'running' || !scr) return c.body(null, 204);
-  try {
-    const s = await orgo.screenshot(env.orgoComputerId, scr.screen_id);
-    const b64 = s.image.replace(/^data:[^,]+,/, '');
-    return c.body(Buffer.from(b64, 'base64'), 200, { 'Content-Type': s.mime_type ?? 'image/jpeg', 'Cache-Control': 'no-store' });
-  } catch {
-    return c.body(null, 204);
-  }
-});
-
-// ---------- apps (Composio marketplace) ----------
-
-api.get('/apps', async (c) => {
-  const user = c.get('user');
-  const search = (c.req.query('search') ?? '').toLowerCase();
-  const category = c.req.query('category') ?? '';
-  const [all, connected] = await Promise.all([catalog(), connectedToolkits(user.id).catch(() => new Set<string>())]);
-  let items: Toolkit[] = all.map((t) => ({ ...t, connected: connected.has(t.slug) }));
-  if (search) items = items.filter((t) => t.name.toLowerCase().includes(search) || t.slug.includes(search) || t.description?.toLowerCase().includes(search));
-  if (category) items = items.filter((t) => t.categories.some((x) => x.toLowerCase() === category.toLowerCase()));
-  const categories = [...new Set(all.flatMap((t) => t.categories))].sort();
-  const connectedApps = all.filter((t) => connected.has(t.slug)).map((t) => ({ ...t, connected: true }));
-  return c.json({ apps: items.slice(0, Number(c.req.query('limit') ?? 120)), connected: [...connected], connectedApps, categories, total: items.length });
-});
-
-api.post('/apps/:slug/connect', async (c) => {
-  const user = c.get('user');
-  const slug = c.req.param('slug');
-  const { botId, seq } = await c.req.json<{ botId?: string; seq?: number }>().catch(() => ({} as any));
-  const cb = new URL(`${env.serverUrl}/api/apps/callback`);
-  cb.searchParams.set('slug', slug);
-  if (botId) cb.searchParams.set('bot', botId);
-  if (seq) cb.searchParams.set('seq', String(seq));
-  const r = await startConnect(user.id, slug, cb.toString());
-  return c.json(r);
-});
-
-api.get('/apps/callback', async (c) => {
-  const userId = userFromCookieHeader(c.req.header('cookie'))?.id ?? '';
-  const slug = c.req.query('slug') ?? '';
-  const botId = c.req.query('bot');
-  const seq = Number(c.req.query('seq') ?? 0);
-  const ok = c.req.query('status') !== 'failed';
-  const userExists = db.prepare('SELECT 1 FROM users WHERE id=?').get(userId);
-  if (userExists && ok) {
-    const connected = await connectedToolkits(userId).catch(() => new Set<string>());
-    if (connected.has(slug)) {
-      hub.emit(userId, { type: 'connections' });
-      if (botId && ownBot(userId, botId)) {
-        const info = await toolkitInfo(slug);
-        if (seq) {
-          const row = getRow(botId, seq);
-          if (row?.body.type === 'card' && row.body.card === 'connect') updateRow(botId, seq, { ...row.body, status: 'connected' });
-        }
-        enqueue(botId, { type: 'system', text: `The user connected ${info?.name ?? slug}. Continue with what you were doing.` });
-      }
-    }
-  }
-  return c.html(`<!doctype html><meta charset="utf-8"><title>Connected</title><body style="font-family:system-ui;padding:40px;text-align:center">${ok ? 'Connected. You can close this window.' : 'Connection failed.'}<script>try{window.opener&&window.opener.postMessage({type:'grokbot-connected',slug:${JSON.stringify(slug)},ok:${ok}},'*')}catch(e){};setTimeout(()=>window.close(),800)</script></body>`);
-});
-
-api.delete('/apps/:slug', async (c) => {
-  await disconnect(c.get('user').id, c.req.param('slug'));
-  hub.emit(c.get('user').id, { type: 'connections' });
-  return c.json({ ok: true });
-});
-
-api.get('/policies', (c) => c.json({ policies: db.prepare('SELECT tool, mode FROM policies WHERE user_id=?').all(c.get('user').id) }));
-api.delete('/policies/:tool', (c) => {
-  db.prepare('DELETE FROM policies WHERE user_id=? AND tool=?').run(c.get('user').id, c.req.param('tool'));
-  return c.json({ ok: true });
-});
+api.get('/computer', (c) => c.json({ computer: computerState(c.get('user').id) }));
 
 api.route('/voice', voiceApi);

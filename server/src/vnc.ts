@@ -3,12 +3,12 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { db } from './db.js';
 import { userFromCookieHeader } from './lib/auth.js';
 import { vncAuthResponse } from './lib/des.js';
-import { orgo } from './orgo.js';
-import { readyScreen, screenFor } from './computer.js';
-import { viewerClosed, viewerOpened } from './idle.js';
+import { screenFor } from './computer.js';
+import { env } from './env.js';
+import { hub } from './lib/hub.js';
 
 /**
- * VNC relay: browser <-> our server <-> Orgo websockify.
+ * VNC relay: browser <-> our server <-> the Agent’s websockify.
  * The server performs the RFB handshake upstream with the computer's VNC password
  * (which is root-equivalent and never reaches the browser), then offers the browser
  * an unauthenticated RFB session. In "watch" mode, client input messages
@@ -50,7 +50,7 @@ async function upstreamHandshake(q: ByteQueue, send: (b: Buffer) => void, passwo
     throw new Error(`VNC refused: ${(await q.read(len)).toString()}`);
   }
   const types = [...(await q.read(n))];
-  const choice = types.includes(2) ? 2 : types.includes(1) ? 1 : -1;
+  const choice = types.includes(2) ? 2 : -1;
   if (choice < 0) throw new Error(`Unsupported VNC security types: ${types.join(',')}`);
   send(Buffer.from([choice]));
   if (choice === 2) {
@@ -85,6 +85,7 @@ class WatchFilter {
   private pending = Buffer.alloc(0);
   feed(chunk: Buffer): Buffer {
     this.pending = Buffer.concat([this.pending, chunk]);
+    if (this.pending.length > 1024 * 1024) throw new Error('Oversize client input');
     const out: Buffer[] = [];
     for (;;) {
       const b = this.pending;
@@ -94,7 +95,7 @@ class WatchFilter {
       if (len === 0 || b.length < len) break; // need more bytes
       const msg = b.subarray(0, len);
       const t = b[0];
-      if (t !== 4 && t !== 5 && t !== 6) out.push(Buffer.from(msg));
+      if (t !== 4 && t !== 5 && t !== 6 && t !== 251) out.push(Buffer.from(msg));
       this.pending = b.subarray(len);
     }
     return Buffer.concat(out);
@@ -119,7 +120,7 @@ function msgLength(b: Buffer): number {
 }
 
 export function attachVncRelay(server: Server) {
-  const wss = new WebSocketServer({ noServer: true, handleProtocols: (protocols) => (protocols.has('binary') ? 'binary' : false) });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, handleProtocols: (protocols) => (protocols.has('binary') ? 'binary' : false) });
 
   server.on('upgrade', (req: IncomingMessage, socket, head) => {
     const url = new URL(req.url ?? '/', 'http://x');
@@ -127,7 +128,8 @@ export function attachVncRelay(server: Server) {
     if (!m) return; // not ours
     const user = userFromCookieHeader(req.headers.cookie);
     const bot = user ? (db.prepare('SELECT * FROM bots WHERE id=? AND user_id=?').get(m[1], user.id) as any) : null;
-    if (!user || !bot) {
+    const origin = req.headers.origin;
+    if (!user || !bot || (origin && origin !== new URL(env.appUrl).origin)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
@@ -142,6 +144,7 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
   const fromUp = new ByteQueue();
   let upstream: WebSocket | null = null;
   let piping = false;
+  let unsubscribe: (() => void) | undefined;
   const filter = new WatchFilter();
   const closeAll = (code = 1000, reason = '') => {
     try { client.close(code, reason.slice(0, 120)); } catch { /* */ }
@@ -150,28 +153,31 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
 
   client.on('message', (data: Buffer) => {
     if (!piping) return fromClient.push(Buffer.from(data));
-    const fwd = mode === 'watch' ? filter.feed(Buffer.from(data)) : Buffer.from(data);
-    if (fwd.length && upstream?.readyState === WebSocket.OPEN) upstream.send(fwd);
+    try {
+      const fwd = mode === 'watch' ? filter.feed(Buffer.from(data)) : Buffer.from(data);
+      if (fwd.length && upstream?.readyState === WebSocket.OPEN) upstream.send(fwd);
+    } catch { closeAll(1008, 'Invalid screen input'); }
   });
-  client.on('close', () => { viewerClosed(userId); fromClient.close(new Error('client closed')); try { upstream?.close(); } catch { /* */ } });
-  viewerOpened(userId); // keeps the computer awake while someone is watching (see idle.ts)
+  client.on('error', () => closeAll(1011));
+  client.on('close', () => { unsubscribe?.(); fromClient.close(new Error('client closed')); try { upstream?.close(); } catch { /* */ } });
 
+  const timer = setTimeout(() => closeAll(1011, 'Screen connection timed out'), 10_000);
   try {
-    const { computerId, screenId } = await screenFor(userId, botId);
-    // A screen nobody has used yet is bare; set it up while the person is already watching.
-    readyScreen(userId, botId).catch(() => {});
-    const { password } = await orgo.vncPassword(computerId);
-    const upUrl = `wss://www.orgo.ai/desktops/${computerId}/ws/websockify?token=${encodeURIComponent(password)}${screenId !== 'default' ? `&screen=${encodeURIComponent(screenId)}` : ''}`;
-    upstream = new WebSocket(upUrl, ['binary']);
+    const screen = screenFor(userId, botId);
+    if (!screen) throw new Error('No screen configured for this Agent');
+    unsubscribe = hub.subscribe(userId, (ev) => {
+      if (ev.type === 'computer' && !ev.state.screens.some((s) => s.botId === botId && s.revision === screen.revision)) closeAll();
+    });
+    upstream = new WebSocket(screen.url, ['binary'], { handshakeTimeout: 8_000 });
     upstream.on('message', (data: Buffer) => {
       if (!piping) return fromUp.push(Buffer.from(data));
       if (client.readyState === WebSocket.OPEN) client.send(data);
     });
     upstream.on('close', (code, reason) => { fromUp.close(new Error(`upstream closed ${code}`)); closeAll(1000, `upstream ${code} ${reason}`); });
-    upstream.on('error', (e) => { fromUp.close(e as Error); closeAll(1011, String(e)); });
-    await new Promise<void>((res, rej) => { upstream!.once('open', () => res()); upstream!.once('error', rej); });
+    upstream.on('error', (e) => { fromUp.close(e as Error); closeAll(1011, 'Screen connection failed'); });
+    await new Promise<void>((res, rej) => { upstream!.once('open', () => res()); upstream!.once('error', rej); upstream!.once('close', () => rej(new Error('Screen disconnected'))); });
 
-    const serverInit = await upstreamHandshake(fromUp, (b) => upstream!.send(b), password);
+    const serverInit = await upstreamHandshake(fromUp, (b) => upstream!.send(b), screen.password);
     await browserHandshake(fromClient, (b) => client.send(b), serverInit);
     // Flush anything that arrived during the handshake, then switch to piping.
     piping = true;
@@ -184,6 +190,8 @@ async function relay(client: WebSocket, userId: string, botId: string, mode: 'wa
     }
   } catch (e: any) {
     console.warn('[vnc] relay failed', e?.message ?? e);
-    closeAll(1011, String(e?.message ?? e));
+    closeAll(1011, 'Screen connection failed');
+  } finally {
+    clearTimeout(timer);
   }
 }

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, User } from '@shared/types';
 import { api } from './lib/api';
 
-export type ModalKind = 'create' | 'search' | 'apps' | 'group' | null;
+export type ModalKind = 'create' | 'search' | 'group' | null;
 
 interface Transcript { generation: number; bySeq: Record<number, Row>; loaded: boolean }
 
@@ -18,7 +18,6 @@ interface State {
   routines: Record<string, Routine[]>;
   computer: ComputerState | null;
   /** Bumped on every `connections` event so open views can refetch. */
-  connectionsVersion: number;
   sseConnected: boolean;
 
   detailsOpen: boolean;
@@ -58,7 +57,6 @@ export const useStore = create<State>((set, get) => ({
   transcripts: {},
   routines: {},
   computer: null,
-  connectionsVersion: 0,
   sseConnected: false,
   detailsOpen: lsGet(LS_DETAILS) !== '0',
   sidebarCollapsed: lsGet(LS_SIDEBAR) === '1',
@@ -172,9 +170,6 @@ export const useStore = create<State>((set, get) => ({
       case 'memories':
         // Picked up by configStore.ts (Tasks view, Library/Tasks tabs, bot settings).
         window.dispatchEvent(new CustomEvent('grokbot:event', { detail: ev }));
-        return;
-      case 'connections':
-        set((st) => ({ connectionsVersion: st.connectionsVersion + 1 }));
         return;
     }
   },

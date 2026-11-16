@@ -1,12 +1,10 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
-import { box } from '../box.js';
+import { writeLibraryFile } from '../library.js';
 import { env } from '../env.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
-import { executeComposio, innerToolSlugs, isReadOnlySlug, toolkitInfo } from '../composio.js';
 import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
-import { createEventRoutine, deleteEventTrigger, describeEvent, listTriggerTypes } from '../triggers.js';
 import { setCheckins } from '../proactive.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
@@ -55,6 +53,7 @@ async function xSearch(a: any): Promise<string> {
   const day = /^\d{4}-\d{2}-\d{2}$/;
   if (day.test(String(a.from_date ?? ''))) tool.from_date = a.from_date;
   if (day.test(String(a.to_date ?? ''))) tool.to_date = a.to_date;
+  if (!env.xaiKey) throw new Error('Set XAI_API_KEY to research X.');
   const res = await fetch('https://api.x.ai/v1/responses', {
     method: 'POST',
     headers: { Authorization: `Bearer ${env.xaiKey}`, 'Content-Type': 'application/json' },
@@ -86,21 +85,17 @@ async function xSearch(a: any): Promise<string> {
   return (sources.length ? `${text}\n\nSources:\n${sources.map((u) => `- ${u}`).join('\n')}` : text).slice(0, 60000);
 }
 
-/** Where each bot's Library lives on the shared computer. */
-export const LIBRARY_ROOT = '/root/grokbot/files';
-
 export const TOOLS: ToolDef[] = [
   {
     name: 'save_file',
-    description: "Save a finished deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it. Saved under /root/grokbot/files/<your id>/ on your computer. Files you write into that folder yourself show up in the Library too.",
+    description: "Save a finished deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it.",
     parameters: obj({ filename: { type: 'string', description: 'e.g. briefing-2026-11-09.md' }, content: { type: 'string' } }, ['filename', 'content']),
     activity: 'drafting_file',
     label: 'Saving a file',
     impl: async (a, ctx) => {
-      const name = String(a.filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
-      const file = `${LIBRARY_ROOT}/${ctx.botId}/${name}`;
-      await box.writeFile(file, String(a.content ?? ''));
-      return { output: JSON.stringify({ ok: true, path: file }), summary: `Saved ${name}` };
+      const name = String(a.filename).replace(/^\.+/, '').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120) || 'file.txt';
+      await writeLibraryFile(ctx.botId, name, String(a.content ?? ''));
+      return { output: JSON.stringify({ ok: true, filename: name }), summary: `Saved ${name}` };
     },
   },
   {
@@ -135,33 +130,6 @@ export const TOOLS: ToolDef[] = [
       appendRow(ctx.botId, 'event', { type: 'event', event: 'routine-created', text: `Routine created: ${a.name} · ${describeCron(a.schedule)}`, ref: id });
       hub.emit(ctx.userId, { type: 'routines', botId: ctx.botId });
       return { output: JSON.stringify({ ok: true, routine: r }), summary: `Created routine ${a.name}` };
-    },
-  },
-  {
-    name: 'list_event_triggers',
-    description: 'List the event triggers a connected app offers (e.g. new email, new Slack message, new GitHub PR), with each trigger\'s config fields. Use before create_event_routine.',
-    parameters: obj({ toolkit: { type: 'string', description: 'Composio toolkit slug, e.g. gmail, slack, github, googlecalendar' } }, ['toolkit']),
-    activity: 'connecting_service',
-    label: 'Using a connected app',
-    impl: async (a) => ({ output: JSON.stringify(await listTriggerTypes(String(a.toolkit).toLowerCase())) }),
-  },
-  {
-    name: 'create_event_routine',
-    description: 'Create a routine that runs whenever an event happens in a connected app (instead of on a schedule). `trigger_slug` comes from list_event_triggers; `config_json` is a JSON object string with that trigger\'s config fields (use "{}" if none). `prompt` is what you will do each time, given the event payload.',
-    parameters: obj({ name: { type: 'string' }, prompt: { type: 'string' }, trigger_slug: { type: 'string' }, config_json: { type: 'string' } }, ['name', 'prompt', 'trigger_slug']),
-    activity: 'working',
-    label: 'Setting up a routine',
-    impl: async (a, ctx) => {
-      let config: Record<string, unknown> = {};
-      try { config = a.config_json ? JSON.parse(a.config_json) : {}; } catch { return { output: 'config_json must be a JSON object string.' }; }
-      try {
-        const r = await createEventRoutine(ctx.userId, ctx.botId, { name: a.name, prompt: a.prompt, trigger_slug: a.trigger_slug, config });
-        appendRow(ctx.botId, 'event', { type: 'event', event: 'routine-created', text: `Routine created: ${a.name} · ${describeEvent(`event:${String(a.trigger_slug).toUpperCase()}`)}`, ref: r.id });
-        hub.emit(ctx.userId, { type: 'routines', botId: ctx.botId });
-        return { output: JSON.stringify({ ok: true, routine_id: r.id }), summary: `Created event routine ${a.name}` };
-      } catch (e: any) {
-        return { output: `Could not create the trigger: ${e?.message ?? e}. If the app isn't connected, call request_app_connection first.` };
-      }
     },
   },
   {
@@ -222,7 +190,6 @@ export const TOOLS: ToolDef[] = [
     label: 'Removing a routine',
     impl: async (a, ctx) => {
       unscheduleRoutine(a.routine_id);
-      await deleteEventTrigger(a.routine_id);
       db.prepare('DELETE FROM routines WHERE id=? AND bot_id=?').run(a.routine_id, ctx.botId);
       hub.emit(ctx.userId, { type: 'routines', botId: ctx.botId });
       return { output: 'Deleted.' };
@@ -310,64 +277,14 @@ export const TOOLS: ToolDef[] = [
       return { output: 'Question shown to the user. Stop here and wait for their answer.', endTurn: true };
     },
   },
-  {
-    name: 'request_app_connection',
-    description: 'Ask the user to connect an app (e.g. gmail, googlecalendar, slack, github, notion, linear) so you can use it. Use the Composio toolkit slug.',
-    parameters: obj({ toolkit: { type: 'string' }, reason: { type: 'string' } }, ['toolkit', 'reason']),
-    activity: 'connecting_service',
-    label: 'Using a connected app',
-    impl: async (a, ctx) => {
-      const info = await toolkitInfo(String(a.toolkit).toLowerCase());
-      if (!info) return { output: `Unknown toolkit "${a.toolkit}". Use COMPOSIO_SEARCH_TOOLS to find the right toolkit slug.` };
-      appendRow(ctx.botId, 'card', { type: 'card', card: 'connect', toolkit: info.slug, toolkitName: info.name, logo: info.logo, reason: a.reason, status: 'pending' });
-      return { output: `Asked the user to connect ${info.name}. Stop here; you'll be told when it's connected.`, endTurn: true };
-    },
-  },
 ];
 
 export const toolMap = new Map(TOOLS.map((t) => [t.name, t]));
-
-// ---------- approvals policy ----------
-
-export type Decision = 'allow' | 'ask' | 'block';
-
-export function policyFor(userId: string, toolName: string, args: any): { decision: Decision; key: string; toolkit?: string; title: string } {
-  if (toolMap.has(toolName)) return { decision: 'allow', key: toolName, title: toolName };
-  const slugs = innerToolSlugs(toolName, args);
-  if (!slugs.length) {
-    // Composio's sandbox can run app actions from code, which would slip past the per-action
-    // approvals below. Code that reaches for them is treated like a write to an app.
-    if (/^COMPOSIO_REMOTE_(WORKBENCH|BASH_TOOL)$/.test(toolName) && /run_composio_tool|proxy_execute|execute_tool|composio/i.test(JSON.stringify(args ?? {}))) {
-      const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, toolName) as any;
-      const mode = p?.mode ?? 'needs_approval';
-      return { decision: mode === 'blocked' ? 'block' : mode === 'always_allow' ? 'allow' : 'ask', key: toolName, title: 'Run code that uses your connected apps' };
-    }
-    return { decision: 'allow', key: toolName, title: toolName };
-  }
-  let decision: Decision = 'allow';
-  let key = slugs[0];
-  for (const slug of slugs) {
-    const p = db.prepare('SELECT mode FROM policies WHERE user_id=? AND tool=?').get(userId, slug) as any;
-    const mode = p?.mode ?? (isReadOnlySlug(slug) ? 'always_allow' : 'needs_approval');
-    if (mode === 'blocked') return { decision: 'block', key: slug, title: humanizeSlug(slug) };
-    if (mode === 'needs_approval') { decision = 'ask'; key = slug; }
-  }
-  return { decision, key, toolkit: key.split('_')[0].toLowerCase(), title: humanizeSlug(key) };
-}
 
 export function humanizeSlug(slug: string) {
   const parts = slug.split('_');
   const app = parts.shift() ?? '';
   return `${app.charAt(0) + app.slice(1).toLowerCase()}: ${parts.join(' ').toLowerCase()}`;
-}
-
-export async function runComposioTool(ctx: ToolCtx, name: string, args: any): Promise<ToolResult> {
-  const r = await executeComposio(ctx.userId, name, args);
-  const ok = r.resultType ? r.resultType === 'completed' : !r.error;
-  const payload = ok ? r.data : { error: r.error, logId: r.logId };
-  let out = JSON.stringify(payload ?? null);
-  if (out.length > 60000) out = out.slice(0, 60000) + '…(truncated)';
-  return { output: out, summary: ok ? 'done' : 'failed' };
 }
 
 /** A Hermes tool name as the app knows it: tools served by this app's MCP server lose their `mcp_hq_` prefix. */
@@ -376,7 +293,7 @@ export function appToolName(raw: string): { name: string; ours: boolean; server?
   if (hq) {
     // Hermes may fold names to lower case; ours are matched case-insensitively.
     const hit = [...toolMap.keys()].find((k) => k.toLowerCase() === hq[1].toLowerCase());
-    return { name: hit ?? (/^composio_/i.test(hq[1]) ? hq[1].toUpperCase() : hq[1]), ours: true };
+    return { name: hit ?? hq[1], ours: true };
   }
   const other = /^mcp_+([a-zA-Z0-9-]+?)_+(.+)$/.exec(raw);
   if (other) return { name: other[2], ours: false, server: other[1] };
@@ -392,7 +309,7 @@ export function activityFor(raw: string): { kind: ActivityKind; label: string; d
   if (ours) {
     const t = toolMap.get(name);
     if (t) return { kind: t.activity, label: t.label, ...(name === 'x_search' ? { detail: 'X' } : {}) };
-    return { kind: 'connecting_service', label: 'Using a connected app' };
+    return { kind: 'connecting_service', label: 'Using Bot HQ' };
   }
   if (server) return { kind: 'connecting_service', label: `Using ${words(server)}`, detail: sentence(words(server)) };
   if (name === 'terminal' || name === 'process' || name === 'execute_code') return { kind: 'running_commands', label: 'Running commands' };

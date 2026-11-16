@@ -3,8 +3,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
-import { displayFor } from './box.js';
-import { cdpUrlFor, screenFor } from './computer.js';
+import { homedir, userInfo } from 'node:os';
+import { libraryRoot } from './library.js';
 import { db } from './db.js';
 import { env } from './env.js';
 import type { EngineInfo, EngineProvider } from './types.js';
@@ -20,8 +20,8 @@ import type { EngineInfo, EngineProvider } from './types.js';
  *   outside ~/.hermes, so Hermes treats it as a separate tenant beside the primary gateway.
  */
 
-export type EngineKind = 'primary' | 'managed';
-export interface Engine { kind: EngineKind; url: string; key: string; home: string }
+export type EngineKind = 'primary' | 'managed' | 'remote';
+export interface Engine { kind: EngineKind; url: string; key: string }
 
 const botRow = (botId: string) => db.prepare('SELECT * FROM bots WHERE id=?').get(botId) as any;
 
@@ -64,7 +64,10 @@ export function primaryBotId(): string | null {
 }
 
 export function engineKind(botId: string): EngineKind | null {
-  const e = botRow(botId)?.engine;
+  const b = botRow(botId);
+  if (b?.hermes_url) return 'remote';
+  if (!env.localEngines) return null;
+  const e = b?.engine;
   return e === 'primary' || e === 'managed' ? e : null;
 }
 
@@ -87,7 +90,8 @@ function freePort(): number {
 }
 
 /** Give a new agent bot its engine: the existing agent if nobody has it yet, otherwise one of our own. */
-export function assignEngine(botId: string): EngineKind {
+export function assignEngine(botId: string): EngineKind | null {
+  if (!env.localEngines) return null;
   const b = botRow(botId);
   if (!b) throw new Error('bot not found');
   if (b.engine === 'primary' || b.engine === 'managed') return b.engine;
@@ -143,27 +147,14 @@ function extraMcpServers(): Record<string, any> {
 }
 
 /** Create or refresh the home. config.yaml is created once; after that only the keys we own are patched. */
-async function writeHome(botId: string): Promise<{ home: string; key: string; display: string | null }> {
+async function writeHome(botId: string): Promise<{ home: string; key: string }> {
   const b = botRow(botId);
   const home = homeFor(botId);
   fs.mkdirSync(path.join(home, 'logs'), { recursive: true });
   fs.mkdirSync(path.join(home, 'locks'), { recursive: true });
   fs.chmodSync(home, 0o700);
 
-  // Its screen decides which display and which Chrome it drives. Only meaningful on the computer itself.
-  let display: string | null = null;
-  let cdp = '';
-  if (env.localBox) {
-    try {
-      const s = await screenFor(b.user_id, botId);
-      display = displayFor(s.screenId);
-      cdp = cdpUrlFor(botId, s.screenId);
-    } catch (e: any) {
-      console.warn(`[engine] no screen for ${b.name} yet: ${e?.message ?? e}`);
-    }
-  }
-
-  const cwd = env.localBox ? `/root/grokbot/files/${botId}` : path.join(home, 'workspace');
+  const cwd = libraryRoot(botId);
   fs.mkdirSync(cwd, { recursive: true });
 
   const cfgFile = path.join(home, 'config.yaml');
@@ -174,9 +165,8 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     for (const k of SHARED_CONFIG) if (primary[k] !== undefined) cfg[k] = primary[k];
     cfg.agent = { reasoning_effort: 'medium' };
   }
-  cfg.platform_toolsets = { ...(cfg.platform_toolsets ?? {}), api_server: ['hermes-api-server', ...(display ? ['computer_use'] : [])] };
+  cfg.platform_toolsets = { ...(cfg.platform_toolsets ?? {}), api_server: ['hermes-api-server'] };
   cfg.terminal = { ...(cfg.terminal ?? {}), cwd };
-  if (cdp) cfg.browser = { ...(cfg.browser ?? {}), cdp_url: cdp };
   cfg.mcp_servers = {
     ...(cfg.mcp_servers ?? {}),
     ...extraMcpServers(),
@@ -203,17 +193,16 @@ async function writeHome(botId: string): Promise<{ home: string; key: string; di
     if (v && !vars[k]) vars[k] = v;
   }
   Object.assign(vars, { API_SERVER_ENABLED: 'true', API_SERVER_KEY: key, API_SERVER_PORT: String(b.engine_port), API_SERVER_HOST: '127.0.0.1' });
-  if (cdp) vars.BROWSER_CDP_URL = cdp; else delete vars.BROWSER_CDP_URL;
   writePrivate(envFile, Object.entries(vars).map(([k, v]) => `${k}=${v}`).join('\n') + '\n');
 
-  return { home, key, display };
+  return { home, key };
 }
 
 // ---------- a managed bot's gateway ----------
 
 async function healthy(url: string, timeoutMs = 2500): Promise<any | null> {
   try {
-    const r = await fetch(`${url}/health`, { signal: AbortSignal.timeout(timeoutMs) });
+    const r = await fetch(`${url}/health`, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     return r.ok ? await r.json() : null;
   } catch { return null; }
 }
@@ -292,7 +281,7 @@ async function startGateway(botId: string): Promise<void> {
     else throw new Error(`Port ${botRow(botId).engine_port} is taken by something else.`);
   }
 
-  const { home, key, display } = await writeHome(botId);
+  const { home, key } = await writeHome(botId);
   keys.set(botId, key);
   if (gatewayPid(home)) await stopGateway(botId);
 
@@ -304,15 +293,14 @@ async function startGateway(botId: string): Promise<void> {
     // Only what the agent needs. None of this server's secrets, and nothing of the primary agent's messaging.
     env: {
       PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      HOME: process.env.HOME ?? '/root',
-      USER: process.env.USER ?? 'root',
+      HOME: homedir(),
+      USER: userInfo().username,
       LANG: process.env.LANG ?? 'C.UTF-8',
       HERMES_HOME: home,
       HERMES_GATEWAY_LOCK_DIR: path.join(home, 'locks'),
       // Hermes' browser tool talks to a helper process it finds under this folder. With the default
       // (one folder per HOME) every agent on the computer would end up driving the same browser.
       BH_HOME: path.join(home, 'browser-harness'),
-      ...(display ? { DISPLAY: display } : {}),
     },
   });
   fs.closeSync(log);
@@ -359,10 +347,15 @@ export async function engineFor(botId: string): Promise<Engine> {
     if (b.kind === 'room') throw new Error('A group chat has no agent of its own.');
     kind = assignEngine(botId);
   }
-  if (kind === 'primary') return { kind, url: env.hermesUrl, key: primaryKey(), home: env.hermesHome };
+  if (!kind) throw new Error('Register a Hermes URL and API key in Agent settings.');
+  if (kind === 'remote') {
+    const b = botRow(botId);
+    return { kind, url: b.hermes_url, key: b.hermes_key };
+  }
+  if (kind === 'primary') return { kind, url: env.hermesUrl, key: primaryKey() };
   const url = managedUrl(botId);
   if (!(await healthy(url, 1500)) || !managedKey(botId)) await ensureManaged(botId);
-  return { kind, url, key: managedKey(botId), home: homeFor(botId) };
+  return { kind, url, key: managedKey(botId) };
 }
 
 /** The bot's Hermes home, without starting anything (memory files, sign-in commands). */
@@ -421,7 +414,7 @@ export async function restartEngine(botId: string): Promise<void> {
 /** The bot is gone: stop its gateway and delete its home. The primary agent is left alone. */
 export async function removeEngine(botId: string): Promise<void> {
   const home = homeFor(botId);
-  if (!fs.existsSync(home)) return;
+  if (engineKind(botId) !== 'managed' || !fs.existsSync(home)) return;
   await starting.get(botId)?.catch(() => {});
   await stopGateway(botId);
   keys.delete(botId);
@@ -432,6 +425,7 @@ export async function removeEngine(botId: string): Promise<void> {
 
 /** On server start: give older bots an engine, then bring the managed gateways up. */
 export function initEngines() {
+  if (!env.localEngines) return;
   fs.mkdirSync(env.enginesDir, { recursive: true });
   const bots = db.prepare("SELECT id, is_primary FROM bots WHERE engine IS NULL AND COALESCE(kind,'agent') <> 'room' AND COALESCE(hidden,0)=0 ORDER BY is_primary DESC, created_at ASC").all() as any[];
   for (const b of bots) assignEngine(b.id);
@@ -449,7 +443,7 @@ async function modelOptions(botId: string, e: { url: string; key: string }): Pro
   const hit = optionsCache.get(botId);
   if (hit && Date.now() - hit.at < 15_000) return hit.data;
   try {
-    const r = await fetch(`${e.url}/api/model/options`, { headers: e.key ? { Authorization: `Bearer ${e.key}` } : {}, signal: AbortSignal.timeout(8000) });
+    const r = await fetch(`${e.url}/api/model/options`, { headers: e.key ? { Authorization: `Bearer ${e.key}` } : {}, redirect: 'error', signal: AbortSignal.timeout(8000) });
     if (!r.ok) return null;
     const data = await r.json();
     optionsCache.set(botId, { at: Date.now(), data });
@@ -480,19 +474,20 @@ export async function engineInfo(botId: string): Promise<EngineInfo> {
   const b = botRow(botId);
   if (!b) throw new Error('bot not found');
   const kind = engineKind(botId);
-  const base: EngineInfo = { botId, profile: kind === 'primary' ? 'default' : botId, status: 'stopped', error: null, model: b.model ?? null, provider: b.provider ?? null, version: null, providers: [], ownScreen: kind ? ownScreenOn(botId) : false };
-  if (!kind) return { ...base, status: 'error', error: 'This bot has no agent.' };
+  const base: EngineInfo = { botId, kind, profile: kind === 'primary' ? 'default' : botId, status: 'stopped', error: null, model: b.model ?? null, provider: b.provider ?? null, version: null, providers: [], ownScreen: kind ? ownScreenOn(botId) : false };
+  if (!kind) return { ...base, status: 'error', error: 'Register a Hermes URL and API key in Agent settings.' };
 
   let e: { url: string; key: string };
-  if (kind === 'primary') e = { url: env.hermesUrl, key: primaryKey() };
+  if (kind === 'remote') e = { url: b.hermes_url, key: b.hermes_key };
+  else if (kind === 'primary') e = { url: env.hermesUrl, key: primaryKey() };
   else {
     if (!b.engine_port) return { ...base, status: 'error', error: 'No port assigned.' };
     e = { url: managedUrl(botId), key: managedKey(botId) };
   }
 
-  const health = await healthy(e.url);
+  const [health, accepted] = await Promise.all([healthy(e.url), kind === 'remote' ? keyAccepted(e.url, e.key) : true]);
   if (!health) {
-    if (kind === 'primary') return { ...base, status: 'error', error: `The agent at ${env.hermesUrl} is not answering.` };
+    if (kind !== 'managed') return { ...base, status: 'error', error: 'Hermes is not answering.' };
     if (starting.has(botId)) return { ...base, status: 'starting' };
     const failed = failures.get(botId);
     if (failed) return { ...base, status: 'error', error: failed };
@@ -501,6 +496,7 @@ export async function engineInfo(botId: string): Promise<EngineInfo> {
   }
   if (kind === 'managed' && starting.has(botId)) return { ...base, status: 'starting' };
 
+  if (!accepted) return { ...base, status: 'error', error: 'Hermes did not accept the API key.' };
   const data = await modelOptions(botId, e);
   return {
     ...base,

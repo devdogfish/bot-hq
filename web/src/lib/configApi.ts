@@ -1,4 +1,4 @@
-import type { Bot, ComputerState, EngineInfo, LibraryFile, Memory, Routine, Skill, Task, Toolkit } from '@shared/types';
+import type { Bot, EngineInfo, LibraryFile, Memory, Routine, Skill, Task } from '@shared/types';
 import { ApiError } from './api';
 
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -26,10 +26,12 @@ export interface BotSettingsBundle {
 
 export interface LibraryListing { status: 'ok' | 'asleep' | 'error'; path: string; files: LibraryFile[]; error?: string }
 
-export interface ComputerDetails {
-  computer: ComputerState;
-  screens: { botId: string; screenId: string; lastUsedAt: number }[];
-  hibernation: { idleMinutes: number; viewers: number; dryRun: boolean };
+export interface AgentSettings {
+  hermesUrl: string;
+  hermesKeySet: boolean;
+  websockifyUrl: string;
+  vncPasswordSet: boolean;
+  cdpPort: number | null;
 }
 
 export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>>;
@@ -57,24 +59,21 @@ export const configApi = {
   files: (botId: string, path = '', wake = false) => req<LibraryListing>('GET', `/bots/${botId}/files?path=${encodeURIComponent(path)}${wake ? '&wake=1' : ''}`),
   downloadFile: (botId: string, path: string) => req<{ url: string }>('POST', `/bots/${botId}/files/download`, { path }),
 
-  computerDetails: () => req<ComputerDetails>('GET', '/computer/details'),
-  wake: () => req<{ computer: ComputerState }>('POST', '/computer/ensure'),
-  sleep: () => req<{ computer: ComputerState }>('POST', '/computer/suspend'),
-  resetScreen: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/screen/reset`),
   /** Tells the bot the person has stopped driving its screen. */
   handback: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/handback`),
 
+  agent: (botId: string) => req<{ agent: AgentSettings }>('GET', `/bots/${botId}/agent`),
+  setAgent: (botId: string, input: AgentSettings & { hermesKey: string; vncPassword: string }) =>
+    req<{ agent: AgentSettings }>('PUT', `/bots/${botId}/agent`, input),
+
+  checkChrome: (botId: string) => req<{ browser: string }>('GET', `/bots/${botId}/agent/chrome`),
+
   engine: (botId: string) => req<{ engine: EngineInfo }>('GET', `/bots/${botId}/engine`),
   setEngine: (botId: string, p: { provider?: string | null; model?: string | null }) => req<{ engine: EngineInfo }>('PATCH', `/bots/${botId}/engine`, p),
-  /** Opens the provider's sign-in flow in a terminal on the bot's screen. */
-  engineLogin: (botId: string, provider?: string) => req<{ ok: true }>('POST', `/bots/${botId}/engine/login`, provider ? { provider } : {}),
   restartEngine: (botId: string) => req<{ engine: EngineInfo }>('POST', `/bots/${botId}/engine/restart`),
   /** Stops the private screen the agent runs for itself, so its computer work shows on the screen in the app. */
   stopOwnScreen: (botId: string) => req<{ engine: EngineInfo }>('POST', `/bots/${botId}/engine/screen/stop`),
 
-  policies: () => req<{ policies: { tool: string; mode: string }[] }>('GET', '/policies'),
-  deletePolicy: (tool: string) => req<{ ok: true }>('DELETE', `/policies/${encodeURIComponent(tool)}`),
 
-  connectedApps: () => req<{ connectedApps?: Toolkit[]; connected: string[] }>('GET', '/apps?limit=1'),
   logout: () => req<{ ok: true }>('POST', '/auth/logout'),
 };

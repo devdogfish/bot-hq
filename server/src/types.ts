@@ -177,12 +177,9 @@ export interface LibraryFile { name: string; size: number; modifiedAt: number; i
 
 export interface ComputerState {
   status: 'absent' | 'creating' | 'starting' | 'running' | 'suspending' | 'suspended' | 'resuming' | 'error' | 'stopped';
-  orgoId: string | null;
   error: string | null;
-  /** One screen per bot on the shared computer. width/height are the screen's pixel size. */
-  screens: { botId: string; screenId: string; width?: number; height?: number }[];
-  /** How many bots can have their own screen at once. */
-  maxScreens?: number;
+  /** Screen registered for each Agent. */
+  screens: { botId: string; screenId: string; revision?: number; width?: number; height?: number }[];
 }
 
 /** A model provider Hermes can use (subscription sign-in or API key). */
@@ -198,6 +195,7 @@ export interface EngineProvider {
 /** The Hermes agent that runs one bot. */
 export interface EngineInfo {
   botId: string;
+  kind: 'remote' | 'primary' | 'managed' | null;
   /** Hermes profile name ('default' for the primary bot). */
   profile: string;
   status: 'ready' | 'starting' | 'stopped' | 'error';
@@ -208,11 +206,6 @@ export interface EngineInfo {
   providers: EngineProvider[];
   /** Hermes is running a private screen of its own for this agent, so its computer work is not on the screen the app shows. */
   ownScreen: boolean;
-}
-
-export interface Toolkit {
-  slug: string; name: string; logo?: string; description?: string; categories: string[];
-  managedAuth: boolean; noAuth: boolean; connected: boolean;
 }
 
 /** Server-sent events on GET /api/events */
@@ -227,5 +220,4 @@ export type ServerEvent =
   | { type: 'routines'; botId: string }
   | { type: 'tasks'; botId: string }
   | { type: 'memories'; botId: string }
-  | { type: 'connections' }
   | { type: 'ping' };
