@@ -9,7 +9,7 @@ import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import type { AuthVars } from './lib/auth.js';
 import { appendRow, emitBot, getBotRow, getLive, listRoutines, listTasks, updateRow } from './store.js';
-import { enqueue } from './agent/loop.js';
+import { enqueue, isBotResetting } from './agent/loop.js';
 import { computerState } from './computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
 import { listMemories } from './engine-memory.js';
@@ -304,6 +304,7 @@ voiceApi.post('/tool', async (c) => {
 
   switch (name) {
     case 'send_task': {
+      if (isBotResetting(bot.id)) return c.json({ output: 'Bot maintenance is in progress. Ask the user to try again.' });
       const request = String(a.request ?? '').trim();
       if (!request) return c.json({ output: 'Error: request is empty. Ask the user what they want done.' });
       const from: MessageBody['from'] = { kind: 'voice', id: callId ?? 'call', name: 'Voice call' };

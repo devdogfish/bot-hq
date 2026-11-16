@@ -93,7 +93,7 @@ export type CardBody =
       toolkitName?: string;
       logo?: string;
       args: unknown;
-      status: 'pending' | 'allowed' | 'always' | 'denied' | 'expired';
+      status: 'pending' | 'allowed' | 'always' | 'denied' | 'expired' | 'unconfirmed';
     }
   | {
       type: 'card';

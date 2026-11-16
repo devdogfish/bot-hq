@@ -7,7 +7,7 @@ import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
-import { enqueue, interrupt, resolveApproval, runInBotQueue } from './agent/loop.js';
+import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval } from './agent/loop.js';
 import { computerState } from './computer.js';
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
@@ -173,16 +173,14 @@ api.patch('/bots/:id', async (c) => {
 api.delete('/bots/:id', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  interrupt(b.id);
-  for (const r of listRoutines(b.id)) {
-    unscheduleRoutine(r.id);
-  }
-  if (b.kind !== 'room') {
-    await removeEngine(b.id).catch((e) => console.warn('[engine] remove failed', e?.message ?? e));
-  }
-  await runInBotQueue(b.id, async () => {
+  const deleted = await resetBotQueue(b.id, async () => {
+    for (const r of listRoutines(b.id)) unscheduleRoutine(r.id);
+    if (b.kind !== 'room') {
+      await removeEngine(b.id).catch((e) => console.warn('[engine] remove failed', e?.message ?? e));
+    }
     db.prepare('DELETE FROM bots WHERE id=?').run(b.id);
   });
+  if (!deleted) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   hub.emit(b.user_id, { type: 'computer', state: computerState(b.user_id) });
   hub.emit(c.get('user').id, { type: 'roster' });
   return c.json({ ok: true });
@@ -215,9 +213,10 @@ api.get('/bots/:id/rows', (c) => {
 });
 
 api.post('/bots/:id/messages', async (c) => {
+  const { text } = await c.req.json<{ text: string }>();
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const { text } = await c.req.json<{ text: string }>();
+  if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   if (!text?.trim()) return c.json({ error: 'empty' }, 400);
   const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: text.trim() });
   // Group chats dispatch to their member Bots instead of running their own loop.
@@ -237,8 +236,8 @@ api.post('/bots/:id/interrupt', (c) => {
 api.post('/bots/:id/fresh', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  interrupt(b.id);
-  await runInBotQueue(b.id, () => Promise.resolve(clearConversation(b.id)));
+  const cleared = await resetBotQueue(b.id, () => { clearConversation(b.id); });
+  if (!cleared) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   emitBot(b.id);
   return c.json({ ok: true });
 });
@@ -252,10 +251,11 @@ api.post('/approvals/:id', async (c) => {
 });
 
 api.post('/bots/:id/cards/:seq/answer', async (c) => {
+  const { answer } = await c.req.json<{ answer: string }>();
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   const row = getRow(b.id, Number(c.req.param('seq')));
-  const { answer } = await c.req.json<{ answer: string }>();
   if (!row || row.body.type !== 'card' || row.body.card !== 'question') return c.json({ error: 'not a question' }, 400);
   updateRow(b.id, row.seq, { ...row.body, status: 'answered', answer });
   appendRow(b.id, 'message', { type: 'message', role: 'user', text: answer });
@@ -296,6 +296,7 @@ api.patch('/routines/:id', async (c) => {
 api.post('/routines/:id/run', (c) => {
   const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
+  if (isBotResetting(r.bot_id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   runRoutine(r.id);
   return c.json({ ok: true });

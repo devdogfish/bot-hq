@@ -27,18 +27,44 @@ export type Trigger =
 
 // ---------- per-bot serial queue ----------
 
-const queues = new Map<string, Promise<void>>();
+interface BotQueue {
+  tail: Promise<void>;
+  revision: number;
+  resetting: boolean;
+}
+
+const queues = new Map<string, BotQueue>();
 const aborts = new Map<string, AbortController>();
 const remoteRuns = new Map<string, HermesRun>();
 
-export function enqueue(botId: string, trigger: Trigger) {
-  // A new message from the user supersedes whatever is waiting for their approval.
-  if (trigger.type === 'user') expireApprovals(botId);
-  const prev = queues.get(botId) ?? Promise.resolve();
-  const next = prev.then(() => runTurn(botId, trigger)).catch((e) => console.error('[agent] turn failed', botId, e));
-  queues.set(botId, next);
-  next.finally(() => { if (queues.get(botId) === next) queues.delete(botId); });
+function queueFor(botId: string): BotQueue {
+  const existing = queues.get(botId);
+  if (existing) return existing;
+  const queue = { tail: Promise.resolve(), revision: 0, resetting: false };
+  queues.set(botId, queue);
+  return queue;
 }
+
+function trackQueue(botId: string, queue: BotQueue, tail: Promise<void>) {
+  queue.tail = tail;
+  void tail.then(() => { if (queue.tail === tail) queues.delete(botId); });
+}
+
+/** Reserve a turn synchronously; accepted work starts after the caller records its row. */
+export function enqueue(botId: string, trigger: Trigger) {
+  const queue = queueFor(botId);
+  if (queue.resetting) return false;
+  // A new message from the user supersedes an unanswered approval.
+  if (trigger.type === 'user') expireApprovals(botId);
+  const revision = queue.revision;
+  const next = queue.tail.then(() => {
+    if (queue.revision === revision) return runTurn(botId, trigger);
+  }).catch((e) => console.error('[agent] turn failed', botId, e));
+  trackQueue(botId, queue, next);
+  return true;
+}
+
+export type EnqueueTurn = typeof enqueue;
 
 export function interrupt(botId: string) {
   expireApprovals(botId);
@@ -47,22 +73,31 @@ export function interrupt(botId: string) {
   else aborts.get(botId)?.abort();
 }
 
-/** Run a job in the bot's serial queue, after any running turn. */
-export function runInBotQueue<T>(botId: string, job: () => Promise<T>): Promise<T> {
-  const prev = queues.get(botId) ?? Promise.resolve();
-  const result = prev.then(job);
-  const next = result.then(() => {}, () => {});
-  queues.set(botId, next);
-  next.finally(() => { if (queues.get(botId) === next) queues.delete(botId); });
-  return result;
+/** Discard queued turns, stop the active turn and run maintenance before accepting more work. */
+export async function resetBotQueue(botId: string, job: () => void | Promise<void>) {
+  const queue = queueFor(botId);
+  if (queue.resetting) return false;
+  queue.resetting = true;
+  queue.revision++;
+  interrupt(botId);
+  const result = queue.tail.then(job);
+  trackQueue(botId, queue, result.then(() => {}, () => {}));
+  try {
+    await result;
+    return true;
+  } finally {
+    queue.resetting = false;
+  }
 }
 
 export const isBotBusy = (botId: string) => queues.has(botId);
+export const isBotResetting = (botId: string) => queues.get(botId)?.resetting === true;
 
 export function enqueueBotMessage(fromBotId: string, toBotId: string, text: string, depth: number) {
   const from = getBotRow(fromBotId);
+  if (!enqueue(toBotId, { type: 'bot', fromBotId, fromName: from.name, text, depth })) return false;
   appendRow(toBotId, 'message', { type: 'message', role: 'user', text, from: { kind: 'bot', id: fromBotId, name: from.name } });
-  enqueue(toBotId, { type: 'bot', fromBotId, fromName: from.name, text, depth });
+  return true;
 }
 
 function triggerText(t: Trigger): string {
@@ -133,7 +168,7 @@ function patchToolRow(botId: string, seq: number, patch: Partial<ToolCallBody>) 
 
 // ---------- approvals ----------
 
-export type ApprovalDecision = 'allow' | 'deny' | 'expired';
+type ApprovalDecision = 'allow' | 'deny' | 'expired' | 'unconfirmed';
 
 /** Longest a tool call waits for the user. Kept under the engines' 30 minute tool timeout. */
 const APPROVAL_WAIT_MS = 25 * 60_000;
@@ -142,6 +177,7 @@ const waiters = new Map<string, {
   resolve: (decision: ApprovalDecision) => void;
   send: (choice: 'once' | 'deny') => Promise<void>;
   sending?: Promise<void>;
+  expireAfterSend?: boolean;
 }>();
 
 function setApprovalCard(botId: string, rowSeq: number, approvalId: string, status: string) {
@@ -182,8 +218,14 @@ async function requestApproval(
   waiters.delete(approvalId);
 
   if (rowSeq !== null) {
-    if (decision === 'allow') patchToolRow(botId, rowSeq, { status: 'running' });
-    else noteToolOutcome(botId, rowSeq, { status: 'denied', summary: decision === 'deny' ? 'Not allowed' : 'Skipped' });
+    if (decision === 'allow') {
+      const row = getRow(botId, rowSeq);
+      if (row?.body.type === 'tool-call' && row.body.status === 'awaiting-approval') {
+        patchToolRow(botId, rowSeq, { status: 'running' });
+      }
+    } else if (decision !== 'unconfirmed') {
+      noteToolOutcome(botId, rowSeq, { status: 'denied', summary: decision === 'deny' ? 'Not allowed' : 'Skipped' });
+    }
   }
   if (!pendingApprovals(botId).length) {
     if (turns.has(botId)) setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null });
@@ -193,13 +235,22 @@ async function requestApproval(
   return decision;
 }
 
+function finishApproval(ap: { id: string; bot_id: string; row_seq: number }, decision: ApprovalDecision) {
+  const status = decision === 'allow' ? 'allowed' : decision === 'deny' ? 'denied' : decision;
+  db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), ap.id);
+  setApprovalCard(ap.bot_id, ap.row_seq, ap.id, status);
+  waiters.get(ap.id)?.resolve(decision);
+}
+
 function expireApproval(approvalId: string) {
-  const ap = db.prepare('SELECT * FROM approvals WHERE id=?').get(approvalId) as any;
-  if (ap?.status === 'pending') {
-    db.prepare("UPDATE approvals SET status='expired', resolved_at=? WHERE id=?").run(now(), approvalId);
-    setApprovalCard(ap.bot_id, ap.row_seq, approvalId, 'expired');
+  const waiter = waiters.get(approvalId);
+  // An accepted decision can finish the run before Hermes's HTTP acknowledgement arrives.
+  if (waiter?.sending) {
+    waiter.expireAfterSend = true;
+    return;
   }
-  waiters.get(approvalId)?.resolve('expired');
+  const ap = db.prepare("SELECT * FROM approvals WHERE id=? AND status='pending'").get(approvalId) as any;
+  if (ap) finishApproval(ap, 'expired');
 }
 
 export function expireApprovals(botId: string) {
@@ -222,13 +273,10 @@ export async function resolveApproval(userId: string, approvalId: string, decisi
   try {
     waiter.sending = waiter.send(decision === 'allow' ? 'once' : 'deny');
     await waiter.sending;
-    const status = decision === 'deny' ? 'denied' : 'allowed';
-    const update = db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), approvalId);
-    if (!update.changes) return 'This approval expired.';
-    setApprovalCard(ap.bot_id, ap.row_seq, approvalId, status);
-    waiter.resolve(decision);
+    finishApproval(ap, decision);
     return null;
   } catch (e: any) {
+    if (waiter.expireAfterSend) finishApproval(ap, 'unconfirmed');
     return String(e?.message ?? e);
   } finally {
     waiter.sending = undefined;
@@ -510,7 +558,9 @@ async function runTurn(botId: string, trigger: Trigger) {
               return;
             }
             const decision = await requestApproval({ userId, botId }, prompt, send, tool?.seq ?? null);
-            if (decision === 'expired' && !run.stopRequested) await send('deny');
+            if (terminal || run.stopRequested) return;
+            if (decision === 'expired') await send('deny');
+            if (decision === 'unconfirmed') run.stop();
           };
           approvals.set(prompt.promptId, decide().catch(() => {
             if (!run.stopRequested) {

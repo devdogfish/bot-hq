@@ -33,13 +33,18 @@ export class HermesRun {
       'idempotency-key': randomUUID(),
     };
     const body = JSON.stringify(input);
-    const submit = () => this.request('/v1/runs', { method: 'POST', headers, body, signal: AbortSignal.timeout(10_000) });
-    // A lost response can leave the run admitted. Retry the exact request to recover its ID.
-    const response = await submit().catch(() => submit());
-    if (!response.ok) throw new Error(`Hermes rejected the turn (HTTP ${response.status}).`);
-    const { run_id } = await response.json();
-    if (typeof run_id !== 'string' || !run_id) throw new Error('Hermes did not return a run ID.');
-    this.runId = encodeURIComponent(run_id);
+    const submit = async () => {
+      const response = await this.request('/v1/runs', { method: 'POST', headers, body, signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) return { status: response.status };
+      const receipt: unknown = await response.json();
+      const runId = receipt && typeof receipt === 'object' && 'run_id' in receipt ? receipt.run_id : undefined;
+      if (typeof runId !== 'string' || !runId) throw new Error('Hermes did not return a run ID.');
+      return { runId };
+    };
+    // Hermes may have admitted the turn before the connection or response body failed.
+    const receipt = await submit().catch(() => submit());
+    if (!receipt.runId) throw new Error(`Hermes rejected the turn (HTTP ${receipt.status}).`);
+    this.runId = encodeURIComponent(receipt.runId);
     if (this.stopRequested) void this.sendStop();
     return this.request(`/v1/runs/${this.runId}/events`, {
       headers: { accept: 'text/event-stream' },
