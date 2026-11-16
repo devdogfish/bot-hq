@@ -121,11 +121,17 @@ the proposed values were `vmbr3100`, `172.28.229.10/30`, and gateway
 
 ```sh
 qm set "$vmid" --cores 2 --memory 4096 --net0 "virtio,bridge=$bridge,firewall=1" \
-  --ipconfig0 "ip=$guest_cidr,gw=$guest_gateway,ip6=manual" \
+  --ipconfig0 "ip=$guest_cidr,gw=$guest_gateway" \
   --nameserver '1.1.1.1 9.9.9.9' --agent enabled=1 --onboot 0
 qm config "$vmid"
 qm cloudinit dump "$vmid" network
 ```
+
+Omit `ip6=manual`. On Atlas, Proxmox renders it as the static IPv6
+address `manual`, which makes Debian cloud-init reject the entire network
+configuration. The bridge already disables host IPv6 and drops routed
+IPv6 traffic. Check the generated seed for the intended IPv4 CIDR and
+gateway before boot.
 
 Start with `qm start "$vmid"`. Allow cloud-init to finish and use
 `qm guest cmd "$vmid" ping` to check readiness. Probe both guests'
