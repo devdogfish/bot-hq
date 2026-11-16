@@ -266,7 +266,8 @@ sudo tailscale serve status --json
 sudo tailscale funnel status
 ```
 
-Create the Owner's one-time login from the VM console:
+Have the Owner run this from the VM console and open the one-time login
+link privately:
 
 ```sh
 cd /var/lib/bot-hq/current
@@ -289,14 +290,59 @@ configuration workflow. Use the HTTPS MCP endpoint on port 8787.
 | Bot HQ probes known Keep LAN, tailnet and home WAN paths | Keep endpoints unavailable via either path. Home router services unavailable |
 | LAN and off-tailnet probe the guest | HQ ports are inaccessible. Serve status shows private listeners with no Funnel |
 
-Configure a dedicated nightly Atlas PBS job for the Bot HQ VM on the
-approved encrypted backup storage. Atlas's existing coding VM job has its
-own schedule. Check the Bot HQ VMID in a
-successful encrypted snapshot and restore it into an isolated guest to
-verify that the database, Library, environment and release can be read.
+## Nightly backup and isolated restore
+
+Atlas's existing `backup` storage has client encryption disabled. In
+Proxmox, have the Owner configure a dedicated PBS storage alias
+`backup-bot-hq` on Atlas with client encryption enabled. Use the approved
+datastore and credentials. Leave the coding VM's storage and job alone.
+The Owner keeps a copy of the encryption key outside Atlas and PBS. See
+[Proxmox PBS encryption](https://github.com/proxmox/pve-docs/blob/master/pve-storage-pbs.adoc#encryption).
+
+After the Owner configures the alias and approves the schedule, check the
+storage and create the Bot HQ job. Set `backup_schedule` to the approved
+nightly time. Reconcile the existing job before retrying creation.
+
+```sh
+backup_storage=backup-bot-hq
+sudo test -s "/etc/pve/priv/storage/$backup_storage.enc" &&
+  sudo pvesh get "/nodes/atlas/storage/$backup_storage/status" --output-format json |
+  python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin).get("active") == 1 else "PBS storage is inactive")' &&
+  sudo pvesh create /cluster/backup --id "atlas-bot-hq-$vmid-nightly" \
+    --node atlas --vmid "$vmid" --storage "$backup_storage" \
+    --mode snapshot --schedule "$backup_schedule" --remove 0
+```
+
+Seed a test file in the Bot HQ Library and record its path and SHA-256.
+Run the job once from the Proxmox UI, wait for the task to finish, then
+verify the snapshot belongs to the Bot HQ VM and is marked encrypted in
+PBS. Record its volume ID as `snapshot_volume`.
+
+For the restore drill, verify that the approved `restore_vmid` is unused.
+Restore without starting the VM or enabling boot and wait for the restore
+task to succeed. Check the restored disks belong to the restore VM.
+
+```sh
+sudo pvesh create /nodes/atlas/qemu --archive "$snapshot_volume" \
+  --vmid "$restore_vmid" --storage "$storage" --unique 1 \
+  --start 0 --onboot 0 --autostart 0
+sudo qm config "$restore_vmid"
+```
+
+While the clone is stopped, detach its network interface and cloud-init
+drive. For the fresh-image configuration above, remove `net0`, `ide2`
+and `cicustom` from the clone's config. Recheck that it has no NIC,
+passthrough device, shared mount or boot hook, then start it. Keep it
+disconnected throughout the drill. Within the clone, use QEMU guest
+exec to confirm the running app answers `127.0.0.1:18787/api/health`,
+SQLite `PRAGMA quick_check` returns `ok`, the test Library file matches
+its digest, the runtime env file exists, and `current` points to the
+reviewed release. Check the guest command's `exitcode` and record results
+without displaying the env file or database rows. Shut down the restore VM.
+
 After acceptance, set `qm set "$vmid" --onboot 1` and verify after a reboot.
 Record the actual VMID, release SHA, approved policy revision, probe results
-and PBS snapshot on #354.
+and PBS snapshot and restore results on #354.
 
 For a release rollback, switch `current` back to the previous staged SHA
 and restart `bot-hq.service`. Retain the database and use a pre-upgrade
