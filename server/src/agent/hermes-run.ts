@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Engine } from '../engine.js';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export interface ApprovalPrompt {
   promptId: string;
@@ -84,6 +85,55 @@ export class HermesRun {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`Hermes rejected the approval decision (HTTP ${res.status}).`);
+  }
+
+  /** Pinned Hermes can omit a canonical tool result from SSE. Read only this run's latest messages. */
+  async toolResult(callId: string): Promise<unknown> {
+    if (!this.runId || this.stopRequested) return;
+    const signal = AbortSignal.any([this.stream.signal, AbortSignal.timeout(4000)]);
+    try {
+      const status = await this.readJson(`/v1/runs/${this.runId}`, signal);
+      const session = status?.session_id;
+      if (status?.run_id !== decodeURIComponent(this.runId)
+          || typeof session !== 'string' || !/^[\w-]{1,150}$/.test(session)) return;
+      const path = `/api/sessions/${encodeURIComponent(session)}/messages?order=latest&limit=8`;
+      // The progress callback can precede storage of the corresponding tool row.
+      for (let attempt = 0; attempt < 2 && !this.stopRequested; attempt++) {
+        if (attempt) await delay(150, undefined, { signal });
+        const page = await this.readJson(path, signal);
+        if (!Array.isArray(page?.data)) return;
+        const results = page.data.filter((row: any) => row?.role === 'tool'
+          && typeof row.tool_call_id === 'string' && row.tool_call_id.split('|').map((id: string) => id.trim()).includes(callId));
+        if (results.length === 1) return results[0].content;
+        if (results.length > 1) return;
+      }
+    } catch { /* A missing or ambiguous result cannot authorize the send. */ }
+  }
+
+  private async readJson(path: string, signal: AbortSignal): Promise<any> {
+    const response = await this.request(path, { signal, headers: { accept: 'application/json' } });
+    if (!response.ok || !response.body) {
+      await response.body?.cancel();
+      return;
+    }
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > 256_000) {
+          await reader.cancel();
+          return;
+        }
+        chunks.push(value);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async close(terminal: boolean) {

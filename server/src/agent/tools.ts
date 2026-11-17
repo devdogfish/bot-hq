@@ -9,6 +9,7 @@ import { setCheckins } from '../proactive.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
+import { OWNER_EMAIL_TOOL } from './owner-email-policy.js';
 
 export interface ToolCtx {
   userId: string;
@@ -33,7 +34,7 @@ interface ToolDef {
   parameters: Record<string, unknown>;
   activity: ActivityKind;
   label: string;
-  impl: Impl;
+  impl?: Impl;
 }
 
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required, additionalProperties: false });
@@ -86,6 +87,17 @@ async function xSearch(a: any): Promise<string> {
 }
 
 export const TOOLS: ToolDef[] = [
+  {
+    name: OWNER_EMAIL_TOOL,
+    description: "Stage a plain-text email for Bot HQ to send to the Owner's configured addresses when they ask in this chat. Use the provided request_id. A staged result is a proposal. Bot HQ will show whether the email was accepted.",
+    parameters: obj({
+      request_id: { type: 'string', description: 'The Owner email request reference from this Bot HQ turn.' },
+      subject: { type: 'string', maxLength: 200 },
+      body: { type: 'string', maxLength: 10000, description: 'Plain-text email body.' },
+    }, ['request_id', 'subject', 'body']),
+    activity: 'working',
+    label: 'Emailing the Owner',
+  },
   {
     name: 'save_file',
     description: "Save a finished deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it.",
@@ -292,7 +304,7 @@ export function humanizeSlug(slug: string) {
 
 /** A Hermes tool name as the app knows it: tools served by this app's MCP server lose their `mcp_hq_` prefix. */
 export function appToolName(raw: string): { name: string; ours: boolean; server?: string } {
-  const hq = /^mcp_+hq_+(.+)$/.exec(raw);
+  const hq = /^(?:mcp_+hq_+|mcp\.hq\.)(.+)$/.exec(raw);
   if (hq) {
     // Hermes may fold names to lower case; ours are matched case-insensitively.
     const hit = [...toolMap.keys()].find((k) => k.toLowerCase() === hq[1].toLowerCase());
