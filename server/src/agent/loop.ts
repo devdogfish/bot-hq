@@ -493,7 +493,8 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (role && envelope && policy !== 'draft') {
       turn.ownerEmail = {
         id: newId('email'), role, ownerSeq: trigger.chatRow.seq, generation: bot.generation,
-        pauseRevision, review: policy === 'review', envelope, consumed: false, stagingClosed: false, proposals: new Map(),
+        pauseRevision, review: role === 'tyler' || policy === 'review',
+        envelope, consumed: false, stagingClosed: false, proposals: new Map(),
       };
     }
   }
