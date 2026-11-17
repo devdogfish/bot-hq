@@ -1,15 +1,15 @@
 import { db, now } from '../db.js';
-import { newId } from '../lib/ids.js';
+import { newId, sha256 } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
 import { engineFor } from '../engine.js';
 import { HermesRun, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
-import { activityFor, appToolName, type ToolResult } from './tools.js';
-import { classifyOwnerEmailRequest, OWNER_EMAIL_TOOL, ownerEmailContent } from './owner-email-policy.js';
+import { activityFor, appToolName } from './tools.js';
+import { classifyOwnerEmailRequest, OWNER_EMAIL_TOOL, ownerEmailContent, ownerEmailProposalId } from './owner-email-policy.js';
 import { dispatchOwnerEmail, ownerEmailRole } from './owner-email.js';
-import { ownerEmailEnvelope, type OwnerEmailRole } from './owner-email-transport.js';
+import { ownerEmailEnvelope, type OwnerEmailPacket, type OwnerEmailRole } from './owner-email-transport.js';
 
 /**
  * A turn: one message handed to the bot's Hermes engine and streamed back into the conversation.
@@ -138,6 +138,9 @@ interface OwnerEmailRequest {
   pauseRevision: number;
   review: boolean;
   envelope: { from: string; to: string[] };
+  intentHash: string;
+  proposals: Map<string, OwnerEmailPacket>;
+  consumed: boolean;
 }
 
 interface Turn {
@@ -170,51 +173,78 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Returns null when the call did not come from a turn started here (e.g. the agent used the tool
  * while talking to its owner somewhere else).
  */
-export async function claimToolRow(botId: string, name: string, requireAppTool = false): Promise<number | null> {
+export async function claimToolRow(botId: string, name: string): Promise<number | null> {
   const t = turns.get(botId);
   const deadline = Date.now() + 600;
   for (;;) {
     if (!t || turns.get(botId) !== t) return null;
-    const ref = t.tools.find((r) => !r.claimed && !r.done && r.name === name && (!requireAppTool || r.ours));
+    const ref = t.tools.find((r) => !r.claimed && !r.done && r.name === name);
     if (ref) { ref.claimed = true; return ref.seq; }
     if (Date.now() > deadline) return null;
     await sleep(40);
   }
 }
 
-export function prepareOwnerEmailTool(botId: string, args: unknown): ((rowSeq: number) => Promise<ToolResult>) | undefined {
+function emailTurnIsCurrent(turn: Turn, request: OwnerEmailRequest) {
+  return turns.get(turn.botId) === turn && turn.ownerEmail === request
+    && activePauseRevision(turn.botId) === request.pauseRevision;
+}
+
+/** A bearer-authenticated MCP caller can propose mail. Only the run stream can commit it. */
+export function stageOwnerEmail(botId: string, args: unknown): { status: 'draft_only' } | { status: 'staged'; proposalId: string } {
   const turn = turns.get(botId);
   const request = turn?.ownerEmail;
-  if (!turn || !request || !args || typeof args !== 'object' || Array.isArray(args)) return;
+  const draft = { status: 'draft_only' } as const;
+  if (!turn || !request || request.consumed || request.proposals.size >= 8
+      || !emailTurnIsCurrent(turn, request) || !args || typeof args !== 'object' || Array.isArray(args)) return draft;
   const { request_id, ...mail } = args as Record<string, unknown>;
-  if (request_id !== request.id) return;
+  if (request_id !== request.id) return draft;
   const content = ownerEmailContent(mail);
-  if (!content) return;
-  const eligible = () => turns.get(botId) === turn && turn.ownerEmail === request
-    && activePauseRevision(botId) === request.pauseRevision;
-  if (!eligible()) return;
-  return async (rowSeq) => {
-    const ref = turn.tools.find((r) => r.seq === rowSeq && r.name === OWNER_EMAIL_TOOL && r.ours);
-    if (!ref || !ref.claimed || ref.done || !ref.callId) return { output: '{"status":"draft_only"}', summary: 'Draft only' };
-    const detail = [
-      `From: ${request.envelope.from}`,
-      `To: ${request.envelope.to.join(', ')}`,
-      `Subject: ${content.subject}`,
-      '',
-      content.body,
-    ].join('\n');
-    const out = await dispatchOwnerEmail({ botId, ...request }, { role: request.role, ...content }, eligible,
-      async () => await requestApproval(turn, detail, async () => {}, rowSeq, {
-        title: 'Send this email to your three addresses?',
-        tool: OWNER_EMAIL_TOOL,
-      }) === 'allow');
-    const captions = {
-      accepted: 'Email accepted by SES', rejected: 'Email rejected', uncertain: 'Delivery unconfirmed',
-      skipped: 'Email skipped', draft_only: 'Draft only', review: 'Email already awaiting approval',
-      sending: 'Email already submitted for processing', conflict: 'Email differs from this turn’s reserved message',
-    };
-    return { output: JSON.stringify(out), summary: captions[out.status] };
+  if (!content) return draft;
+  const proposalId = newId('mailprop');
+  request.proposals.set(proposalId, { role: request.role, ...content });
+  return { status: 'staged', proposalId };
+}
+
+async function completeOwnerEmailTool(turn: Turn, rowSeq: number, output: unknown, error: boolean): Promise<Outcome> {
+  const request = turn.ownerEmail;
+  const proposalId = error ? null : ownerEmailProposalId(output);
+  const packet = request && proposalId ? request.proposals.get(proposalId) : undefined;
+  if (!request || !packet || request.consumed || !emailTurnIsCurrent(turn, request)) {
+    return { status: 'denied', summary: 'Draft only' };
+  }
+  request.consumed = true;
+  request.proposals.clear();
+  const detail = [
+    `From: ${request.envelope.from}`,
+    `To: ${request.envelope.to.join(', ')}`,
+    `Subject: ${packet.subject}`,
+    '',
+    packet.body,
+  ].join('\n');
+  const { botId } = turn;
+  const eligible = () => {
+    const envelope = ownerEmailEnvelope(packet.role);
+    return emailTurnIsCurrent(turn, request) && ownerEmailRole(botId) === packet.role
+      && envelope?.from === request.envelope.from
+      && envelope.to.join(',') === request.envelope.to.join(',');
   };
+  const out = await dispatchOwnerEmail({ botId, ...request }, packet, eligible,
+    async () => await requestApproval(turn, detail, async () => {}, rowSeq, {
+      title: 'Send this email to your three addresses?',
+      tool: OWNER_EMAIL_TOOL,
+    }) === 'allow');
+  const captions = {
+    accepted: 'Email accepted by SES', rejected: 'Email rejected', uncertain: 'Delivery unconfirmed',
+    skipped: 'Email skipped', draft_only: 'Draft only', review: 'Email already awaiting approval',
+    sending: 'Email already submitted for processing', conflict: 'Email differs from this turn’s reserved message',
+  };
+  if (turns.get(botId) === turn && getBotRow(botId)?.generation === request.generation) {
+    const suffix = out.messageId ? `. Receipt ${out.messageId}` : '';
+    appendRow(botId, 'notice', { type: 'notice', text: captions[out.status] + suffix,
+      tone: out.status === 'accepted' || out.status === 'skipped' ? 'info' : 'error' });
+  }
+  return { status: out.status === 'accepted' ? 'done' : out.status === 'skipped' ? 'denied' : 'error', summary: captions[out.status] };
 }
 
 export function noteToolOutcome(botId: string, seq: number | null, outcome: Outcome) {
@@ -392,7 +422,8 @@ function normalizeRunEvent(ev: StreamEvent): StreamEvent {
       } };
     case 'tool.completed':
       return { type: 'response.output_item.done', data: {
-        item: { type: 'function_call_output', call_id: d.tool_call_id, output: d.error ? 'Tool error: ' + (d.preview ?? '') : d.preview },
+        item: { type: 'function_call_output', call_id: d.tool_call_id, name: d.tool, error: d.error,
+          output: d.error ? 'Tool error: ' + (d.preview ?? '') : d.preview },
       } };
     default:
       return ev;
@@ -455,7 +486,8 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (role && envelope && policy !== 'draft') {
       turn.ownerEmail = {
         id: newId('email'), role, ownerSeq: trigger.chatRow.seq, generation: bot.generation,
-        pauseRevision, review: policy === 'review', envelope,
+        pauseRevision, review: policy === 'review', envelope, consumed: false, proposals: new Map(),
+        intentHash: sha256(trigger.text.trim().toLowerCase().replace(/\s+/g, ' ')),
       };
     }
   }
@@ -512,7 +544,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
 
     let input = triggerText(trigger);
     if (turn.ownerEmail) {
-      const note = `[Bot HQ generated this email request reference for the current direct chat. Use request_id "${turn.ownerEmail.id}" with send_owner_email only if the Owner asks you to send email to them. The configured recipients are ${turn.ownerEmail.envelope.to.join(', ')}. Use the tool result to report whether SES accepted the email.]`;
+      const note = `[Bot HQ generated this email request reference for the current direct chat. Use request_id "${turn.ownerEmail.id}" with send_owner_email only when the Owner requests an email to them. A staged result is a proposal. Bot HQ will show the actual outcome in chat.]`;
       input = [note, input].join('\n\n');
     }
     if (bot.handback_at) {
@@ -654,6 +686,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         case 'run.completed':
         case 'run.incomplete':
           terminal = true;
+          turn.ownerEmail = undefined;
           if (!wroteText && typeof d.output === 'string') say(d.output);
           break;
 
@@ -680,9 +713,17 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         const ref = turn.tools.find((r) => r.callId === item.call_id);
         if (ref) {
           ref.done = true;
-          const told = turn.outcomes.get(ref.seq);
-          const guess = readOutcome(item);
-          patchToolRow(botId, ref.seq, told?.status && told.status !== 'running' ? told : { status: guess.status, summary: told?.summary ?? guess.summary });
+          if (ref.ours && ref.name === OWNER_EMAIL_TOOL) {
+            const completed = appToolName(String(item.name ?? ''));
+            const outcome = remote && !terminal && completed.ours && completed.name === OWNER_EMAIL_TOOL
+              ? await completeOwnerEmailTool(turn, ref.seq, item.output, Boolean(item.error))
+              : { status: 'denied', summary: 'Draft only' } as const;
+            if (getBotRow(botId)?.generation === bot.generation) patchToolRow(botId, ref.seq, outcome);
+          } else {
+            const told = turn.outcomes.get(ref.seq);
+            const guess = readOutcome(item);
+            patchToolRow(botId, ref.seq, told?.status && told.status !== 'running' ? told : { status: guess.status, summary: told?.summary ?? guess.summary });
+          }
           if (!getLive(botId).awaiting) setLive(botId, { activity: { kind: 'thinking', since: now() } });
         }
       }

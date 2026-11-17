@@ -4,6 +4,7 @@ import {
   classifyOwnerEmailRequest,
   OWNER_EMAIL_TOOL,
   ownerEmailContent,
+  ownerEmailProposalId,
   ownerEmailRecipients,
 } from '../server/dist/agent/owner-email-policy.js';
 
@@ -59,6 +60,10 @@ test('requires review for ambiguous wording, subsets and combined actions', () =
     'Email me the results and then notify Stacy.',
     'Please email me the recap. Then post it.',
     'Email me the recap if it passes.',
+    'Email me the report only after I approve it.',
+    'Email me the status at my Gmail.',
+    'Email me the status tomorrow.',
+    'Email me the report at my work address only.',
     'Email me the recap every day.',
     'Email me tomorrow.',
     'Email me the recap.\nThen start the rollout.',
@@ -76,6 +81,8 @@ test('rejects drafts, negation, quotations, past mail, and other recipients', ()
   for (const request of [
     'Please draft an email to me.',
     'Email me the report, but do not send it.',
+    'Email me the report without actually sending it.',
+    'Email me the status, but I am not asking you to send it.',
     'Don’t email me the report.',
     '“Email me the report” was the example.',
     '> Email me the report',
@@ -124,4 +131,20 @@ test('refuses non-canonical or forged email arguments', () => {
     { subject: 's'.repeat(201), body: 'Ready.' },
     { subject: 'Status', body: 'b'.repeat(10_001) },
   ]) assert.equal(ownerEmailContent(args), null);
+});
+
+test('reads a single complete receipt from the pinned run event projections', () => {
+  const proposalId = 'mailprop_FixtureNonce';
+  const raw = JSON.stringify({ status: 'staged', proposalId });
+  const item = { type: 'text', text: raw };
+  for (const value of [raw, JSON.stringify([item]), JSON.stringify({ content: [item], isError: false })]) {
+    assert.equal(ownerEmailProposalId(value), proposalId);
+  }
+  for (const value of [
+    raw + '...',
+    JSON.stringify({ content: [item], isError: true }),
+    JSON.stringify([item, item]),
+    JSON.stringify({ status: 'draft_only', proposalId }),
+    JSON.stringify({ status: 'staged', proposalId: 'fake' }),
+  ]) assert.equal(ownerEmailProposalId(value), null);
 });

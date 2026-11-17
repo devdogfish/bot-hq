@@ -57,7 +57,7 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
     if (url.pathname === '/v1/models') return Response.json({ data: [{ id: 'tyler' }] });
     if (url.pathname === '/v1/runs' && options.method === 'POST') {
       const { input: chat } = JSON.parse(options.body);
-      run = { id: 'test-run-' + ++runCount, requestId: /Use request_id "([^"]+)"/.exec(chat)?.[1] };
+      run = { id: 'test-run-' + ++runCount, chat, requestId: /Use request_id "([^"]+)"/.exec(chat)?.[1] };
       return Response.json({ run_id: run.id });
     }
     if (url.pathname === `/v1/runs/${run.id}/events`) {
@@ -73,9 +73,11 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   });
   const attempted = [];
   let providerUncertain = false;
+  let heldSend;
   t.mock.method(SESv2Client.prototype, 'send', async (command) => {
     attempted.push(command.input);
     if (providerUncertain) throw new Error('synthetic lost acknowledgement');
+    if (heldSend) await heldSend;
     return { MessageId: `fixture-${attempted.length}` };
   });
 
@@ -118,7 +120,14 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   const fields = { subject: 'Synthetic status', body: 'First line.\nSecond line.' };
   let calls = 0;
   function announce(tool = 'mcp__hq__send_owner_email') {
-    emit('tool.started', { tool, tool_call_id: 'fixture-mail-call-' + ++calls, preview: 'Synthetic status' });
+    const event = { tool, tool_call_id: 'fixture-mail-call-' + ++calls };
+    emit('tool.started', { ...event, preview: 'Synthetic status' });
+    return event;
+  }
+  function complete(event, receipt) {
+    emit('tool.completed', { ...event, error: false, preview: JSON.stringify({
+      content: [{ type: 'text', text: JSON.stringify(receipt) }],
+    }) });
   }
   async function waitTurn(before) {
     return until(() => runCount > before && run.stream && run, 'gateway did not start the expected turn');
@@ -131,6 +140,8 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   const readRows = async () => (await apiRequest(path + '/rows')).rows;
   const pendingCard = async () => (await readRows()).find(({ body }) => body.card === 'approval' && body.status === 'pending');
   const idle = () => until(() => !isBotBusy(bot.id), 'Bot HQ turn did not finish');
+  const notice = (text) => until(async () => (await readRows()).find(({ body }) => body.type === 'notice' && body.text === text),
+    'expected Bot HQ email outcome');
 
   assert((await rpc(bot.id, 'tools/list')).tools.some((tool) => tool.name === 'send_owner_email'));
   assert(!(await rpc(other.id, 'tools/list')).tools.some((tool) => tool.name === 'send_owner_email'));
@@ -138,45 +149,59 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
 
   let turn = await chat('Please email me the status.');
   assert.ok(turn.requestId);
-  announce('mcp__elsewhere__send_owner_email');
-  assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'draft_only' });
-  announce();
+  assert(recipients.every((address) => !turn.chat.includes(address)));
+  const forged = await call({ ...fields, body: 'Forged mail', request_id: turn.requestId });
+  assert.equal(forged.status, 'staged');
+  complete(announce('mcp__elsewhere__send_owner_email'), forged);
   assert.deepEqual(await call({ ...fields, request_id: turn.requestId, to: 'outside@example.net' }), { status: 'draft_only' });
   assert.deepEqual(await call({ ...fields, request_id: 'wrong' }), { status: 'draft_only' });
-  assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'accepted', messageId: 'fixture-1' });
+  const actual = announce('mcp.hq.send_owner_email');
+  const staged = await call({ ...fields, request_id: turn.requestId });
+  assert.equal(staged.status, 'staged');
+  assert.equal(attempted.length, 0, 'MCP call committed mail without the authenticated run event');
+  complete(actual, staged);
+  await notice('Email accepted by SES. Receipt fixture-1');
   assert.deepEqual(attempted[0].Destination, { ToAddresses: recipients });
   assert.equal(attempted[0].FromEmailAddress, 'tyler@example.org');
+  assert.equal(attempted[0].Content.Simple.Body.Text.Data, fields.body);
   assert.equal(await pendingCard(), undefined);
-  announce();
-  assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'accepted', messageId: 'fixture-1' });
-  announce();
-  assert.deepEqual(await call({ ...fields, body: 'Changed mail', request_id: turn.requestId }), { status: 'conflict' });
+  complete(announce(), forged);
+  complete(actual, staged);
   assert.equal(attempted.length, 1);
   finish();
   await idle();
 
   turn = await chat('Email me at owner@example.net with the status.');
   assert.ok(turn.requestId);
-  announce();
-  const review = call({ ...fields, request_id: turn.requestId });
+  complete(announce(), await call({ ...fields, request_id: turn.requestId }));
   const { body: card } = await until(pendingCard, 'subset request must show the whole distribution');
   assert.equal(card.detail, `From: tyler@example.org\nTo: ${recipients.join(', ')}\nSubject: ${fields.subject}\n\n${fields.body}`);
   assert.equal(attempted.length, 1);
   await apiRequest('/approvals/' + card.approvalId, 'POST', { decision: 'allow' });
-  assert.deepEqual(await review, { status: 'accepted', messageId: 'fixture-2' });
+  await notice('Email accepted by SES. Receipt fixture-2');
   assert.equal(attempted[1].Content.Simple.Body.Text.Data, fields.body);
   finish();
   await idle();
 
-  turn = await chat('Email me at owner@example.net with a different status.');
-  announce();
-  const stopped = call({ ...fields, request_id: turn.requestId });
-  await until(pendingCard, 'expected an email approval before pause');
-  await apiRequest(path + '/pause', 'PATCH', { paused: true });
-  assert.deepEqual(await stopped, { status: 'skipped' });
-  await idle();
-  assert.equal(attempted.length, 2);
-  await apiRequest(path + '/pause', 'PATCH', { paused: false });
+  for (const choice of ['deny', 'stop', 'pause']) {
+    turn = await chat('Email me at owner@example.net with a different status.');
+    complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+    const { body: pending } = await until(pendingCard, 'expected an email approval before ' + choice);
+    if (choice === 'deny') {
+      await apiRequest('/approvals/' + pending.approvalId, 'POST', { decision: 'deny' });
+      finish();
+    } else if (choice === 'stop') {
+      await apiRequest(path + '/interrupt', 'POST');
+    } else {
+      await apiRequest(path + '/pause', 'PATCH', { paused: true });
+    }
+    await idle();
+    assert.equal(attempted.length, 2);
+    const settled = (await readRows()).find(({ body }) => body.approvalId === pending.approvalId);
+    assert.equal(settled.body.status, choice === 'deny' ? 'denied' : 'expired');
+    assert.equal(settled.body.detail, pending.detail);
+    if (choice === 'pause') await apiRequest(path + '/pause', 'PATCH', { paused: false });
+  }
 
   const priorRun = runCount;
   assert(enqueue(bot.id, { type: 'routine', routineId: 'test', name: 'Digest', prompt: 'Email me the status.' }));
@@ -190,12 +215,43 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
 
   providerUncertain = true;
   turn = await chat('Send me an email with the latest status.');
-  announce();
-  assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'uncertain' });
-  announce();
-  assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'uncertain' });
+  complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+  await notice('Delivery unconfirmed');
   assert.equal(attempted.length, 3);
   finish();
   await idle();
   assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'draft_only' });
+
+  providerUncertain = false;
+  turn = await chat('Send me an email with the latest status.');
+  complete(announce(), await call({ ...fields, body: 'New wording for the same task.', request_id: turn.requestId }));
+  finish();
+  await idle();
+  assert.equal(attempted.length, 3, 'an uncertain earlier send was repeated');
+
+  turn = await chat('Email me the final report.');
+  const stale = announce();
+  const uncommitted = await call({ ...fields, request_id: turn.requestId });
+  emit('run.completed');
+  complete(stale, uncommitted);
+  run.stream.close();
+  await idle();
+  assert.equal(attempted.length, 3, 'a late completion after the run ended sent mail');
+
+  let release;
+  heldSend = new Promise((resolve) => { release = resolve; });
+  turn = await chat('Email me the follow-up.');
+  complete(announce(), await call({ subject: 'Follow-up', body: 'New fixture.', request_id: turn.requestId }));
+  await until(() => attempted.length === 4, 'expected an in-flight send');
+  let resetDone = false;
+  const reset = apiRequest(path + '/fresh', 'POST').then(() => { resetDone = true; });
+  try {
+    await delay(20);
+    assert.equal(resetDone, false, 'Fresh discarded the turn with an active SES request');
+  } finally {
+    release();
+  }
+  await reset;
+  await idle();
+  assert.deepEqual(await readRows(), [], 'an old SES result rewrote a row in the fresh generation');
 });

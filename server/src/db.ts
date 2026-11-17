@@ -83,12 +83,15 @@ CREATE TABLE IF NOT EXISTS owner_email_sends (
   generation INTEGER NOT NULL,
   owner_seq INTEGER NOT NULL,
   payload_hash TEXT NOT NULL,
+  intent_hash TEXT NOT NULL,
   status TEXT NOT NULL,
   message_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (bot_id, generation, owner_seq)
 );
+CREATE INDEX IF NOT EXISTS owner_email_unresolved ON owner_email_sends(bot_id)
+  WHERE status IN ('sending','uncertain');
 CREATE TABLE IF NOT EXISTS routines (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,

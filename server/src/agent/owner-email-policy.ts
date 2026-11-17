@@ -10,12 +10,12 @@ const EMAIL_ADDRESS = new RegExp(String.raw`(?<!${EMAIL_ATOM})${EMAIL_ATOM}+@[\p
 const POLITE_PREFIX = /^(?:(?:please\s+)?(?:can|could|would|will)\s+you\s+)?(?:please\s+)?/iu;
 const LEADING_SEND = /^(?:email\s+me|send\s+me\s+(?:an?\s+|the\s+)?email|send\s+(?:an?\s+|the\s+)?email\s+to\s+me)\b/iu;
 const EXPLICIT_DRAFT = /^(?:draft|write|compose|prepare|preview|show\s+me)\b/iu;
-const SEND_NEGATION = /\b(?:no\s+emails?|without\s+sending|draft\s+only|keep\s+(?:it|this)\s+(?:as\s+)?a\s+draft|(?:no\s+need\s+to|do\s+not|don['’]t|should\s+not|shouldn['’]t|must\s+not|never|not\s+to)\s+(?:(?:you|ever|actually|immediately)\s+)?(?:send|email|mail|forward))\b/iu;
+const SEND_NEGATION = /\b(?:no\s+emails?|without\s+(?:actually\s+)?sending|draft\s+only|keep\s+(?:it|this)\s+(?:as\s+)?a\s+draft|not\s+asking\s+you\s+to\s+send|(?:no\s+need\s+to|do\s+not|don['’]t|should\s+not|shouldn['’]t|must\s+not|never|not\s+to)\s+(?:(?:you|ever|actually|immediately)\s+)?(?:send|email|mail|forward))\b/iu;
 const RECIPIENT_HEADER = /^\s*(?:from|to|cc|bcc|sent)\s*:/imu;
 const OTHER_RECIPIENT = /\b(?:cc|bcc)\b|\b(?:email|mail|forward|send)\s+(?:it|this|that)\s+to\s+(?!me\b|my\b)\S/iu;
 const EXTRA_REQUEST = /[\r\n\u2028\u2029;]|[.!?]\s+\S|\b(?:then|and\s+(?:also\s+)?(?:send|email|mail|forward|ask|tell|notify|post|publish|share|text|message))\b/iu;
-const CONDITIONAL_SEND = /^(?:if|when|once|after|before|tomorrow|later|next|every|this\s+time)\b|\b(?:(?:if|when|once)\s+(?:it|that|you|i|we|the|a)|only\s+if|unless|every\s+(?:day|hour|week|month|morning)|but\s+(?:wait|hold|check))\b/iu;
-const RECIPIENT_SELECTION = /\b(?:only|just)\s+(?:(?:to|at|on|use)\s+)?(?:my|gmail|proton|pm\.me|one|two)\b|\b(?:my\s+)?(?:gmail|proton(?:\s+mail)?|pm\.me)\s+(?:address|inbox|account)\b|^(?:\+|(?:only\s+|just\s+)?(?:to|at|on|via|using|and|or)\s+)/iu;
+const CONDITIONAL_SEND = /\b(?:tomorrow|later|unless|only\s+(?:if|after)|(?:if|when|once|after|before)\s+(?:it|that|you|i|we|the|a|approval)|every\s+(?:day|hour|week|month|morning)|but\s+(?:wait|hold|check))\b/iu;
+const RECIPIENT_SELECTION = /\b(?:only|just)\s+(?:(?:to|at|on|use)\s+)?(?:my|gmail|proton|pm\.me|one|two)\b|\b(?:to|at|via|on)\s+(?:my\s+)?(?:work|personal|gmail|proton|pm\.me)\b|\b(?:my\s+)?(?:gmail|proton(?:\s+mail)?|pm\.me)\s+(?:address|inbox|account)\b|^(?:\+|(?:only\s+|just\s+)?(?:to|at|on|via|using|and|or)\s+)/iu;
 const ALL_FIXED_RECIPIENTS = /^(?:to|at)\s+all\s+(?:three|3)\s+(?:(?:of\s+)?(?:the|my)\s+)?(?:(?:fixed|configured)\s+)?(?:email\s+)?addresses?[.!?]?$/iu;
 const DIRECT_OTHER_RECIPIENT = /^(?:(?:email|mail)\s+(?!me\b|my\b|this\b|that\b|it\b)\S+(?:\s+(?:the|with|about|at)\b|[.!?]?$)|send\s+(?:an?\s+|the\s+)?email\s+to\s+(?!me\b|my\b)\S)/iu;
 
@@ -84,4 +84,22 @@ export function ownerEmailContent(args: unknown): { subject: string; body: strin
     return null;
   }
   return { subject: trimmedSubject, body: trimmedBody };
+}
+
+// Hermes supplies either the tool text directly or its single text content item.
+export function ownerEmailProposalId(output: unknown): string | null {
+  if (typeof output !== 'string' || output.length > 500) return null;
+  try {
+    let value: any = JSON.parse(output);
+    const items = Array.isArray(value) ? value : value?.content;
+    if (items !== undefined) {
+      if (!Array.isArray(items) || items.length !== 1 || items[0]?.type !== 'text'
+          || typeof items[0].text !== 'string' || value?.isError === true) return null;
+      value = JSON.parse(items[0].text);
+    }
+    return value?.status === 'staged' && typeof value.proposalId === 'string'
+      && /^mailprop_[\w-]{12}$/.test(value.proposalId) ? value.proposalId : null;
+  } catch {
+    return null;
+  }
 }
