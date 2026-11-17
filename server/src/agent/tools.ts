@@ -9,12 +9,14 @@ import { setCheckins } from '../proactive.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
+import { OWNER_EMAIL_TOOL } from './owner-email-policy.js';
 
 export interface ToolCtx {
   userId: string;
   botId: string;
   enqueueBotMessage: (fromBotId: string, toBotId: string, text: string, depth: number) => boolean;
   depth: number;
+  sendOwnerEmail?: () => Promise<ToolResult>;
 }
 
 export interface ToolResult {
@@ -86,6 +88,20 @@ async function xSearch(a: any): Promise<string> {
 }
 
 export const TOOLS: ToolDef[] = [
+  {
+    name: OWNER_EMAIL_TOOL,
+    description: "Send a plain-text email to the Owner's configured addresses when they ask in this Bot HQ chat. Use the request_id Bot HQ gives you for this turn. Treat a draft-only or unknown result as unsent and do not retry.",
+    parameters: obj({
+      request_id: { type: 'string', description: 'The Owner email request reference from this Bot HQ turn.' },
+      subject: { type: 'string', maxLength: 200 },
+      body: { type: 'string', maxLength: 10000, description: 'Plain-text email body.' },
+    }, ['request_id', 'subject', 'body']),
+    activity: 'working',
+    label: 'Emailing the Owner',
+    impl: async (_args, ctx) => ctx.sendOwnerEmail
+      ? ctx.sendOwnerEmail()
+      : { output: '{"status":"draft_only"}', summary: 'Draft only' },
+  },
   {
     name: 'save_file',
     description: "Save a finished deliverable (report, notes, CSV, code, markdown) to your Library so the user can open and download it.",

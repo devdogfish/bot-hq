@@ -6,7 +6,10 @@ import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
 import { engineFor } from '../engine.js';
 import { HermesRun, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
-import { activityFor, appToolName } from './tools.js';
+import { activityFor, appToolName, type ToolResult } from './tools.js';
+import { classifyOwnerEmailRequest, OWNER_EMAIL_TOOL, ownerEmailContent } from './owner-email-policy.js';
+import { dispatchOwnerEmail, ownerEmailRole } from './owner-email.js';
+import { ownerEmailEnvelope, type OwnerEmailRole } from './owner-email-transport.js';
 
 /**
  * A turn: one message handed to the bot's Hermes engine and streamed back into the conversation.
@@ -20,7 +23,7 @@ import { activityFor, appToolName } from './tools.js';
  */
 
 export type Trigger =
-  | { type: 'user'; text: string }
+  | { type: 'user'; text: string; chatRow?: { generation: number; seq: number } }
   | { type: 'routine'; routineId: string; name: string; prompt: string }
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'system'; text: string };
@@ -69,6 +72,8 @@ export function enqueue(botId: string, trigger: Trigger) {
 export type EnqueueTurn = typeof enqueue;
 
 export function interrupt(botId: string) {
+  const turn = turns.get(botId);
+  if (turn) turn.ownerEmail = undefined;
   expireApprovals(botId);
   const run = remoteRuns.get(botId);
   if (run) run.stop();
@@ -122,8 +127,18 @@ function triggerText(t: Trigger): string {
 
 // ---------- the running turn, as the app's tools see it ----------
 
-interface ToolRef { seq: number; callId: string; name: string; claimed: boolean; done: boolean }
+interface ToolRef { seq: number; callId: string; name: string; ours: boolean; claimed: boolean; done: boolean }
 interface Outcome { status?: ToolCallBody['status']; summary?: string }
+
+interface OwnerEmailRequest {
+  id: string;
+  role: OwnerEmailRole;
+  generation: number;
+  ownerSeq: number;
+  pauseRevision: number;
+  review: boolean;
+  envelope: { from: string; to: string[] };
+}
 
 interface Turn {
   botId: string;
@@ -135,6 +150,7 @@ interface Turn {
   tools: ToolRef[];
   /** What an app tool said about its own call; beats what we would guess from the raw output. */
   outcomes: Map<number, Outcome>;
+  ownerEmail?: OwnerEmailRequest;
 }
 
 const turns = new Map<string, Turn>();
@@ -154,16 +170,51 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Returns null when the call did not come from a turn started here (e.g. the agent used the tool
  * while talking to its owner somewhere else).
  */
-export async function claimToolRow(botId: string, name: string): Promise<number | null> {
+export async function claimToolRow(botId: string, name: string, requireAppTool = false): Promise<number | null> {
+  const t = turns.get(botId);
   const deadline = Date.now() + 600;
   for (;;) {
-    const t = turns.get(botId);
-    if (!t) return null;
-    const ref = t.tools.find((r) => !r.claimed && !r.done && r.name === name);
+    if (!t || turns.get(botId) !== t) return null;
+    const ref = t.tools.find((r) => !r.claimed && !r.done && r.name === name && (!requireAppTool || r.ours));
     if (ref) { ref.claimed = true; return ref.seq; }
     if (Date.now() > deadline) return null;
     await sleep(40);
   }
+}
+
+export function prepareOwnerEmailTool(botId: string, args: unknown): ((rowSeq: number) => Promise<ToolResult>) | undefined {
+  const turn = turns.get(botId);
+  const request = turn?.ownerEmail;
+  if (!turn || !request || !args || typeof args !== 'object' || Array.isArray(args)) return;
+  const { request_id, ...mail } = args as Record<string, unknown>;
+  if (request_id !== request.id) return;
+  const content = ownerEmailContent(mail);
+  if (!content) return;
+  const eligible = () => turns.get(botId) === turn && turn.ownerEmail === request
+    && activePauseRevision(botId) === request.pauseRevision;
+  if (!eligible()) return;
+  return async (rowSeq) => {
+    const ref = turn.tools.find((r) => r.seq === rowSeq && r.name === OWNER_EMAIL_TOOL && r.ours);
+    if (!ref || !ref.claimed || ref.done || !ref.callId) return { output: '{"status":"draft_only"}', summary: 'Draft only' };
+    const detail = [
+      `From: ${request.envelope.from}`,
+      `To: ${request.envelope.to.join(', ')}`,
+      `Subject: ${content.subject}`,
+      '',
+      content.body,
+    ].join('\n');
+    const out = await dispatchOwnerEmail({ botId, ...request }, { role: request.role, ...content }, eligible,
+      async () => await requestApproval(turn, detail, async () => {}, rowSeq, {
+        title: 'Send this email to your three addresses?',
+        tool: OWNER_EMAIL_TOOL,
+      }) === 'allow');
+    const captions = {
+      accepted: 'Email accepted by SES', rejected: 'Email rejected', uncertain: 'Delivery unconfirmed',
+      skipped: 'Email skipped', draft_only: 'Draft only', review: 'Email already awaiting approval',
+      sending: 'Email already submitted for processing', conflict: 'Email differs from this turn’s reserved message',
+    };
+    return { output: JSON.stringify(out), summary: captions[out.status] };
+  };
 }
 
 export function noteToolOutcome(botId: string, seq: number | null, outcome: Outcome) {
@@ -203,20 +254,22 @@ const pendingApprovals = (botId: string) => db.prepare("SELECT * FROM approvals 
 /** Put an approval card in the conversation and wait for the user's answer. */
 async function requestApproval(
   who: { userId: string; botId: string },
-  prompt: ApprovalPrompt,
+  detail: string,
   send: (choice: 'once' | 'deny') => Promise<void>,
   rowSeq: number | null,
+  override?: { title: string; tool: string },
 ): Promise<ApprovalDecision> {
   const { userId, botId } = who;
   const approvalId = newId('apr');
   const card = appendRow(botId, 'card', {
-    type: 'card', card: 'approval', approvalId, title: `Allow ${getBotRow(botId).name} to perform this action?`,
-    detail: [prompt.description, prompt.command].filter(Boolean).join('\n'), tool: 'Hermes approval', args: {}, status: 'pending',
+    type: 'card', card: 'approval', approvalId,
+    title: override?.title ?? `Allow ${getBotRow(botId).name} to perform this action?`,
+    detail, tool: override?.tool ?? 'Hermes approval', args: {}, status: 'pending',
   });
-  db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', 'hermes', 'pending', now());
+  db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', override?.tool ?? 'hermes', 'pending', now());
   db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
   if (rowSeq !== null) patchToolRow(botId, rowSeq, { status: 'awaiting-approval' });
-  setLive(botId, { isRunning: true, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: 'Hermes approval', since: now() } });
+  setLive(botId, { isRunning: true, activity: { kind: 'waiting_for_you', since: now() }, awaiting: { reason: override ? 'Email approval' : 'Hermes approval', since: now() } });
   hub.emit(userId, { type: 'tasks', botId });
   emitBot(botId);
 
@@ -395,6 +448,17 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);
   const turn: Turn = { botId, userId, depth: trigger.type === 'bot' ? trigger.depth : 0, silent: false, tools: [], outcomes: new Map() };
+  if (trigger.type === 'user' && trigger.chatRow && trigger.chatRow.generation === bot.generation) {
+    const role = ownerEmailRole(botId);
+    const envelope = role ? ownerEmailEnvelope(role) : undefined;
+    const policy = envelope ? classifyOwnerEmailRequest(trigger.text, envelope.to) : 'draft';
+    if (role && envelope && policy !== 'draft') {
+      turn.ownerEmail = {
+        id: newId('email'), role, ownerSeq: trigger.chatRow.seq, generation: bot.generation,
+        pauseRevision, review: policy === 'review', envelope,
+      };
+    }
+  }
   turns.set(botId, turn);
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null, startedAt: now(), caption: null, steps: 0 });
 
@@ -447,6 +511,10 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (ctrl.signal.aborted) throw new Error('interrupted');
 
     let input = triggerText(trigger);
+    if (turn.ownerEmail) {
+      const note = `[Bot HQ generated this email request reference for the current direct chat. Use request_id "${turn.ownerEmail.id}" with send_owner_email only if the Owner asks you to send email to them. The configured recipients are ${turn.ownerEmail.envelope.to.join(', ')}. Use the tool result to report whether SES accepted the email.]`;
+      input = [note, input].join('\n\n');
+    }
     if (bot.handback_at) {
       input = `[Note: the user took control of your screen for a while and has just handed it back. Look at the screen before you rely on what was there.]\n\n${input}`;
       db.prepare('UPDATE bots SET handback_at=NULL WHERE id=?').run(botId);
@@ -525,7 +593,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
             let args: any;
             try { args = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments; } catch { args = undefined; }
             const row = appendRow(botId, 'tool-call', { type: 'tool-call', callId: String(item.call_id ?? item.id ?? ''), name, label: act.label, status: 'running', args } satisfies ToolCallBody);
-            turn.tools.push({ seq: row.seq, callId: String(item.call_id ?? item.id ?? ''), name, claimed: false, done: false });
+            turn.tools.push({ seq: row.seq, callId: String(item.call_id ?? item.id ?? ''), name, ours, claimed: false, done: false });
             steps++;
             const kind: ActivityKind = name === 'send_to_bot' ? 'messaging_named' : act.kind;
             const detail = name === 'send_to_bot' ? String(args?.bot_name ?? '') || undefined : act.detail;
@@ -568,7 +636,8 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
               appendRow(botId, 'notice', { type: 'notice', text: 'Hermes requested approval during an unattended turn. The command was denied.', tone: 'info' });
               return;
             }
-            const decision = await requestApproval({ userId, botId }, prompt, send, tool?.seq ?? null);
+            const decision = await requestApproval({ userId, botId },
+              [prompt.description, prompt.command].filter(Boolean).join('\n'), send, tool?.seq ?? null);
             if (terminal || run.stopRequested) return;
             if (decision === 'expired') await send('deny');
             if (decision === 'unconfirmed') run.stop();
@@ -626,6 +695,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : `Something went wrong: ${remote?.stopError ?? e?.message ?? e}`, tone: stopped ? 'info' : 'error' });
     if (!stopped) console.error('[agent]', botId, e);
   } finally {
+    turn.ownerEmail = undefined;
     if (remote) {
       expireApprovals(botId);
       if (!terminal) remote.stop();

@@ -301,6 +301,60 @@ name. Kuma uses the existing Apps-to-Bot HQ HTTPS grant. Add the exact
 monitor name to the existing Kuma Healthchecks publisher after confirming
 its first healthy heartbeat.
 
+## Optional email from Owner chat
+
+Email stays disabled until the Bot HQ service has valid sender mappings,
+recipient settings and dedicated SES credentials. A clear request to email
+the Owner authorizes one message from that Agent in the same authenticated
+chat turn. When confirmation is needed, the approval card shows the exact
+message and all recipients. Routines prepare drafts.
+
+Set these values in the private `/etc/bot-hq/runtime.env`. Map each sender
+role to the exact ID of its registered Bot HQ Agent. Bot HQ derives the From
+address from that role and the verified domain and sends to all three Owner
+addresses. For example, use this format with your own configuration.
+
+```dotenv
+HQ_OWNER_EMAIL_TARGETS='{"tyler":"bot_example_tyler","stacy":"bot_example_stacy","sam":"bot_example_sam"}'
+HQ_OWNER_EMAIL_TO='["owner@example.org","owner-alt@example.org","owner@example.net"]'
+HQ_OWNER_EMAIL_FROM_DOMAIN=example.net
+BOT_HQ_EMAIL_SES_ACCESS_KEY_ID=
+BOT_HQ_EMAIL_SES_SECRET_ACCESS_KEY=
+```
+
+Use a dedicated IAM principal restricted to `ses:SendEmail` in
+`ca-central-1`, with the verified identity, exact From addresses, and exact
+recipient allowlist. Keep the credentials on the Atlas Bot HQ service and
+check that Agent hosts have no SES credentials. [SES IAM conditions](https://docs.aws.amazon.com/ses/latest/dg/control-user-access.html)
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "ses:SendEmail",
+      "Resource": "arn:aws:ses:ca-central-1:111122223333:identity/example.net",
+      "Condition": {
+        "StringEquals": {
+          "ses:FromAddress": ["tyler@example.net", "stacy@example.net", "sam@example.net"]
+        },
+        "ForAllValues:StringEquals": {
+          "ses:Recipients": ["owner@example.org", "owner-alt@example.org", "owner@example.net"]
+        },
+        "Null": { "ses:Recipients": "false" }
+      }
+    }
+  ]
+}
+```
+
+Verify clear chat, approval, routine denial and uncertain send handling using
+mocked SES first. Obtain the Owner's named approval for the Atlas activation,
+scoped live verification and rollback. Send harmless test mail to the approved
+inboxes and record status and SES receipt IDs. If activation fails, restore the
+previous reviewed release and runtime settings, then verify service health.
+
 ## Verify and record
 
 | Probe | Expected |

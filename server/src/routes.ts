@@ -223,7 +223,7 @@ api.post('/bots/:id/messages', async (c) => {
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (b.kind === 'room') dispatchRoomMessage(b.id, text.trim(), enqueue);
   // Any pending question card is answered by a free-text message.
-  else enqueue(b.id, { type: 'user', text: text.trim() });
+  else enqueue(b.id, { type: 'user', text: text.trim(), chatRow: { generation: row.generation, seq: row.seq } });
   return c.json({ row });
 });
 

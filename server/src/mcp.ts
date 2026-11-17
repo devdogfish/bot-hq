@@ -2,8 +2,10 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { activePauseRevision, getBotRow } from './store.js';
 import { mcpToken, primaryBotId } from './engine.js';
-import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, turnDepth } from './agent/loop.js';
+import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, prepareOwnerEmailTool, turnDepth } from './agent/loop.js';
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
+import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
+import { ownerEmailRole } from './agent/owner-email.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -41,9 +43,16 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   if (bot.paused) return text(PAUSED, true);
   const userId: string = bot.user_id;
   const name = [...toolMap.keys()].find((k) => k.toLowerCase() === rawName.toLowerCase()) ?? rawName;
-  const rowSeq = await claimToolRow(botId, name);
+  const email = name === OWNER_EMAIL_TOOL;
+  const sendEmail = email ? prepareOwnerEmailTool(botId, args) : undefined;
+  if (email && !sendEmail) return text('{"status":"draft_only"}');
+  const rowSeq = await claimToolRow(botId, name, email);
+  if (email && rowSeq === null) return text('{"status":"draft_only"}');
   if (activePauseRevision(botId) !== bot.pause_revision) return text('This tool call was interrupted by a pause.', true);
-  const ctx: ToolCtx = { userId, botId, enqueueBotMessage, depth: turnDepth(botId) };
+  const ctx: ToolCtx = {
+    userId, botId, enqueueBotMessage, depth: turnDepth(botId),
+    ...(sendEmail && rowSeq !== null ? { sendOwnerEmail: () => sendEmail(rowSeq) } : {}),
+  };
   try {
     const own = toolMap.get(name);
     if (own) {
@@ -89,7 +98,9 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
       return { jsonrpc: '2.0', id, result: {} };
     case 'tools/list':
       if (botId && getBotRow(botId)?.paused) return rpcError(id, -32002, PAUSED);
-      return { jsonrpc: '2.0', id, result: { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })) } };
+      return { jsonrpc: '2.0', id, result: { tools: TOOLS
+        .filter((t) => t.name !== OWNER_EMAIL_TOOL || ownerEmailRole(botId))
+        .map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })) } };
     case 'tools/call': {
       const name = params?.name;
       if (typeof name !== 'string' || !name) return rpcError(id, -32602, 'Missing tool name');
