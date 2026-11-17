@@ -3,8 +3,8 @@ import type { Engine } from '../engine.js';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const OWNER_EMAIL_TRANSCRIPT_TOOL = 'mcp__hq__send_owner_email';
-const OWNER_EMAIL_WRAPPER_START = `<untrusted_tool_result source="${OWNER_EMAIL_TRANSCRIPT_TOOL}">\n`;
-const OWNER_EMAIL_WRAPPER_END = '\n</untrusted_tool_result>';
+const PERSONAL_REPLY_TRANSCRIPT_TOOL = 'mcp__hq__stage_personal_reply';
+const TOOL_WRAPPER_END = '\n</untrusted_tool_result>';
 
 export interface ApprovalPrompt {
   promptId: string;
@@ -92,7 +92,8 @@ export class HermesRun {
   }
 
   /** Pinned Hermes can omit a canonical tool result from SSE. Read only this run's latest messages. */
-  async toolResult(callId: string): Promise<unknown> {
+  async toolResult(callId: string, transcriptTool: typeof OWNER_EMAIL_TRANSCRIPT_TOOL | typeof PERSONAL_REPLY_TRANSCRIPT_TOOL =
+    OWNER_EMAIL_TRANSCRIPT_TOOL): Promise<unknown> {
     if (!this.runId || this.stopRequested) return;
     const signal = AbortSignal.any([this.stream.signal, AbortSignal.timeout(4000)]);
     try {
@@ -110,13 +111,14 @@ export class HermesRun {
           && typeof row.tool_call_id === 'string' && row.tool_call_id.split('|').map((id: string) => id.trim()).includes(callId));
         if (results.length === 1) {
           const { content, tool_name: toolName } = results[0];
+          if (toolName !== transcriptTool) return;
           if (typeof content !== 'string' || !content.startsWith('<untrusted_tool_result')) return content;
-          if (toolName !== OWNER_EMAIL_TRANSCRIPT_TOOL || content.length > 500
-              || !content.startsWith(OWNER_EMAIL_WRAPPER_START) || !content.endsWith(OWNER_EMAIL_WRAPPER_END)) return;
+          const start = `<untrusted_tool_result source="${transcriptTool}">\n`;
+          if (content.length > 500 || !content.startsWith(start) || !content.endsWith(TOOL_WRAPPER_END)) return;
           // The gateway stores its warning on one line, then a blank line and the original MCP JSON.
-          const separator = content.indexOf('\n\n', OWNER_EMAIL_WRAPPER_START.length);
-          if (separator < 0 || content.indexOf('\n', OWNER_EMAIL_WRAPPER_START.length) !== separator) return;
-          return content.slice(separator + 2, -OWNER_EMAIL_WRAPPER_END.length);
+          const separator = content.indexOf('\n\n', start.length);
+          if (separator < 0 || content.indexOf('\n', start.length) !== separator) return;
+          return content.slice(separator + 2, -TOOL_WRAPPER_END.length);
         }
         if (results.length > 1) return;
       }

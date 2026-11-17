@@ -1,7 +1,7 @@
 import { db, now } from '../db.js';
 import { sha256 } from '../lib/ids.js';
 import { deliverOwnerEmail, OWNER_EMAIL_ROLES, ownerEmailTransportConfigured, type OwnerEmailPacket,
-  type OwnerEmailRole } from './owner-email-transport.js';
+  type OwnerEmailDelivery, type OwnerEmailRole } from './owner-email-transport.js';
 
 interface EmailTurn {
   botId: string;
@@ -45,9 +45,20 @@ export async function dispatchOwnerEmail(
   approve: () => Promise<boolean>,
   deliver = deliverOwnerEmail,
 ): Promise<OwnerEmailOutcome> {
+  return dispatchEmail(turn, [turn.envelope.from, turn.envelope.to, packet.subject, packet.body],
+    eligible, approve, () => deliver(packet));
+}
+
+export async function dispatchEmail(
+  turn: Omit<EmailTurn, 'envelope'>,
+  payload: readonly unknown[],
+  eligible: () => boolean,
+  approve: () => Promise<boolean>,
+  deliver: () => Promise<OwnerEmailDelivery>,
+): Promise<OwnerEmailOutcome> {
   if (!eligible()) return { status: 'draft_only' };
   const identity = [turn.botId, turn.generation, turn.ownerSeq];
-  const payloadHash = sha256(JSON.stringify([turn.envelope.from, turn.envelope.to, packet.subject, packet.body]));
+  const payloadHash = sha256(JSON.stringify(payload));
   const first = turn.review ? 'review' : 'sending';
   const reserved = db.prepare(`INSERT OR IGNORE INTO owner_email_sends
     (bot_id,generation,owner_seq,payload_hash,status,created_at,updated_at)
@@ -76,7 +87,7 @@ export async function dispatchOwnerEmail(
   // submission cannot be retried from this turn, including after a process restart.
   if (!eligible()) return settle('skipped');
   try {
-    const result = await deliver(packet);
+    const result = await deliver();
     if (result.kind === 'accepted') return settle('accepted', result.messageId);
     return settle(result.kind);
   } catch {

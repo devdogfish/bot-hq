@@ -2,10 +2,11 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { activePauseRevision, getBotRow } from './store.js';
 import { mcpToken, primaryBotId } from './engine.js';
-import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, stageOwnerEmail, turnDepth } from './agent/loop.js';
+import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, personalTool, stageOwnerEmail, turnDepth } from './agent/loop.js';
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
 import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
 import { ownerEmailRole } from './agent/owner-email.js';
+import { isPersonalAssistant, personalAssistantPaired, personalGmail, PERSONAL_TOOLS } from './agent/personal-assistant.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -33,7 +34,10 @@ function sameToken(a: string, b: string) {
 function caller(slug: string, auth: string | undefined): { botId: string | null } | null {
   const given = (auth ?? '').replace(/^Bearer\s+/i, '').trim();
   if (!given || !sameToken(given, mcpToken(slug))) return null;
-  if (slug === 'primary') return { botId: primaryBotId() };
+  if (slug === 'primary') {
+    const botId = primaryBotId();
+    return isPersonalAssistant(botId) ? null : { botId };
+  }
   return getBotRow(slug) ? { botId: slug } : null;
 }
 
@@ -41,6 +45,15 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   const bot = botId ? getBotRow(botId) : null;
   if (!botId || !bot) return text('The team app has no bot for this agent yet. Ask the user to open the app once, then try again.', true);
   if (bot.paused) return text(PAUSED, true);
+  if (isPersonalAssistant(botId)) {
+    try {
+      const tool = PERSONAL_TOOLS.find((tool) => tool.name === rawName);
+      if (tool) return text(JSON.stringify(await personalTool(botId, tool.name, args)));
+    } catch {
+      return text(JSON.stringify({ status: 'unavailable' }));
+    }
+    return text('Unknown Personal Assistant tool.', true);
+  }
   const userId: string = bot.user_id;
   const name = [...toolMap.keys()].find((k) => k.toLowerCase() === rawName.toLowerCase()) ?? rawName;
   if (name === OWNER_EMAIL_TOOL) return text(JSON.stringify(stageOwnerEmail(botId, args)));
@@ -92,6 +105,9 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
       return { jsonrpc: '2.0', id, result: {} };
     case 'tools/list':
       if (botId && getBotRow(botId)?.paused) return rpcError(id, -32002, PAUSED);
+      if (botId && isPersonalAssistant(botId)) {
+        return { jsonrpc: '2.0', id, result: { tools: personalAssistantPaired(botId) && personalGmail() ? PERSONAL_TOOLS : [] } };
+      }
       return { jsonrpc: '2.0', id, result: { tools: TOOLS
         .filter((t) => t.name !== OWNER_EMAIL_TOOL || ownerEmailRole(botId))
         .map((t) => ({ name: t.name, description: t.description, inputSchema: t.parameters })) } };
