@@ -34,6 +34,7 @@ export const env = {
   libraryDir: path.resolve(process.env.HQ_LIBRARY_DIR ?? path.join(dataDir, 'files')),
   localEngines: process.env.HQ_LOCAL_ENGINES === '1',
   enginePortBase: Number(process.env.ENGINE_PORT_BASE ?? 8650),
+  agentHealthTargets: process.env.HQ_AGENT_HEALTH_TARGETS ?? '',
   /** URL the Hermes gateways use to reach this server's MCP endpoint. */
   mcpBaseUrl: (process.env.MCP_BASE_URL ?? `http://127.0.0.1:${process.env.PORT ?? 8787}`).replace(/\/+$/, ''),
   /** Extra MCP servers every managed bot gets, as a JSON object of Hermes `mcp_servers` entries (e.g. X's XMCP). */
