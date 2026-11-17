@@ -377,6 +377,8 @@ The Owner enables Gmail API in a Google Cloud project and downloads a Desktop OA
 python3 -B scripts/authorize-personal-gmail.py CLIENT.json OWNER_EMAIL PRIVATE_DIRECTORY/tyler-gmail.env
 ```
 
+For the separately approved mailbox-management release, rerun the same command with `--mailbox-actions` and a new output path. Review the full Gmail scope in Google consent. Set `HQ_TYLER_GMAIL_MAILBOX_ACTIONS=1` only alongside that verified grant. With the setting unset, the existing read/send credential supports unread filtering. The full grant enables Tyler’s one-message archive, trash, and existing-label tools, plus permanent deletion after its own Owner card. Every send remains gated by the separate exact-email card.
+
 Move the four generated Gmail settings into Bot HQ's protected runtime environment using the Owner's private credential handoff. Google's External Testing mode uses expiring refresh tokens. Verify the consent state before relying on unattended refresh. [Google OAuth refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
 
 Set `HQ_TYLER_QUANTSELF_ORIGIN` to the private Quantself HTTPS origin and `HQ_TYLER_QUANTSELF_KEY` to the dedicated Personal Assistant key with only `personal-assistant:create`. Quantself binds that key's Agent client ID through `QUANTSELF_PERSONAL_ASSISTANT_CLIENT_ID`.

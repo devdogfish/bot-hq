@@ -79,7 +79,7 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   t.mock.method(PersonalGmail.prototype, 'read', async (id) => {
     readCalls.push(id);
     if (id === 'delayed') await deferred.promise;
-    return { id, threadId: target.threadId, text: 'Scheduling details from the sender.', bodyStatus: 'plain_text', reply: target };
+    return { id, from: 'friend@example.net', subject: 'Appointment', date: '17 Nov 2026', threadId: target.threadId, text: 'Scheduling details from the sender.', bodyStatus: 'plain_text', reply: target };
   });
   t.mock.method(PersonalGmail.prototype, 'thread', async (threadId) => ({ threadId, messages: [{ text: 'Prior confirmation.' }] }));
   t.mock.method(PersonalGmail.prototype, 'send', async (reply, body, current) => {
@@ -142,6 +142,9 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   assert.equal(enqueue(personal.id, { type: 'routine', routineId: 'x', name: 'Digest', prompt: 'Read mail' }), false);
   assert.equal(readCalls.length, 0);
 
+  assert(!(await rpc(personal.id, 'tools/list')).tools.some(({ name }) => name === 'stage_personal_delete'));
+  process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS = '1';
+  t.after(() => delete process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS);
   for (const decision of ['deny', 'allow']) {
     stream = undefined;
     await request(path + '/messages', 'POST', { text: 'Check my personal email and reply.' });
@@ -193,4 +196,58 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
     await until(() => !isBotBusy(personal.id));
   }
   assert.deepEqual(sends, [{ reply: target, body: 'I can make that.' }]);
+
+  t.mock.method(PersonalGmail.prototype, 'changeMessage', async (id, action, label, eligible) => {
+    assert(eligible());
+    changes.push({ id, action, label });
+    return 'changed';
+  });
+  const changes = [];
+  const deleteTool = 'mcp__hq__stage_personal_delete';
+  process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS = '1';
+  try {
+    for (const decision of ['deny', 'allow']) {
+      stream = undefined;
+      await request(path + '/messages', 'POST', { text: 'Permanently delete the fixture email.' });
+      await until(() => stream);
+      assert.deepEqual(JSON.parse(await call('stage_personal_delete', message)), { status: 'unavailable' });
+      await call('read_personal_gmail', message);
+      assert.deepEqual(JSON.parse(await call('change_personal_gmail_message', { ...message, action: 'archive' })),
+        { status: 'unavailable' });
+      const staged = JSON.parse(await call('stage_personal_delete', message));
+      assert.equal(staged.status, 'staged');
+      assert.equal(changes.length, 0);
+      const tool_call_id = 'delete-' + decision;
+      completedReceipt = {
+        role: 'tool', tool_call_id, tool_name: deleteTool, content: JSON.stringify({ result: JSON.stringify(staged) }),
+      };
+      stream.enqueue(encode('tool.started', { tool: deleteTool, tool_call_id }));
+      stream.enqueue(encode('tool.completed', { tool: deleteTool, tool_call_id, error: false, preview: '' }));
+      stream.enqueue(encode('run.completed', {}));
+      stream.close();
+      const card = await until(async () => (await request(path + '/rows')).rows
+        .find(({ body }) => body.card === 'approval' && body.status === 'pending')?.body);
+      assert.equal(card.title, 'Permanently delete this Gmail message?');
+      assert.match(card.detail, /Subject: Appointment\nDate: 17 Nov 2026\nGmail message ID: fixture/u);
+      assert.equal(changes.length, 0);
+      await request('/approvals/' + card.approvalId, 'POST', { decision });
+      await until(() => !isBotBusy(personal.id));
+    }
+    assert.deepEqual(changes, [{ id: 'fixture', action: 'delete', label: undefined }]);
+    stream = undefined;
+    await request(path + '/messages', 'POST', { text: 'Could you please archive the fixture email?' });
+    await until(() => stream);
+    await call('read_personal_gmail', message);
+    assert.deepEqual(JSON.parse(await call('stage_personal_delete', message)), { status: 'unavailable' });
+    assert.deepEqual(JSON.parse(await call('change_personal_gmail_message', { ...message, action: 'archive' })),
+      { status: 'changed' });
+    stream.enqueue(encode('run.completed', {}));
+    stream.close();
+    await until(() => !isBotBusy(personal.id));
+    assert.deepEqual(changes.at(-1), { id: 'fixture', action: 'archive', label: undefined });
+    assert.equal(sends.length, 1);
+  } finally {
+    delete process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS;
+  }
+
 });

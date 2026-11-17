@@ -6,7 +6,7 @@ import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, personalT
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
 import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
 import { ownerEmailRole } from './agent/owner-email.js';
-import { isPersonalAssistant, personalAssistantPaired, personalGmail, PERSONAL_TOOLS } from './agent/personal-assistant.js';
+import { isPersonalAssistant, personalAssistantPaired, personalToolList, PERSONAL_TOOLS } from './agent/personal-assistant.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -106,7 +106,7 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
     case 'tools/list':
       if (botId && getBotRow(botId)?.paused) return rpcError(id, -32002, PAUSED);
       if (botId && isPersonalAssistant(botId)) {
-        return { jsonrpc: '2.0', id, result: { tools: personalAssistantPaired(botId) && personalGmail() ? PERSONAL_TOOLS : [] } };
+        return { jsonrpc: '2.0', id, result: { tools: personalAssistantPaired(botId) ? personalToolList() : [] } };
       }
       return { jsonrpc: '2.0', id, result: { tools: TOOLS
         .filter((t) => t.name !== OWNER_EMAIL_TOOL || ownerEmailRole(botId))

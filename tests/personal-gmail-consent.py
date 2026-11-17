@@ -56,5 +56,26 @@ class ConsentTest(unittest.TestCase):
                 self.assertFalse(output.exists())
 
 
+    def test_full_mailbox_grant_requires_the_mailbox_action_option(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = root / "client.json"
+            client.write_text(json.dumps({"installed": {
+                "client_id": "fixture-id", "client_secret": "fixture-secret",
+            }}))
+            output = root / "gmail.env"
+            token = {"token_type": "Bearer", "scope": "https://mail.google.com/",
+                     "access_token": "fixture-access", "refresh_token": "fixture-refresh"}
+            with patch.object(consent, "receive_code", return_value=("code", "http://127.0.0.1/callback")) as receive, \
+                    patch.object(consent, "read_google", side_effect=[token, token, {"emailAddress": "owner@example.net"}]), \
+                    redirect_stdout(io.StringIO()):
+                with self.assertRaises(ValueError):
+                    consent.authorize(client, "owner@example.net", output)
+                self.assertFalse(output.exists())
+                consent.authorize(client, "owner@example.net", output, mailbox_actions=True)
+                self.assertEqual(receive.call_args.args[-1], {"https://mail.google.com/"})
+            self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
+
+
 if __name__ == "__main__":
     unittest.main()

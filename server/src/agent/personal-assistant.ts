@@ -5,11 +5,12 @@ import { ownerEmailContent } from './owner-email-policy.js';
 import { PersonalGmail, type GmailReplyTarget } from './personal-gmail.js';
 
 export const PERSONAL_REPLY_TOOL = 'stage_personal_reply';
+export const PERSONAL_DELETE_TOOL = 'stage_personal_delete';
 
 export const PERSONAL_TOOLS = [
   {
-    name: 'list_personal_gmail', description: 'List a page of the Owner’s personal inbox headers.',
-    fields: { pageToken: { type: 'string' } }, required: [],
+    name: 'list_personal_gmail', description: 'List a page of the Owner’s personal inbox headers and unread flags.',
+    fields: { pageToken: { type: 'string' }, unreadOnly: { type: 'boolean' } }, required: [],
   },
   {
     name: 'read_personal_gmail', description: 'Read one personal Gmail message by its ID.',
@@ -31,9 +32,31 @@ export const PERSONAL_TOOLS = [
       title: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' },
     }, required: ['messageId', 'kind', 'title'],
   },
+  {
+    name: 'list_personal_gmail_labels', description: 'List existing user-created labels in the Owner’s Gmail.',
+    fields: {}, required: [],
+  },
+  {
+    name: 'change_personal_gmail_message', description: 'Archive, trash, or change an existing label on a message you read in this turn when the Owner explicitly requests it.',
+    fields: {
+      messageId: { type: 'string' }, action: { type: 'string', enum: ['archive', 'trash', 'add_label', 'remove_label'] },
+      labelId: { type: 'string' },
+    }, required: ['messageId', 'action'],
+  },
+  {
+    name: PERSONAL_DELETE_TOOL, description: 'Propose permanent deletion of one message you read in this turn. Requires the Owner’s separate approval.',
+    fields: { messageId: { type: 'string' } }, required: ['messageId'],
+  },
 ].map(({ name, description, fields, required }) => ({
   name, description, inputSchema: { type: 'object', properties: fields, required, additionalProperties: false },
 }));
+
+const mailboxTools = new Set([PERSONAL_DELETE_TOOL, 'list_personal_gmail_labels', 'change_personal_gmail_message']);
+
+export function personalToolList() {
+  const gmail = personalGmail();
+  return gmail ? PERSONAL_TOOLS.filter(tool => gmail.mailboxActions || !mailboxTools.has(tool.name)) : [];
+}
 
 export function isPersonalAssistant(botId: string | null) {
   return !!botId && botId === process.env.HQ_TYLER_PERSONAL_BOT_ID;
@@ -64,19 +87,31 @@ export function personalGmail() {
   const clientSecret = process.env.HQ_TYLER_GMAIL_CLIENT_SECRET;
   const refreshToken = process.env.HQ_TYLER_GMAIL_REFRESH_TOKEN;
   if (!mailbox || !clientId || !clientSecret || !refreshToken) return undefined;
-  const config = JSON.stringify([mailbox, clientId, clientSecret, refreshToken]);
+  const mailboxActions = process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS === '1';
+  const config = JSON.stringify([mailbox, clientId, clientSecret, refreshToken, mailboxActions]);
   try {
-    if (cached?.config !== config) cached = { config, transport: new PersonalGmail({ mailbox, clientId, clientSecret, refreshToken }) };
+    if (cached?.config !== config) cached = { config, transport: new PersonalGmail({ mailbox, clientId, clientSecret, refreshToken, mailboxActions }) };
     return cached.transport;
   } catch {
     return undefined;
   }
 }
 
-export function newPersonalReadState() {
+export function newPersonalReadState(ownerText = '') {
+  const command = ownerText.trim().replace(/^(?:(?:can|could|would) you +)?(?:please +)?/iu, '');
+  const mailboxRequest = /^archive\b/iu.test(command) ? 'archive'
+    : /^(?:trash\b|move\b[^\n]*\bto (?:the )?trash\b)/iu.test(command) ? 'trash'
+    : /^(?:remove\b[^\n]*\blabel\b)/iu.test(command) ? 'remove_label'
+    : /^(?:label\b|(?:apply|add)\b[^\n]*\blabel\b)/iu.test(command) ? 'add_label'
+    : /^(?:permanently +)?delete\b/iu.test(command) ? 'delete'
+    : undefined;
   return {
+    mailboxRequest,
     messages: new Map<string, GmailReplyTarget | null>(),
     threads: new Set<string>(),
+    labelIds: new Set<string>(),
+    headers: new Map<string, { from: string; subject: string; date: string }>(),
+    deletion: undefined as { proposalId: string; messageId: string; from: string; subject: string; date: string } | undefined,
     proposals: new Map<string, PersonalReply>(),
     stagingClosed: false,
     toolsClosed: false,
@@ -98,11 +133,12 @@ export async function callPersonalTool(
   if (!gmail) return denied;
 
   if (name === 'list_personal_gmail') {
-    const { pageToken } = fields;
-    if (!state.readsRemaining || Object.keys(fields).some((key) => key !== 'pageToken') ||
+    const { pageToken, unreadOnly } = fields;
+    if (!state.readsRemaining || Object.keys(fields).some(key => !['pageToken', 'unreadOnly'].includes(key)) ||
+        (unreadOnly !== undefined && typeof unreadOnly !== 'boolean') ||
         (pageToken !== undefined && (typeof pageToken !== 'string' || pageToken.length > 1024))) return denied;
     state.readsRemaining--;
-    const page = await gmail.list({ pageToken });
+    const page = await gmail.list({ pageToken, unreadOnly });
     return current() ? page : denied;
   }
 
@@ -115,6 +151,15 @@ export async function callPersonalTool(
     return current() ? thread : denied;
   }
 
+  if (name === 'list_personal_gmail_labels') {
+    if (!gmail.mailboxActions || !state.readsRemaining || Object.keys(fields).length) return denied;
+    state.readsRemaining--;
+    const labels = await gmail.labels();
+    if (!current()) return denied;
+    state.labelIds = new Set(labels.map(label => label.id));
+    return { labels };
+  }
+
   const { messageId } = fields;
   if (typeof messageId !== 'string' || !/^[\w-]{1,128}$/.test(messageId)) return denied;
   if (name === 'read_personal_gmail') {
@@ -122,10 +167,31 @@ export async function callPersonalTool(
     state.readsRemaining--;
     const { reply, ...message } = await gmail.read(messageId);
     if (!current()) return denied;
+    state.headers.set(messageId, { from: message.from, subject: message.subject, date: message.date });
     if (message.bodyStatus === 'plain_text') state.messages.set(messageId, reply);
     state.threads.add(message.threadId);
     return message;
   }
+  if (name === 'change_personal_gmail_message') {
+    const { action, labelId } = fields;
+    const isLabel = action === 'add_label' || action === 'remove_label';
+    if (!gmail.mailboxActions || action !== state.mailboxRequest || !state.headers.has(messageId) ||
+        !(action === 'archive' || action === 'trash' || isLabel) ||
+        (isLabel ? Object.keys(fields).length !== 3 || typeof labelId !== 'string' || !state.labelIds.has(labelId)
+          : Object.keys(fields).length !== 2 || labelId !== undefined)) return denied;
+    const status = await gmail.changeMessage(messageId, action, typeof labelId === 'string' ? labelId : undefined, current);
+    if (status === 'changed' && !isLabel) state.headers.delete(messageId);
+    return { status };
+  }
+
+  if (name === PERSONAL_DELETE_TOOL) {
+    const header = state.headers.get(messageId);
+    if (!gmail.mailboxActions || state.mailboxRequest !== 'delete' || !header || state.deletion || Object.keys(fields).length !== 1) return denied;
+    const proposalId = newId('mailprop');
+    state.deletion = { proposalId, messageId, ...header };
+    return { status: 'staged', proposalId };
+  }
+
   if (name === PERSONAL_REPLY_TOOL) {
     const target = state.messages.get(messageId);
     if (!target || state.stagingClosed || state.proposals.size >= 8 || Object.keys(fields).length !== 2) return denied;

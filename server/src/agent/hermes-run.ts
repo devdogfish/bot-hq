@@ -4,6 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const OWNER_EMAIL_TRANSCRIPT_TOOL = 'mcp__hq__send_owner_email';
 const PERSONAL_REPLY_TRANSCRIPT_TOOL = 'mcp__hq__stage_personal_reply';
+const PERSONAL_DELETE_TRANSCRIPT_TOOL = 'mcp__hq__stage_personal_delete';
 const TOOL_WRAPPER_END = '\n</untrusted_tool_result>';
 
 export interface ApprovalPrompt {
@@ -92,7 +93,7 @@ export class HermesRun {
   }
 
   /** Pinned Hermes can omit a canonical tool result from SSE. Read only this run's latest messages. */
-  async toolResult(callId: string, transcriptTool: typeof OWNER_EMAIL_TRANSCRIPT_TOOL | typeof PERSONAL_REPLY_TRANSCRIPT_TOOL =
+  async toolResult(callId: string, transcriptTool: typeof OWNER_EMAIL_TRANSCRIPT_TOOL | typeof PERSONAL_REPLY_TRANSCRIPT_TOOL | typeof PERSONAL_DELETE_TRANSCRIPT_TOOL =
     OWNER_EMAIL_TRANSCRIPT_TOOL): Promise<unknown> {
     if (!this.runId || this.stopRequested) return;
     const signal = AbortSignal.any([this.stream.signal, AbortSignal.timeout(4000)]);

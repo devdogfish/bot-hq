@@ -32,7 +32,7 @@ const fixtureMessage = (id = 'm1', fields = {}) => ({
 
 function fakeProvider(handler, options = {}) {
   const calls = [];
-  const client = new PersonalGmail(config, async (input, request) => {
+  const client = new PersonalGmail({ ...config, mailboxActions: options.mailboxActions }, async (input, request) => {
     const url = new URL(input);
     assert.equal(request.redirect, 'error');
     assert.ok(request.signal instanceof AbortSignal);
@@ -223,4 +223,54 @@ test('checks turn eligibility again after a cold OAuth refresh and never submits
   release();
   assert.deepEqual(await sending, { kind: 'rejected' });
   assert.equal(calls.length, 2);
+});
+
+
+test('filters unread inbox mail using Gmail labels and preserves pagination', async () => {
+  const { client } = fakeProvider(url => {
+    if (url.pathname.endsWith('/messages')) {
+      assert.deepEqual(url.searchParams.getAll('labelIds'), ['INBOX', 'UNREAD']);
+      assert.equal(url.searchParams.get('pageToken'), 'next-unread');
+      return Response.json({ messages: [{ id: 'm1' }, { id: 'm2' }], nextPageToken: 'more' });
+    }
+    const id = url.pathname.split('/').at(-1);
+    const message = fixtureMessage(id);
+    if (id === 'm2') message.labelIds = ['INBOX'];
+    return Response.json(message);
+  });
+  const page = await client.list({ unreadOnly: true, pageToken: 'next-unread' });
+  assert.deepEqual(page.messages.map(({ id, unread }) => [id, unread]), [['m1', true]]);
+  assert.equal(page.nextPageToken, 'more');
+  assert.equal((await client.read('m2')).unread, false);
+});
+
+test('operations use only the pinned mailbox, one message, and the verified full grant', async () => {
+  const requests = [];
+  const { client } = fakeProvider((url, options) => {
+    requests.push([url.pathname.split('/').slice(5).join('/'), options.method, options.body && JSON.parse(options.body)]);
+    if (options.method === 'DELETE') return new Response(null, { status: 204 });
+    if (url.pathname.endsWith('/labels')) return Response.json({ labels: [
+      { id: 'Label_12', type: 'user', name: 'Receipts' }, { id: 'INBOX', type: 'system', name: 'Inbox' },
+    ] });
+    return Response.json({ id: 'm1' });
+  }, { mailboxActions: true, token: { ...token, scope: 'https://mail.google.com/' } });
+  assert.deepEqual(await client.labels(), [{ id: 'Label_12', name: 'Receipts' }]);
+  assert.equal(await client.changeMessage('m1', 'archive', undefined, () => true), 'changed');
+  assert.equal(await client.changeMessage('m1', 'trash', undefined, () => true), 'changed');
+  assert.equal(await client.changeMessage('m1', 'add_label', 'Label_12', () => true), 'changed');
+  assert.equal(await client.changeMessage('m1', 'remove_label', 'Label_12', () => true), 'changed');
+  assert.equal(await client.changeMessage('m1', 'add_label', 'INBOX', () => true), 'unavailable');
+  assert.equal(await client.changeMessage('m1', 'delete', undefined, () => false), 'unavailable');
+  assert.equal(await client.changeMessage('m1', 'delete', undefined, () => true), 'changed');
+  assert.deepEqual(requests, [
+    ['labels', undefined, undefined],
+    ['messages/m1/modify', 'POST', { removeLabelIds: ['INBOX'] }],
+    ['messages/m1/trash', 'POST', undefined],
+    ['messages/m1/modify', 'POST', { addLabelIds: ['Label_12'] }],
+    ['messages/m1/modify', 'POST', { removeLabelIds: ['Label_12'] }],
+    ['messages/m1', 'DELETE', undefined],
+  ]);
+  const readonly = fakeProvider(() => assert.fail('read-only credential reached a write endpoint'));
+  assert.equal(await readonly.client.changeMessage('m1', 'delete', undefined, () => true), 'unavailable');
+  assert.equal(readonly.calls.length, 0);
 });
