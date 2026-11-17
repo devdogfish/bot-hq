@@ -70,6 +70,7 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   const captures = [];
   const readCalls = [];
   const sends = [];
+  const deferred = Promise.withResolvers();
   const target = {
     from: 'owner@example.net', to: 'friend@example.net', subject: 'Re: Appointment',
     threadId: 'fixture-thread', inReplyTo: '<fixture@example.net>', references: '<fixture@example.net>',
@@ -77,6 +78,7 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   t.mock.method(PersonalGmail.prototype, 'list', async () => ({ messages: [{ id: 'fixture' }] }));
   t.mock.method(PersonalGmail.prototype, 'read', async (id) => {
     readCalls.push(id);
+    if (id === 'delayed') await deferred.promise;
     return { id, threadId: target.threadId, text: 'Scheduling details from the sender.', bodyStatus: 'plain_text', reply: target };
   });
   t.mock.method(PersonalGmail.prototype, 'thread', async (threadId) => ({ threadId, messages: [{ text: 'Prior confirmation.' }] }));
@@ -150,18 +152,21 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
     assert.match(await call('read_personal_gmail_thread', { threadId: target.threadId }), /Prior confirmation/);
     if (decision === 'allow') {
       assert.deepEqual(JSON.parse(await call('capture_personal_action',
-        { ...message, actionKey: 'bring-id', kind: 'todo', title: 'Bring ID' })),
+        { ...message, kind: 'todo', title: 'Bring ID' })),
       { status: 'created', number: 42, auditId: 'audit-42', url: 'https://quantself.example.test/todo?task=42' });
       const appointment = { kind: 'appointment', title: 'Dentist', start: '2026-11-18T15:00:00-04:00', end: '2026-11-18T15:30:00-04:00' };
-      assert.match(await call('capture_personal_action', { ...message, actionKey: 'dentist', ...appointment }), /created/);
-      assert.deepEqual(captures, [
-        { source: { ...message, actionKey: 'bring-id' }, kind: 'todo', title: 'Bring ID' },
-        { source: { ...message, actionKey: 'dentist' }, ...appointment },
-      ]);
+      assert.match(await call('capture_personal_action', { ...message, ...appointment }), /created/);
+      await call('capture_personal_action', { ...message, kind: 'todo', title: ' Bring   ID ' });
+      assert.equal(captures.length, 3);
+      assert.deepEqual(captures[0], captures[2], 'equivalent capture must use the same source and payload');
+      assert.match(captures[0].source.actionKey, /^[0-9a-f]{64}$/);
+      assert.deepEqual(captures[1], { source: { ...message, actionKey: captures[1].source.actionKey }, ...appointment });
     }
     const replyBody = 'I can make that.';
     const staged = JSON.parse(await call(replyName, { ...message, body: replyBody }));
     assert.equal(staged.status, 'staged');
+    const lateRead = decision === 'allow' ? call('read_personal_gmail', { messageId: 'delayed' }) : undefined;
+    if (lateRead) await until(() => readCalls.includes('delayed'));
     const tool = 'mcp__hq__stage_personal_reply';
     const tool_call_id = 'fixture-' + decision;
     const payload = JSON.stringify({ result: JSON.stringify(staged) });
@@ -179,6 +184,10 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
     });
     assert.equal(card.detail, 'From: owner@example.net\nTo: friend@example.net\nSubject: Re: Appointment\n\nI can make that.');
     assert.equal(sends.length, 0);
+    if (lateRead) {
+      deferred.resolve();
+      assert.deepEqual(JSON.parse(await lateRead), { status: 'unavailable' });
+    }
     assert.deepEqual(JSON.parse(await call('read_personal_gmail', message)), { status: 'unavailable' });
     await request('/approvals/' + card.approvalId, 'POST', { decision });
     await until(() => !isBotBusy(personal.id));

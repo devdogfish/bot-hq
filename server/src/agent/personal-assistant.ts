@@ -1,4 +1,4 @@
-import { newId } from '../lib/ids.js';
+import { newId, sha256 } from '../lib/ids.js';
 import { getBotRow } from '../store.js';
 import { ownerEmailRole } from './owner-email.js';
 import { ownerEmailContent } from './owner-email-policy.js';
@@ -24,12 +24,12 @@ export const PERSONAL_TOOLS = [
     fields: { messageId: { type: 'string' }, body: { type: 'string' } }, required: ['messageId', 'body'],
   },
   {
-    name: 'capture_personal_action', description: 'Add a clear Appointment or To-Do from a message you read in this turn. Use a stable action key for the action in that message. Ask when facts are ambiguous.',
+    name: 'capture_personal_action', description: 'Add a clear Appointment or To-Do from a message you read in this turn. Ask when facts are ambiguous.',
     fields: {
-      messageId: { type: 'string' }, actionKey: { type: 'string' },
+      messageId: { type: 'string' },
       kind: { type: 'string', enum: ['todo', 'appointment'] },
       title: { type: 'string' }, start: { type: 'string' }, end: { type: 'string' },
-    }, required: ['messageId', 'actionKey', 'kind', 'title'],
+    }, required: ['messageId', 'kind', 'title'],
   },
 ].map(({ name, description, fields, required }) => ({
   name, description, inputSchema: { type: 'object', properties: fields, required, additionalProperties: false },
@@ -136,15 +136,16 @@ export async function callPersonalTool(
     return { status: 'staged', proposalId };
   }
   if (name === 'capture_personal_action' && state.messages.has(messageId)) {
-    const { actionKey, kind, title, start, end } = fields;
-    if (typeof actionKey !== 'string' || !/^[\w-]{1,100}$/.test(actionKey) ||
-      typeof title !== 'string' || !title.trim() || title.length > 200) return denied;
-    const source = { messageId, actionKey };
-    if (kind === 'todo' && Object.keys(fields).length === 4) {
-      return capturePersonalAction({ source, kind, title: title.trim() }, current);
+    const { kind, title, start, end } = fields;
+    if (typeof title !== 'string' || !title.trim() || title.length > 200) return denied;
+    const normalizedTitle = title.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+    if (kind === 'todo' && Object.keys(fields).length === 3) {
+      const source = { messageId, actionKey: sha256(JSON.stringify([kind, normalizedTitle])) };
+      return capturePersonalAction({ source, kind, title: title.trim().replace(/\s+/gu, ' ') }, current);
     }
-    if (kind === 'appointment' && Object.keys(fields).length === 6 &&
-      typeof start === 'string' && typeof end === 'string') {
+    if (kind === 'appointment' && Object.keys(fields).length === 5 && typeof start === 'string' &&
+      typeof end === 'string' && Number.isFinite(Date.parse(start)) && Number.isFinite(Date.parse(end))) {
+      const source = { messageId, actionKey: sha256(JSON.stringify([kind, Date.parse(start), Date.parse(end)])) };
       return capturePersonalAction({ source, kind, title: title.trim(), start, end }, current);
     }
   }

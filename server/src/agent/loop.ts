@@ -218,7 +218,8 @@ export async function personalTool(botId: string, name: string, args: unknown) {
   if (context.inFlight >= 2) return { status: 'busy' };
   context.inFlight++;
   try {
-    return await callPersonalTool(name, args, context, () => personalTurnIsCurrent(turn, context));
+    return await callPersonalTool(name, args, context,
+      () => !context.toolsClosed && personalTurnIsCurrent(turn, context));
   } finally {
     context.inFlight--;
   }
