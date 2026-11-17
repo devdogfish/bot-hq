@@ -7,6 +7,7 @@ const METADATA_CONCURRENCY = 4;
 const THREAD_SIZE = 4;
 const MAX_TEXT = 16_000;
 const MAX_HTML = 96_000;
+const FULL_MAILBOX_SCOPE = 'https://mail.google.com/';
 const GMAIL_SCOPES = new Set([
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
@@ -27,6 +28,7 @@ export interface PersonalGmailConfig {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
+  mailboxActions?: boolean;
 }
 
 interface GmailHeader {
@@ -35,6 +37,7 @@ interface GmailHeader {
   from: string;
   subject: string;
   date: string;
+  unread: boolean;
 }
 
 interface MessageBody {
@@ -113,6 +116,7 @@ function messageMetadata(message: JsonObject, id: string, headers: Map<string, s
     from: (headers.get('from') ?? '').slice(0, 512),
     subject: (headers.get('subject') ?? '').slice(0, 512),
     date: (headers.get('date') ?? '').slice(0, 120),
+    unread: values(message.labelIds).includes('UNREAD'),
   };
 }
 
@@ -263,7 +267,8 @@ export class PersonalGmail {
     if (scope !== undefined) {
       if (typeof scope !== 'string') throw unavailable();
       const granted = new Set(scope.split(/\s+/u));
-      if (granted.size !== GMAIL_SCOPES.size || [...granted].some((item) => !GMAIL_SCOPES.has(item))) throw unavailable();
+      const expectedScopes = this.#config.mailboxActions ? new Set([FULL_MAILBOX_SCOPE]) : GMAIL_SCOPES;
+      if (granted.size !== expectedScopes.size || [...granted].some((item) => !expectedScopes.has(item))) throw unavailable();
     }
     const profile = await this.#request(GMAIL + 'profile?fields=emailAddress', {
       headers: { authorization: 'Bearer ' + access_token },
@@ -293,12 +298,13 @@ export class PersonalGmail {
     return boundedJson(await this.#gmail('messages/' + id + '?format=FULL&fields=id,threadId,labelIds,payload', token), 1_048_576);
   }
 
-  async list({ pageToken }: { pageToken?: string } = {}): Promise<{ messages: GmailHeader[]; nextPageToken?: string }> {
+  async list({ pageToken, unreadOnly }: { pageToken?: string; unreadOnly?: boolean } = {}): Promise<{ messages: GmailHeader[]; nextPageToken?: string }> {
     try {
       if (pageToken !== undefined && !opaqueValue(pageToken, 1024)) throw unavailable();
       const token = await this.#getToken();
       const search = new URLSearchParams({ labelIds: 'INBOX', maxResults: String(PAGE_SIZE),
         fields: 'messages(id,threadId),nextPageToken' });
+      if (unreadOnly) search.append('labelIds', 'UNREAD');
       if (pageToken) search.set('pageToken', pageToken);
       const listing = await boundedJson(await this.#gmail('messages?' + search, token), 8_192);
       const ids = values(listing.messages).map((entry) => object(entry).id);
@@ -313,7 +319,7 @@ export class PersonalGmail {
           return messageMetadata(message, id, messageHeaders(object(message.payload)), true);
         })));
       }
-      return { messages, ...(listing.nextPageToken ? { nextPageToken: listing.nextPageToken } : {}) };
+      return { messages: unreadOnly ? messages.filter(message => message.unread) : messages, ...(listing.nextPageToken ? { nextPageToken: listing.nextPageToken } : {}) };
     } catch {
       throw unavailable();
     }
@@ -357,6 +363,49 @@ export class PersonalGmail {
       return { threadId: id, messages };
     } catch {
       throw unavailable();
+    }
+  }
+
+  get mailboxActions() {
+    return this.#config.mailboxActions === true;
+  }
+
+  async labels() {
+    if (!this.mailboxActions) throw unavailable();
+    const data = await boundedJson(await this.#gmail('labels?fields=labels(id,name,type)', await this.#getToken()), 512_000);
+    return values(data.labels).flatMap(value => {
+      const { id, name, type } = object(value);
+      return type === 'user' && typeof id === 'string' && /^Label_[A-Za-z0-9_]{1,100}$/u.test(id)
+        && typeof name === 'string' ? [{ id, name }] : [];
+    });
+  }
+
+  async changeMessage(id: string, action: 'archive' | 'trash' | 'add_label' | 'remove_label' | 'delete',
+    labelId: string | undefined, eligible: () => boolean): Promise<'changed' | 'unavailable' | 'unconfirmed'> {
+    if (!this.mailboxActions || !gmailId(id) || !eligible()) return 'unavailable';
+    let dispatched = false;
+    try {
+      const token = await this.#getToken();
+      const path = 'messages/' + id;
+      const labelAction = action === 'add_label' || action === 'remove_label';
+      if (labelAction && (!labelId || !/^Label_[A-Za-z0-9_]{1,100}$/u.test(labelId))) return 'unavailable';
+      const changes = action === 'archive' ? { removeLabelIds: ['INBOX'] }
+        : action === 'add_label' ? { addLabelIds: [labelId] }
+        : action === 'remove_label' ? { removeLabelIds: [labelId] } : undefined;
+      if (!eligible()) return 'unavailable';
+      dispatched = true;
+      const response = await this.#gmail(action === 'delete' ? path : path + (action === 'trash' ? '/trash' : '/modify'), token, {
+        method: action === 'delete' ? 'DELETE' : 'POST',
+        ...(changes && { headers: { 'content-type': 'application/json' }, body: JSON.stringify(changes) }),
+      });
+      if (action === 'delete' && response.status === 204) return 'changed';
+      if (response.ok && action !== 'delete') {
+        return (await boundedJson(response, 32_768)).id === id ? 'changed' : 'unconfirmed';
+      }
+      await response.body?.cancel().catch(() => undefined);
+      return response.status >= 500 || response.ok ? 'unconfirmed' : 'unavailable';
+    } catch {
+      return dispatched ? 'unconfirmed' : 'unavailable';
     }
   }
 
