@@ -64,6 +64,12 @@ test('requires review for ambiguous wording, subsets and combined actions', () =
     'Email me the status at my Gmail.',
     'Email me the status tomorrow.',
     'Email me the report at my work address only.',
+    'Email me the status at the second address.',
+    'Email me the status to my backup inbox.',
+    'Email me the report, but not now.',
+    'Email me the report next Friday.',
+    'Email me the report if ready.',
+    'Email me the status, but please wait for my approval.',
     'Email me the recap every day.',
     'Email me tomorrow.',
     'Email me the recap.\nThen start the rollout.',
@@ -137,7 +143,8 @@ test('reads a single complete receipt from the pinned run event projections', ()
   const proposalId = 'mailprop_FixtureNonce';
   const raw = JSON.stringify({ status: 'staged', proposalId });
   const item = { type: 'text', text: raw };
-  for (const value of [raw, JSON.stringify([item]), JSON.stringify({ content: [item], isError: false })]) {
+  for (const value of [raw, JSON.stringify({ result: raw }), JSON.stringify([item]),
+    JSON.stringify({ content: [item], isError: false })]) {
     assert.equal(ownerEmailProposalId(value), proposalId);
   }
   for (const value of [

@@ -14,8 +14,8 @@ const SEND_NEGATION = /\b(?:no\s+emails?|without\s+(?:actually\s+)?sending|draft
 const RECIPIENT_HEADER = /^\s*(?:from|to|cc|bcc|sent)\s*:/imu;
 const OTHER_RECIPIENT = /\b(?:cc|bcc)\b|\b(?:email|mail|forward|send)\s+(?:it|this|that)\s+to\s+(?!me\b|my\b)\S/iu;
 const EXTRA_REQUEST = /[\r\n\u2028\u2029;]|[.!?]\s+\S|\b(?:then|and\s+(?:also\s+)?(?:send|email|mail|forward|ask|tell|notify|post|publish|share|text|message))\b/iu;
-const CONDITIONAL_SEND = /\b(?:tomorrow|later|unless|only\s+(?:if|after)|(?:if|when|once|after|before)\s+(?:it|that|you|i|we|the|a|approval)|every\s+(?:day|hour|week|month|morning)|but\s+(?:wait|hold|check))\b/iu;
-const RECIPIENT_SELECTION = /\b(?:only|just)\s+(?:(?:to|at|on|use)\s+)?(?:my|gmail|proton|pm\.me|one|two)\b|\b(?:to|at|via|on)\s+(?:my\s+)?(?:work|personal|gmail|proton|pm\.me)\b|\b(?:my\s+)?(?:gmail|proton(?:\s+mail)?|pm\.me)\s+(?:address|inbox|account)\b|^(?:\+|(?:only\s+|just\s+)?(?:to|at|on|via|using|and|or)\s+)/iu;
+const CONDITIONAL_SEND = /\b(?:if|unless|when|once|after|before|tomorrow|later|wait|hold|not\s+now|next\s+\w+|every\s+\w+)\b/iu;
+const RECIPIENT_SELECTION = /\b(?:only|just)\s+(?:(?:to|at|on|use)\s+)?(?:my|gmail|proton|pm\.me|one|two)\b|\b(?:to|at|via|on)\s+(?:(?:my|the)\s+)?(?:work|personal|gmail|proton|pm\.me|first|second|third)\b|\b(?:to|at|via|on)\s+(?:my|the)\s+(?:\w+\s+){0,3}(?:address|inbox|mailbox|account)\b|^(?:\+|(?:only\s+|just\s+)?(?:to|at|on|via|using|and|or)\s+)/iu;
 const ALL_FIXED_RECIPIENTS = /^(?:to|at)\s+all\s+(?:three|3)\s+(?:(?:of\s+)?(?:the|my)\s+)?(?:(?:fixed|configured)\s+)?(?:email\s+)?addresses?[.!?]?$/iu;
 const DIRECT_OTHER_RECIPIENT = /^(?:(?:email|mail)\s+(?!me\b|my\b|this\b|that\b|it\b)\S+(?:\s+(?:the|with|about|at)\b|[.!?]?$)|send\s+(?:an?\s+|the\s+)?email\s+to\s+(?!me\b|my\b)\S)/iu;
 
@@ -88,9 +88,10 @@ export function ownerEmailContent(args: unknown): { subject: string; body: strin
 
 // Hermes supplies either the tool text directly or its single text content item.
 export function ownerEmailProposalId(output: unknown): string | null {
-  if (typeof output !== 'string' || output.length > 500) return null;
+  if (typeof output === 'string' && output.length > 500) return null;
   try {
-    let value: any = JSON.parse(output);
+    let value: any = typeof output === 'string' ? JSON.parse(output) : output;
+    if (typeof value?.result === 'string') value = JSON.parse(value.result);
     const items = Array.isArray(value) ? value : value?.content;
     if (items !== undefined) {
       if (!Array.isArray(items) || items.length !== 1 || items[0]?.type !== 'text'

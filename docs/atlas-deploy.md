@@ -307,10 +307,10 @@ Email stays disabled until the Bot HQ service has valid sender mappings,
 recipient settings and dedicated SES credentials. A clear request to email
 the Owner authorizes one message from that Agent in the same authenticated
 chat turn. When confirmation is needed, the approval card shows the exact
-message and all recipients. The MCP tool stages the message. Bot HQ
-requires the proposal receipt from the matching active Hermes tool event
-before it can send, then posts the SES result in chat. Routines prepare
-drafts.
+message and all recipients. The MCP tool stages the message. Bot HQ checks
+the matching tool completion from a successful Hermes run and reads the
+scoped transcript when the event omits the receipt. It then sends and posts
+the SES result in chat. Routines prepare drafts.
 
 Set these values in the private `/etc/bot-hq/runtime.env`. Map each sender
 role to the exact ID of its registered Bot HQ Agent. Bot HQ derives the From
@@ -358,7 +358,7 @@ scoped live verification and rollback. Send harmless test mail to the approved
 inboxes and record status and SES receipt IDs. If activation fails, restore the
 previous reviewed release and runtime settings, then verify service health.
 
-For an unconfirmed submission, keep the matching request on hold. Inspect
+For an unconfirmed submission, keep that Agent's sending on hold. Inspect
 the exact `owner_email_sends` row by bot ID, generation and Owner row
 sequence and reconcile against recipient or provider evidence. With the
 Owner's named approval for Bot HQ, record `accepted` and the receipt ID

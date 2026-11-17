@@ -83,7 +83,6 @@ CREATE TABLE IF NOT EXISTS owner_email_sends (
   generation INTEGER NOT NULL,
   owner_seq INTEGER NOT NULL,
   payload_hash TEXT NOT NULL,
-  intent_hash TEXT NOT NULL,
   status TEXT NOT NULL,
   message_id TEXT,
   created_at INTEGER NOT NULL,

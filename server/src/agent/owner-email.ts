@@ -8,7 +8,6 @@ interface EmailTurn {
   generation: number;
   ownerSeq: number;
   review: boolean;
-  intentHash: string;
   envelope: { from: string; to: string[] };
 }
 
@@ -51,11 +50,10 @@ export async function dispatchOwnerEmail(
   const payloadHash = sha256(JSON.stringify([turn.envelope.from, turn.envelope.to, packet.subject, packet.body]));
   const first = turn.review ? 'review' : 'sending';
   const reserved = db.prepare(`INSERT OR IGNORE INTO owner_email_sends
-    (bot_id,generation,owner_seq,payload_hash,intent_hash,status,created_at,updated_at)
-    SELECT ?,?,?,?,?,?,?,? WHERE NOT EXISTS (
+    (bot_id,generation,owner_seq,payload_hash,status,created_at,updated_at)
+    SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (
       SELECT 1 FROM owner_email_sends WHERE bot_id=? AND status IN ('sending','uncertain')
-        AND (payload_hash=? OR intent_hash=?)
-    )`).run(...identity, payloadHash, turn.intentHash, first, now(), now(), turn.botId, payloadHash, turn.intentHash);
+    )`).run(...identity, payloadHash, first, now(), now(), turn.botId);
   if (!reserved.changes) {
     const existing = db.prepare(`SELECT status,message_id,payload_hash FROM owner_email_sends WHERE ${where}`)
       .get(...identity) as { status: EmailStatus; message_id: string | null; payload_hash: string } | undefined;

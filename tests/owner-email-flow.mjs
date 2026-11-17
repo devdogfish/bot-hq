@@ -57,8 +57,16 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
     if (url.pathname === '/v1/models') return Response.json({ data: [{ id: 'tyler' }] });
     if (url.pathname === '/v1/runs' && options.method === 'POST') {
       const { input: chat } = JSON.parse(options.body);
-      run = { id: 'test-run-' + ++runCount, chat, requestId: /Use request_id "([^"]+)"/.exec(chat)?.[1] };
+      run = { id: 'test-run-' + ++runCount, chat, requestId: /Use request_id "([^"]+)"/.exec(chat)?.[1],
+        receiptRows: [], lookups: 0 };
       return Response.json({ run_id: run.id });
+    }
+    if (url.pathname === `/v1/runs/${run.id}`) {
+      return Response.json({ run_id: run.id, session_id: 'fixture-session-' + runCount });
+    }
+    if (url.pathname === `/api/sessions/fixture-session-${runCount}/messages`) {
+      assert.equal(url.search, '?order=latest&limit=8');
+      return Response.json({ data: ++run.lookups === 1 ? [] : run.receiptRows });
     }
     if (url.pathname === `/v1/runs/${run.id}/events`) {
       return new Response(new ReadableStream({
@@ -125,9 +133,12 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
     return event;
   }
   function complete(event, receipt) {
-    emit('tool.completed', { ...event, error: false, preview: JSON.stringify({
-      content: [{ type: 'text', text: JSON.stringify(receipt) }],
-    }) });
+    // Canonical runs on the pinned Hermes release omit the completion preview.
+    if (!run.receiptRows.some((row) => row.tool_call_id === event.tool_call_id)) {
+      run.receiptRows.push({ role: 'tool', tool_call_id: event.tool_call_id,
+        content: JSON.stringify({ result: JSON.stringify(receipt) }) });
+    }
+    emit('tool.completed', { ...event, error: false, preview: '' });
   }
   async function waitTurn(before) {
     return until(() => runCount > before && run.stream && run, 'gateway did not start the expected turn');
@@ -160,36 +171,37 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   assert.equal(staged.status, 'staged');
   assert.equal(attempted.length, 0, 'MCP call committed mail without the authenticated run event');
   complete(actual, staged);
+  complete(announce(), forged);
+  complete(actual, staged);
+  finish();
   await notice('Email accepted by SES. Receipt fixture-1');
   assert.deepEqual(attempted[0].Destination, { ToAddresses: recipients });
   assert.equal(attempted[0].FromEmailAddress, 'tyler@example.org');
   assert.equal(attempted[0].Content.Simple.Body.Text.Data, fields.body);
   assert.equal(await pendingCard(), undefined);
-  complete(announce(), forged);
-  complete(actual, staged);
+  assert.equal(run.lookups, 2);
   assert.equal(attempted.length, 1);
-  finish();
   await idle();
 
   turn = await chat('Email me at owner@example.net with the status.');
   assert.ok(turn.requestId);
   complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+  finish();
   const { body: card } = await until(pendingCard, 'subset request must show the whole distribution');
   assert.equal(card.detail, `From: tyler@example.org\nTo: ${recipients.join(', ')}\nSubject: ${fields.subject}\n\n${fields.body}`);
   assert.equal(attempted.length, 1);
   await apiRequest('/approvals/' + card.approvalId, 'POST', { decision: 'allow' });
   await notice('Email accepted by SES. Receipt fixture-2');
   assert.equal(attempted[1].Content.Simple.Body.Text.Data, fields.body);
-  finish();
   await idle();
 
   for (const choice of ['deny', 'stop', 'pause']) {
     turn = await chat('Email me at owner@example.net with a different status.');
     complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+    finish();
     const { body: pending } = await until(pendingCard, 'expected an email approval before ' + choice);
     if (choice === 'deny') {
       await apiRequest('/approvals/' + pending.approvalId, 'POST', { decision: 'deny' });
-      finish();
     } else if (choice === 'stop') {
       await apiRequest(path + '/interrupt', 'POST');
     } else {
@@ -202,6 +214,13 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
     assert.equal(settled.body.detail, pending.detail);
     if (choice === 'pause') await apiRequest(path + '/pause', 'PATCH', { paused: false });
   }
+
+  turn = await chat('Please email me the status if ready.');
+  complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+  finish('run.incomplete');
+  await idle();
+  assert.equal(attempted.length, 2);
+  assert.equal(await pendingCard(), undefined);
 
   const priorRun = runCount;
   assert(enqueue(bot.id, { type: 'routine', routineId: 'test', name: 'Digest', prompt: 'Email me the status.' }));
@@ -216,9 +235,9 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   providerUncertain = true;
   turn = await chat('Send me an email with the latest status.');
   complete(announce(), await call({ ...fields, request_id: turn.requestId }));
+  finish();
   await notice('Delivery unconfirmed');
   assert.equal(attempted.length, 3);
-  finish();
   await idle();
   assert.deepEqual(await call({ ...fields, request_id: turn.requestId }), { status: 'draft_only' });
 
@@ -228,6 +247,14 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   finish();
   await idle();
   assert.equal(attempted.length, 3, 'an uncertain earlier send was repeated');
+
+  turn = await chat('Email me a different synthetic status.');
+  complete(announce(), await call({ subject: 'Different', body: 'A new message.', request_id: turn.requestId }));
+  finish();
+  await idle();
+  assert.equal(attempted.length, 3, 'sending resumed while a provider outcome was unconfirmed');
+  assert.equal(db.prepare("UPDATE owner_email_sends SET status='rejected' WHERE bot_id=? AND status='uncertain'")
+    .run(bot.id).changes, 1);
 
   turn = await chat('Email me the final report.');
   const stale = announce();
@@ -242,6 +269,7 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   heldSend = new Promise((resolve) => { release = resolve; });
   turn = await chat('Email me the follow-up.');
   complete(announce(), await call({ subject: 'Follow-up', body: 'New fixture.', request_id: turn.requestId }));
+  finish();
   await until(() => attempted.length === 4, 'expected an in-flight send');
   let resetDone = false;
   const reset = apiRequest(path + '/fresh', 'POST').then(() => { resetDone = true; });

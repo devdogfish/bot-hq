@@ -1,5 +1,5 @@
 import { db, now } from '../db.js';
-import { newId, sha256 } from '../lib/ids.js';
+import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
@@ -60,7 +60,11 @@ export function enqueue(botId: string, trigger: Trigger) {
   if (pauseRevision === undefined) return false;
   const queue = queueFor(botId);
   // A new message from the user supersedes an unanswered approval.
-  if (trigger.type === 'user') expireApprovals(botId);
+  if (trigger.type === 'user') {
+    const turn = turns.get(botId);
+    if (turn?.ownerEmail?.review) turn.ownerEmail = undefined;
+    expireApprovals(botId);
+  }
   const revision = queue.revision;
   const next = queue.tail.then(() => {
     if (queue.revision === revision) return runTurn(botId, trigger, pauseRevision);
@@ -138,9 +142,9 @@ interface OwnerEmailRequest {
   pauseRevision: number;
   review: boolean;
   envelope: { from: string; to: string[] };
-  intentHash: string;
   proposals: Map<string, OwnerEmailPacket>;
   consumed: boolean;
+  stagingClosed: boolean;
 }
 
 interface Turn {
@@ -195,7 +199,7 @@ export function stageOwnerEmail(botId: string, args: unknown): { status: 'draft_
   const turn = turns.get(botId);
   const request = turn?.ownerEmail;
   const draft = { status: 'draft_only' } as const;
-  if (!turn || !request || request.consumed || request.proposals.size >= 8
+  if (!turn || !request || request.stagingClosed || request.proposals.size >= 8
       || !emailTurnIsCurrent(turn, request) || !args || typeof args !== 'object' || Array.isArray(args)) return draft;
   const { request_id, ...mail } = args as Record<string, unknown>;
   if (request_id !== request.id) return draft;
@@ -206,9 +210,12 @@ export function stageOwnerEmail(botId: string, args: unknown): { status: 'draft_
   return { status: 'staged', proposalId };
 }
 
-async function completeOwnerEmailTool(turn: Turn, rowSeq: number, output: unknown, error: boolean): Promise<Outcome> {
+async function completeOwnerEmailTool(
+  turn: Turn, rowSeq: number, output: unknown, error: boolean, readResult: () => Promise<unknown>,
+): Promise<Outcome> {
   const request = turn.ownerEmail;
-  const proposalId = error ? null : ownerEmailProposalId(output);
+  if (!request || error || !request.proposals.size) return { status: 'denied', summary: 'Draft only' };
+  const proposalId = ownerEmailProposalId(output) ?? ownerEmailProposalId(await readResult());
   const packet = request && proposalId ? request.proposals.get(proposalId) : undefined;
   if (!request || !packet || request.consumed || !emailTurnIsCurrent(turn, request)) {
     return { status: 'denied', summary: 'Draft only' };
@@ -486,8 +493,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (role && envelope && policy !== 'draft') {
       turn.ownerEmail = {
         id: newId('email'), role, ownerSeq: trigger.chatRow.seq, generation: bot.generation,
-        pauseRevision, review: policy === 'review', envelope, consumed: false, proposals: new Map(),
-        intentHash: sha256(trigger.text.trim().toLowerCase().replace(/\s+/g, ' ')),
+        pauseRevision, review: policy === 'review', envelope, consumed: false, stagingClosed: false, proposals: new Map(),
       };
     }
   }
@@ -535,7 +541,9 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   let failed = false;
   let cancelled = false;
   let terminal = false;
+  let cleanCompletion = false;
   let remote: HermesRun | undefined;
+  let completedEmail: { ref: ToolRef; output: unknown; error: boolean } | undefined;
   const approvals = new Map<string, Promise<void>>();
 
   try {
@@ -684,9 +692,16 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         }
 
         case 'run.completed':
+          cleanCompletion = true;
+          terminal = true;
+          if (!completedEmail) turn.ownerEmail = undefined;
+          if (!wroteText && typeof d.output === 'string') say(d.output);
+          break;
+
         case 'run.incomplete':
           terminal = true;
           turn.ownerEmail = undefined;
+          expireApprovals(botId);
           if (!wroteText && typeof d.output === 'string') say(d.output);
           break;
 
@@ -715,10 +730,13 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
           ref.done = true;
           if (ref.ours && ref.name === OWNER_EMAIL_TOOL) {
             const completed = appToolName(String(item.name ?? ''));
-            const outcome = remote && !terminal && completed.ours && completed.name === OWNER_EMAIL_TOOL
-              ? await completeOwnerEmailTool(turn, ref.seq, item.output, Boolean(item.error))
-              : { status: 'denied', summary: 'Draft only' } as const;
-            if (getBotRow(botId)?.generation === bot.generation) patchToolRow(botId, ref.seq, outcome);
+            if (remote && !terminal && !completedEmail && turn.ownerEmail?.proposals.size && !item.error
+                && completed.ours && completed.name === OWNER_EMAIL_TOOL) {
+              turn.ownerEmail.stagingClosed = true;
+              completedEmail = { ref, output: item.output, error: Boolean(item.error) };
+            } else {
+              patchToolRow(botId, ref.seq, { status: 'denied', summary: 'Draft only' });
+            }
           } else {
             const told = turn.outcomes.get(ref.seq);
             const guess = readOutcome(item);
@@ -729,6 +747,15 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       }
     }
     if (remote && !terminal) throw new Error('Hermes closed the stream without a final run status.');
+    if (remote && cleanCompletion && completedEmail) {
+      // The Agent run has settled. Keep the Bot HQ turn open for the active mail proposal
+      // while reading its durable result and, if needed, waiting for the Owner's decision.
+      remoteRuns.delete(botId);
+      const run = remote;
+      const { ref, output, error } = completedEmail;
+      const outcome = await completeOwnerEmailTool(turn, ref.seq, output, error, () => run.toolResult(ref.callId));
+      if (getBotRow(botId)?.generation === bot.generation) patchToolRow(botId, ref.seq, outcome);
+    }
   } catch (e: any) {
     failed = true;
     const stopped = ctrl.signal.aborted || cancelled;
