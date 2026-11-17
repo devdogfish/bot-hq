@@ -2,6 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { Engine } from '../engine.js';
 import { setTimeout as delay } from 'node:timers/promises';
 
+const OWNER_EMAIL_TRANSCRIPT_TOOL = 'mcp__hq__send_owner_email';
+const OWNER_EMAIL_WRAPPER_START = `<untrusted_tool_result source="${OWNER_EMAIL_TRANSCRIPT_TOOL}">\n`;
+const OWNER_EMAIL_WRAPPER_END = '\n</untrusted_tool_result>';
+
 export interface ApprovalPrompt {
   promptId: string;
   generation: number;
@@ -104,7 +108,16 @@ export class HermesRun {
         if (!Array.isArray(page?.data)) return;
         const results = page.data.filter((row: any) => row?.role === 'tool'
           && typeof row.tool_call_id === 'string' && row.tool_call_id.split('|').map((id: string) => id.trim()).includes(callId));
-        if (results.length === 1) return results[0].content;
+        if (results.length === 1) {
+          const { content, tool_name: toolName } = results[0];
+          if (typeof content !== 'string' || !content.startsWith('<untrusted_tool_result')) return content;
+          if (toolName !== OWNER_EMAIL_TRANSCRIPT_TOOL || content.length > 500
+              || !content.startsWith(OWNER_EMAIL_WRAPPER_START) || !content.endsWith(OWNER_EMAIL_WRAPPER_END)) return;
+          // The gateway stores its warning on one line, then a blank line and the original MCP JSON.
+          const separator = content.indexOf('\n\n', OWNER_EMAIL_WRAPPER_START.length);
+          if (separator < 0 || content.indexOf('\n', OWNER_EMAIL_WRAPPER_START.length) !== separator) return;
+          return content.slice(separator + 2, -OWNER_EMAIL_WRAPPER_END.length);
+        }
         if (results.length > 1) return;
       }
     } catch { /* A missing or ambiguous result cannot authorize the send. */ }
