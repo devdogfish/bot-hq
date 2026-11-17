@@ -19,6 +19,7 @@ import { desSelfTest } from './lib/des.js';
 import { configApi } from './routes-config.js';
 import { mcpApi } from './mcp.js';
 import { initEngines } from './engine.js';
+import { agentHealthRoutes } from './agent-health.js';
 
 if (!desSelfTest()) throw new Error('DES self-test failed');
 initSubagents();
@@ -28,6 +29,7 @@ expireStaleApprovals();
 
 const app = new Hono();
 app.get('/api/health', (c) => c.json({ ok: true, engine: 'hermes' }));
+app.route('/api/agent-health', agentHealthRoutes(env.agentHealthTargets));
 // The app's tools for the agent engines (MCP).
 app.route('/mcp', mcpApi);
 app.route('/api/checkins', checkinsApi);

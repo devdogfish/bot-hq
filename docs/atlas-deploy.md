@@ -284,6 +284,23 @@ Register Sam, Stacy and Tyler per the [Agent hand-off](remote-agents.md).
 Download the per-bot MCP settings and deliver them through the approved Agent
 configuration workflow. Use the HTTPS MCP endpoint on port 8787.
 
+## Monitor Agent gateways
+
+Set `HQ_AGENT_HEALTH_TARGETS` in `runtime.env` to comma-separated
+`name=tailnet-ipv4` entries for the Agent gateways already in service. Begin
+with `HQ_AGENT_HEALTH_TARGETS=tyler=100.112.180.120`. The allowed targets are
+addresses in `100.64.0.0/10` on the Agent gateway port `8642`.
+
+In Uptime Kuma on Atlas VM 3358, add one HTTPS GET check every 60 seconds
+for each configured name. Start with
+`https://bot-hq.tail555ca5.ts.net/api/agent-health/tyler`. Require trusted TLS,
+HTTP 200, and zero redirects. The route reads the Agent's `/health` from Bot
+HQ on VM 3100.
+It returns 503 when the gateway is unhealthy and 404 for an unconfigured
+name. Kuma uses the existing Apps-to-Bot HQ HTTPS grant. Add the exact
+monitor name to the existing Kuma Healthchecks publisher after confirming
+its first healthy heartbeat.
+
 ## Verify and record
 
 | Probe | Expected |
@@ -291,6 +308,7 @@ configuration workflow. Use the HTTPS MCP endpoint on port 8787.
 | Owner's tailnet device opens 443 and signs in | HTTPS, then a stream and live noVNC watch/control |
 | Each Agent calls its own `/mcp/<botId>` on TCP 8787 | Authenticated JSON-RPC `ping` succeeds. Missing or wrong bearer returns 401 |
 | Agent requests `/api/health` and `/mcp/../api/health` on 8787 | No app response. Use `curl --path-as-is` for the traversal probe |
+| Agent requests `/mcp/../api/agent-health/tyler` on 8787 | Agent health status is inaccessible. Use `curl --path-as-is` |
 | Agent tries the 443 UI. Unrelated tailnet device tries both ports | Access denied |
 | Bot HQ checks each Agent's API health, screen and DevTools | The exact registered ports respond |
 | Bot HQ probes known Keep LAN, tailnet and home WAN paths | Keep endpoints unavailable via either path. Home router services unavailable |

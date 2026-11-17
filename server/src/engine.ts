@@ -7,6 +7,7 @@ import { homedir, userInfo } from 'node:os';
 import { libraryRoot } from './library.js';
 import { db } from './db.js';
 import { env } from './env.js';
+import { readHermesHealth as healthy } from './hermes-health.js';
 import type { EngineInfo, EngineProvider } from './types.js';
 
 /**
@@ -199,13 +200,6 @@ async function writeHome(botId: string): Promise<{ home: string; key: string }> 
 }
 
 // ---------- a managed bot's gateway ----------
-
-async function healthy(url: string, timeoutMs = 2500): Promise<any | null> {
-  try {
-    const r = await fetch(`${url}/health`, { redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
-    return r.ok ? await r.json() : null;
-  } catch { return null; }
-}
 
 async function keyAccepted(url: string, key: string): Promise<boolean> {
   try {
