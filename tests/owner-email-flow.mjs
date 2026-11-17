@@ -117,7 +117,7 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   const path = '/bots/' + bot.id;
   db.prepare('UPDATE bots SET hermes_url=?,hermes_key=? WHERE id=?')
     .run('http://127.0.0.1:29653', 'test-only-gateway-bearer', bot.id);
-  process.env.HQ_OWNER_EMAIL_TARGETS = JSON.stringify({ tyler: bot.id });
+  process.env.HQ_OWNER_EMAIL_TARGETS = JSON.stringify({ stacy: bot.id });
 
   async function rpc(id, method, params) {
     const response = await hq.request('/mcp/' + id, {
@@ -185,13 +185,14 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   finish();
   await notice('Email accepted by SES. Receipt fixture-1');
   assert.deepEqual(attempted[0].Destination, { ToAddresses: recipients });
-  assert.equal(attempted[0].FromEmailAddress, 'tyler@example.org');
+  assert.equal(attempted[0].FromEmailAddress, 'stacy@example.org');
   assert.equal(attempted[0].Content.Simple.Body.Text.Data, fields.body);
   assert.equal(await pendingCard(), undefined);
   assert.equal(run.lookups, 2);
   assert.equal(attempted.length, 1);
   await idle();
 
+  process.env.HQ_OWNER_EMAIL_TARGETS = JSON.stringify({ tyler: bot.id });
   for (const [wrapperSource, rowTool] of [
     ['mcp__elsewhere__send_owner_email', 'mcp__hq__send_owner_email'],
     ['mcp__hq__send_owner_email', 'mcp__elsewhere__send_owner_email'],
@@ -204,11 +205,11 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
     assert.equal(attempted.length, 1, 'receipt from a different tool must not send');
   }
 
-  turn = await chat('Email me at owner@example.net with the status.');
+  turn = await chat('Email me the status.');
   assert.ok(turn.requestId);
   complete(announce(), await call({ ...fields, request_id: turn.requestId }));
   finish();
-  const { body: card } = await until(pendingCard, 'subset request must show the whole distribution');
+  const { body: card } = await until(pendingCard, 'Tyler must show an approval card even for a direct request');
   assert.equal(card.detail, `From: tyler@example.org\nTo: ${recipients.join(', ')}\nSubject: ${fields.subject}\n\n${fields.body}`);
   assert.equal(attempted.length, 1);
   await apiRequest('/approvals/' + card.approvalId, 'POST', { decision: 'allow' });
@@ -257,6 +258,8 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   turn = await chat('Send me an email with the latest status.');
   complete(announce(), await call({ ...fields, request_id: turn.requestId }));
   finish();
+  const { body: uncertainCard } = await until(pendingCard, 'Tyler must request approval before provider submission');
+  await apiRequest('/approvals/' + uncertainCard.approvalId, 'POST', { decision: 'allow' });
   await notice('Delivery unconfirmed');
   assert.equal(attempted.length, 3);
   await idle();
@@ -291,6 +294,8 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   turn = await chat('Email me the follow-up.');
   complete(announce(), await call({ subject: 'Follow-up', body: 'New fixture.', request_id: turn.requestId }));
   finish();
+  const { body: followUpCard } = await until(pendingCard, 'Tyler must request approval before the follow-up');
+  await apiRequest('/approvals/' + followUpCard.approvalId, 'POST', { decision: 'allow' });
   await until(() => attempted.length === 4, 'expected an in-flight send');
   let resetDone = false;
   const reset = apiRequest(path + '/fresh', 'POST').then(() => { resetDone = true; });
