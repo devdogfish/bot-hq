@@ -123,3 +123,17 @@ waits. Bot HQ shows the returned command and reason with **Allow once** and
 Unattended turns deny prompts that require a human decision and post a
 notice. The guardian can still independently approve commands under
 `smart`. See the [Hermes Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#runs-api-streaming-friendly-alternative).
+
+## Jobs inbox monitoring
+
+Set `HQ_JOBS_MONITOR_BOT_ID` to Sam's exact Bot HQ record ID. Enable one
+routine named `Jobs inbox monitoring` after deploying the matching Jobs mail
+plugin on Sam. The routine calls `quantself_jobs_mail` with `{"monitor":true}`
+every five minutes. It reuses the existing per-Agent Bot HQ connection.
+
+Bot HQ stores the mailbox position with each notification and resumes from
+that position after restart. A completed scan while the inbox is quiet saves
+the check time without posting a message. A scan failure posts one alert.
+If Sam is busy, the scheduler skips that tick and posts an alert once the
+last confirmed check is more than 12 minutes old. Pause the routine to stop
+polling. The next check after resuming picks up from the saved position.
