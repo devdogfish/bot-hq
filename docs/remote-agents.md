@@ -60,7 +60,10 @@ Use the Python environment with the pinned Hermes API dependencies. Export
 `BOT_HQ_DRAFT_GATEWAY_KEY` with a unique secret of at least 32 characters.
 For Codex, enroll a dedicated Hermes credential separately. Its file and
 directory must be private, owned by the draft service account, and writable
-for refresh. Start the gateway with:
+for refresh. Use a distinct Codex account for each draft gateway. A fresh
+login can revoke other OAuth logins on the same account, including a live
+Agent's login. If separate accounts are unavailable, use inference-only API
+keys. Start a Codex-backed gateway with:
 
 ```sh
 /path/to/hermes-venv/bin/python -I scripts/draft-hermes.py \
