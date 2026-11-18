@@ -40,6 +40,68 @@ back** tells the Agent to inspect the screen again on its next turn.
   routines. Owner one-time sign-in, scheduled routines and xAI voice remain.
   Set `XAI_API_KEY` to enable voice and X research.
 
+## Draft-only gateway
+
+**Draft only** sends a single message to a separately configured Hermes process.
+It uses the approved role identity and the current message. Draft runs have no
+chat history, memory, tool schemas, or connector credentials. Bot HQ saves a
+reply after successful completion and uses the ordinary transcript and Stop
+controls. The regular Send button and Enter use the normal gateway.
+
+Start one draft gateway per enabled Bot under a dedicated service account.
+Give it read access to an unmodified pinned Hermes checkout and a standalone
+role identity file. Keep the service account away from normal Agent homes,
+connector credentials, screens, and client files. Keep its listener on
+loopback or an explicitly approved private route reachable only by Bot HQ.
+Permit outbound access only to its chosen inference and authentication endpoints.
+The ordinary Agent gateway can keep running throughout.
+
+Use the Python environment with the pinned Hermes API dependencies. Export
+`BOT_HQ_DRAFT_GATEWAY_KEY` with a unique secret of at least 32 characters.
+For Codex, enroll a dedicated Hermes credential separately. Its file and
+directory must be private, owned by the draft service account, and writable
+for refresh. Start the gateway with:
+
+```sh
+/path/to/hermes-venv/bin/python -I scripts/draft-hermes.py \
+  --hermes-source /path/to/pinned/hermes \
+  --persona /path/to/approved/SOUL.md \
+  --provider openai-codex --model MODEL --port 18764 \
+  --codex-auth /path/to/private/draft-auth/auth.json
+```
+
+An inference-only OpenAI key also works with `--provider openai` and
+`OPENAI_API_KEY`. A compatible HTTPS endpoint can be set with `--base-url`.
+For private routing, specify the exact bind address with `--host`.
+
+Set `HQ_DRAFT_GATEWAYS` in the Bot HQ service environment as a JSON object
+keyed by Bot ID, then restart Bot HQ to pick it up:
+
+```text
+{"BOT_ID":{"url":"http://127.0.0.1:18764","key":"DEDICATED_GATEWAY_KEY"}}
+```
+
+Use the isolated endpoint and its key. Bot HQ refuses configured ordinary
+gateway addresses and credentials. A draft gateway error appears in the
+transcript and ends the draft without falling back to regular chat. To
+disable drafts, remove the matching registration, restart Bot HQ, and
+stop the isolated gateway.
+
+Verify the tool boundary with the pinned Hermes Python environment and a
+scripted provider on loopback:
+
+```sh
+/path/to/hermes-venv/bin/python -I tests/draft-hermes.py \
+  --hermes-source /path/to/pinned/hermes --provider openai
+/path/to/hermes-venv/bin/python -I tests/draft-hermes.py \
+  --hermes-source /path/to/pinned/hermes --provider openai-codex
+npm run build
+node tests/draft-only.mjs
+```
+
+Set `HQ_TEST_CHROMIUM` to a Chromium executable to include the composer
+test at mobile width.
+
 ## Verify with an isolated Hermes gateway
 
 Use an unmodified [v0.23.1 checkout at `3b421578588243f920886e6fe79a6faa87ea026e`](https://github.com/NousResearch/hermes-agent/commit/3b421578588243f920886e6fe79a6faa87ea026e)

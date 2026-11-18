@@ -332,6 +332,61 @@ function ensureManaged(botId: string): Promise<void> {
   return p;
 }
 
+interface DraftBot {
+  id: string;
+  kind?: string;
+  engine?: string;
+  hermes_url?: string;
+  hermes_key?: string;
+}
+
+function gatewayOrigin(value: string): URL | undefined {
+  const url = URL.parse(value);
+  if (!url || !['https:', 'http:'].includes(url.protocol) || url.username || url.password ||
+      url.pathname !== '/' || url.search || url.hash) return;
+  return url;
+}
+
+function gatewayAddress(url: URL) {
+  const hostname = url.hostname.replace(/\.$/, '');
+  const host = ['localhost', '[::1]', '127.0.0.1'].includes(hostname) ? 'loopback' : hostname;
+  return `${host}:${url.port || (url.protocol === 'https:' ? '443' : '80')}`;
+}
+
+/** The deployment operator provides a separate, tool-free Runs gateway for each enabled bot. */
+export function draftEngineFor(bot: DraftBot): Engine | undefined {
+  if (bot.kind === 'room' || bot.id === process.env.HQ_TYLER_PERSONAL_BOT_ID) return;
+  const config = process.env.HQ_DRAFT_GATEWAYS;
+  if (!config) return;
+  let gateway: { url?: unknown; key?: unknown } | undefined;
+  try {
+    const entries = JSON.parse(config);
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries) || !Object.hasOwn(entries, bot.id)) return;
+    gateway = entries[bot.id];
+  } catch { return; }
+  if (typeof gateway?.url !== 'string' || typeof gateway.key !== 'string' || !/^[!-~]{1,4096}$/.test(gateway.key)) return;
+  const url = gatewayOrigin(gateway.url);
+  if (!url) return;
+
+  const registeredGateways = db.prepare(
+    'SELECT hermes_url, engine_port, hermes_key = ? AS same_key FROM bots WHERE hermes_url IS NOT NULL OR engine_port IS NOT NULL',
+  ).all(gateway.key) as { hermes_url: string | null; engine_port: number | null; same_key: number | null }[];
+  const origins = [
+    env.hermesUrl, bot.hermes_url,
+    ...registeredGateways.flatMap(({ hermes_url, engine_port }) =>
+      [hermes_url, engine_port ? `http://127.0.0.1:${engine_port}` : undefined]),
+  ];
+  const address = gatewayAddress(url);
+  for (const value of origins) {
+    const ordinary = value && gatewayOrigin(value);
+    if (ordinary && gatewayAddress(ordinary) === address) return;
+  }
+  const ordinaryKey = bot.hermes_key || (bot.engine === 'managed' ? managedKey(bot.id) : undefined);
+  if ([ordinaryKey, primaryKey(), mcpToken(bot.id), mcpToken('primary')].includes(gateway.key) ||
+      registeredGateways.some(({ same_key }) => same_key === 1)) return;
+  return { kind: 'remote', url: url.origin, key: gateway.key };
+}
+
 /** Where to send this bot's turns. Starts its gateway if it is not running. */
 export async function engineFor(botId: string): Promise<Engine> {
   let kind = engineKind(botId);
