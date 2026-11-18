@@ -9,7 +9,7 @@ import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieH
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, setBotPaused } from './agent/loop.js';
 import { computerState } from './computer.js';
-import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
+import { assignEngine, draftEngineFor, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
@@ -213,17 +213,20 @@ api.get('/bots/:id/rows', (c) => {
 });
 
 api.post('/bots/:id/messages', async (c) => {
-  const { text } = await c.req.json<{ text: string }>();
+  const { text, mode } = await c.req.json<{ text?: string; mode?: unknown }>();
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   if (b.paused) return c.json({ error: 'This bot is paused.' }, 409);
-  if (!text?.trim()) return c.json({ error: 'empty' }, 400);
-  const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: text.trim() });
+  if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'empty' }, 400);
+  if (mode !== undefined && mode !== 'draft') return c.json({ error: 'Invalid message mode.' }, 400);
+  const draftOnly = mode === 'draft';
+  if (draftOnly && !draftEngineFor(b)) return c.json({ error: 'Draft only is unavailable for this bot.' }, 409);
+  const input = text.trim();
+  const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: input, ...(draftOnly ? { draftOnly } : {}) });
   // Group chats dispatch to their member Bots instead of running their own loop.
-  if (b.kind === 'room') dispatchRoomMessage(b.id, text.trim(), enqueue);
-  // Any pending question card is answered by a free-text message.
-  else enqueue(b.id, { type: 'user', text: text.trim(), chatRow: { generation: row.generation, seq: row.seq } });
+  if (b.kind === 'room') dispatchRoomMessage(b.id, input, enqueue);
+  else enqueue(b.id, { type: 'user', text: input, chatRow: { generation: row.generation, seq: row.seq }, draftOnly });
   return c.json({ row });
 });
 
