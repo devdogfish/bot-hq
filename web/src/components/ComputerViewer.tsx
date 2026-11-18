@@ -68,6 +68,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     let disposed = false;
     let rfb: import('@novnc/novnc').default | undefined;
     let framebufferObserver: MutationObserver | undefined;
+    let stopWaitingForPaint: (() => void) | undefined;
     setConn('connecting');
     (async () => {
       const { default: RFB } = await import('@novnc/novnc');
@@ -94,9 +95,24 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
           framebufferObserver = new MutationObserver(readFramebuffer);
           framebufferObserver.observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
         }
-        hadFrame.current = true;
-        setConn('connected');
-        if (mode === 'control') rfb?.focus();
+        const show = () => {
+          if (disposed) return;
+          hadFrame.current = true;
+          setConn('connected');
+          if (mode === 'control') rfb?.focus();
+        };
+        const context = canvas?.getContext('2d');
+        if (!context) { show(); return; }
+
+        // The RFB handshake finishes before noVNC copies the first picture to this canvas.
+        // Observe that one copy without reading pixels back or intercepting later frames.
+        const drawImage = context.drawImage;
+        stopWaitingForPaint = () => { context.drawImage = drawImage; };
+        context.drawImage = (...args: [CanvasImageSource, number, number, ...number[]]) => {
+          Reflect.apply(drawImage, context, args);
+          stopWaitingForPaint?.();
+          show();
+        };
       });
       rfb.addEventListener('disconnect', (e) => { if (!disposed) setConn((e as CustomEvent<{ clean: boolean }>).detail?.clean ? 'disconnected' : 'error'); });
       rfb.addEventListener('securityfailure', () => { if (!disposed) setConn('error'); });
@@ -106,6 +122,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       disposed = true;
       try { rfb?.disconnect(); } catch { /* already closed */ }
       framebufferObserver?.disconnect();
+      stopWaitingForPaint?.();
       el.innerHTML = '';
     };
   }, [bot.id, wantLive, mode, attempt, screen?.revision]);
