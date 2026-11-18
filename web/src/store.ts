@@ -113,7 +113,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   selectBot(id) {
-    set({ selectedBotId: id });
+    if (get().selectedBotId !== id) {
+      set({ selectedBotId: id, viewerOpen: false, viewerMode: 'watch', viewerHint: null });
+    }
     lsSet(LS_SELECTED, id);
     const t = get().transcripts[id];
     if (!t?.loaded) get().loadRows(id).catch(console.error);

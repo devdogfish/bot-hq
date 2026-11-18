@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import type RFBType from '@novnc/novnc';
 import type { Bot } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
 import { botVars } from '../lib/colors';
@@ -35,7 +34,6 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const computer = useStore((s) => s.computer);
   const frameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
-  const rfbRef = useRef<RFBType | null>(null);
   const hadFrame = useRef(false);
 
   const [mode, setMode] = useState<ScreenMode>(initialMode);
@@ -43,14 +41,15 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const [attempt, setAttempt] = useState(0);
   const [fullscreen, setFullscreen] = useState(false);
   const [visible, setVisible] = useState(() => document.visibilityState === 'visible');
+  const [framebuffer, setFramebuffer] = useState<{ width: number; height: number }>();
   const [note, setNote] = useState<string | null>(null);
 
   const screen = computer?.screens.find((s) => s.botId === bot.id);
   const hasScreen = !!screen;
-  const { width, height } = screenSize(computer, bot.id, bot.isPrimary);
+  const { width, height } = framebuffer ?? screenSize(computer, bot.id, bot.isPrimary);
   const driving = mode === 'control';
   const large = variant === 'stage' || fullscreen;
-  const wantLive = hasScreen && !paused && (variant === 'stage' || visible);
+  const wantLive = hasScreen && !paused && visible;
 
   useEffect(() => {
     const on = () => setVisible(document.visibilityState === 'visible');
@@ -67,7 +66,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   useEffect(() => {
     if (!wantLive || !canvasRef.current) { setConn('idle'); return; }
     let disposed = false;
-    let rfb: RFBType | null = null;
+    let rfb: import('@novnc/novnc').default | undefined;
+    let framebufferObserver: MutationObserver | undefined;
     setConn('connecting');
     (async () => {
       const { default: RFB } = await import('@novnc/novnc');
@@ -80,16 +80,32 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       rfb.resizeSession = false;
       rfb.background = 'transparent';
       rfb.focusOnClick = mode === 'control';
-      rfb.addEventListener('connect', () => { if (!disposed) { hadFrame.current = true; setConn('connected'); if (mode === 'control') rfb?.focus(); } });
+      // noVNC's canvas backing dimensions track RFB desktop resizes as well as ServerInit.
+      const canvas = canvasRef.current.querySelector('canvas');
+      const readFramebuffer = () => {
+        if (!canvas?.width || !canvas.height) return;
+        const { width, height } = canvas;
+        setFramebuffer((previous) => previous?.width === width && previous.height === height ? previous : { width, height });
+      };
+      rfb.addEventListener('connect', () => {
+        if (disposed) return;
+        readFramebuffer();
+        if (canvas) {
+          framebufferObserver = new MutationObserver(readFramebuffer);
+          framebufferObserver.observe(canvas, { attributes: true, attributeFilter: ['width', 'height'] });
+        }
+        hadFrame.current = true;
+        setConn('connected');
+        if (mode === 'control') rfb?.focus();
+      });
       rfb.addEventListener('disconnect', (e) => { if (!disposed) setConn((e as CustomEvent<{ clean: boolean }>).detail?.clean ? 'disconnected' : 'error'); });
       rfb.addEventListener('securityfailure', () => { if (!disposed) setConn('error'); });
-      rfbRef.current = rfb;
     })().catch(() => { if (!disposed) setConn('error'); });
     const el = canvasRef.current;
     return () => {
       disposed = true;
       try { rfb?.disconnect(); } catch { /* already closed */ }
-      rfbRef.current = null;
+      framebufferObserver?.disconnect();
       el.innerHTML = '';
     };
   }, [bot.id, wantLive, mode, attempt, screen?.revision]);
@@ -97,6 +113,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   useEffect(() => { onModeChange?.(mode); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handBack = useCallback(() => {
+    setConn('connecting');
     setMode('watch');
     // The bot carries on either way; this only tells it sooner.
     configApi.handback(bot.id).catch(() => {});
@@ -109,11 +126,6 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     if (variant === 'panel' && !fullscreen && modeRef.current === 'control') handBack();
   }, [variant, fullscreen, handBack]);
 
-  useEffect(() => {
-    if (!note) return;
-    const t = setTimeout(() => setNote(null), 4000);
-    return () => clearTimeout(t);
-  }, [note]);
   useEffect(() => {
     if (!note) return;
     const timer = setTimeout(() => setNote(null), 4000);
@@ -129,7 +141,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
 
   const takeControl = () => {
     if (variant === 'panel' && !fullscreen) onExpand?.('control');
-    else setMode('control');
+    else {
+      setConn('connecting');
+      setMode('control');
+    }
   };
   const retry = () => {
     setAttempt((n) => n + 1);
@@ -139,7 +154,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     else frameRef.current?.requestFullscreen().catch(() => setNote('Full screen isn’t available here.'));
   };
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled;
-  const expandable = variant === 'panel' && !fullscreen && phase === 'live';
+  const canTakeControl = phase === 'live' && !driving;
   const mascot = large ? 64 : 40;
   const style = { ...botVars(bot.avatarColor), ['--screen-ratio' as string]: String(width / height) } as CSSProperties;
 
@@ -152,8 +167,9 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       <div className="screen__body">
         <div className="screen__view" style={{ aspectRatio: `${width} / ${height}` }}>
           <div ref={canvasRef} className="screen__canvas" />
-          {/* noVNC swallows clicks on its canvas, so the way into the large view is a button laid over it. */}
-          {expandable && <button type="button" className="screen__expand" onClick={() => onExpand?.('watch')} aria-label={`Open ${bot.name}’s computer in the large view`} title="Open the large view" />}
+          {canTakeControl && (
+            <button type="button" className="screen__takeover" onClick={takeControl} aria-label={`Take control of ${bot.name}’s computer`} />
+          )}
 
           {phase === 'live' && !driving && (
             <span className="screen__badge" aria-hidden>
@@ -195,28 +211,30 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
             </div>
           )}
 
-          {phase === 'live' && !driving && (
+          {phase === 'live' && !driving && !large && (
             <div className={`screen__pill${note ? ' is-pinned' : ''}`} role="toolbar" aria-label="Screen controls">
               {note && <span className="screen__pill-text" role="status">{note}</span>}
               <div className="screen__seg" role="group" aria-label="Who is using the screen">
-                <button type="button" className="screen__seg-btn is-active" aria-pressed="true">{large && <Icon name="eye" size={14} />}Watch</button>
-                <button type="button" className="screen__seg-btn" aria-pressed="false" onClick={takeControl}>{large && <Icon name="pointer" size={14} />}Take control</button>
+                <button type="button" className="screen__seg-btn" onClick={() => onExpand?.('watch')}>Open</button>
+                <button type="button" className="screen__seg-btn" aria-pressed="false" onClick={takeControl}>Take control</button>
               </div>
-              <span className="screen__pill-rule" aria-hidden />
               {canFullscreen && (
-                <button type="button" className="screen__pill-icon" onClick={toggleFullscreen} aria-label={fullscreen ? 'Leave full screen' : 'Full screen'} title={fullscreen ? 'Leave full screen' : 'Full screen'}>
-                  <Icon name={fullscreen ? 'shrink' : 'expand'} size={15} />
-                </button>
+                <>
+                  <span className="screen__pill-rule" aria-hidden />
+                  <button type="button" className="screen__pill-icon" onClick={toggleFullscreen} aria-label="Full screen" title="Full screen">
+                    <Icon name="expand" size={15} />
+                  </button>
+                </>
               )}
             </div>
           )}
         </div>
 
-        {driving && (
+        {(driving || large) && (
           <div className="screen__chin">
             <span className="screen__chin-text" role="status">
-              <i className="screen__ping" aria-hidden />
-              <span>{hint || 'You’re driving'}</span>
+              {driving && phase === 'live' && <i className="screen__ping" aria-hidden />}
+              <span>{note || (phase === 'live' ? driving ? hint || 'You have control' : 'Watching' : '')}</span>
             </span>
             <span className="screen__chin-actions">
               {canFullscreen && (
@@ -224,10 +242,11 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
                   <Icon name={fullscreen ? 'shrink' : 'expand'} size={15} />
                 </button>
               )}
-              <button type="button" className="screen__handback" onClick={handBack}>
-                <BotAvatarFor bot={bot} size={18} />
-                <span>Hand back to {bot.name}</span>
-              </button>
+              {driving ? (
+                <button type="button" className="screen__handback" onClick={handBack}>Return control</button>
+              ) : (
+                <button type="button" className="screen__handback" onClick={takeControl} disabled={!canTakeControl}>Take control</button>
+              )}
             </span>
           </div>
         )}
@@ -236,21 +255,24 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   );
 }
 
-/** The large computer view: the bot's screen on a dimmed stage, opened from the chat menu or the details panel. */
+/** The full-size computer pane, opened from the chat menu or the details panel. */
 export function ComputerViewer() {
   const bot = useSelectedBot();
-  const computer = useStore((s) => s.computer);
   const initialMode = useStore((s) => s.viewerMode);
   const hint = useStore((s) => s.viewerHint);
   const set = useStore((s) => s.set);
   const [mode, setMode] = useState<ScreenMode>(initialMode);
   const botId = bot?.id;
+  const currentMode = useRef(mode);
+  currentMode.current = mode;
+  useEffect(() => () => {
+    if (currentMode.current === 'control' && botId) configApi.handback(botId).catch(() => {});
+  }, [botId]);
 
   const close = useCallback(() => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    if (mode === 'control' && botId) configApi.handback(botId).catch(() => {});
     set({ viewerOpen: false, viewerMode: 'watch', viewerHint: null });
-  }, [mode, botId, set]);
+  }, [set]);
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -270,19 +292,17 @@ export function ComputerViewer() {
   if (!bot) return null;
 
   return (
-    <div className="viewer" role="dialog" aria-modal="true" aria-label={`${bot.name}’s computer`} style={botVars(bot.avatarColor)}>
-      <div className="viewer__scrim" onClick={mode === 'watch' ? close : undefined} />
+    <aside className="viewer" aria-label={`${bot.name}’s computer`} style={botVars(bot.avatarColor)}>
       <div className="viewer__top">
         <div className="viewer__title">
           <BotAvatarFor bot={bot} size={24} />
           <span>{bot.name}’s computer</span>
-          <span className="viewer__status">{computer?.screens.some((screen) => screen.botId === bot.id) ? 'Screen configured' : 'No screen configured'}</span>
         </div>
-        <button type="button" className="viewer__close" onClick={close} aria-label="Close computer"><Icon name="close" color="#FFFFFF" /></button>
+        <button type="button" className="viewer__close" onClick={close} aria-label="Close computer"><Icon name="close" /></button>
       </div>
       <div className="viewer__stage">
         <ComputerScreen key={bot.id} bot={bot} variant="stage" initialMode={initialMode} hint={hint} onModeChange={onModeChange} />
       </div>
-    </div>
+    </aside>
   );
 }

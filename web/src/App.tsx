@@ -18,7 +18,7 @@ function Shell() {
   const modal = useStore((s) => s.modal);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const collapsed = useStore((s) => s.sidebarCollapsed);
-  const hasBot = useStore((s) => !!s.selectedBotId);
+  const botId = useStore((s) => s.selectedBotId);
   const view = useConfigUI((s) => s.view);
 
   useEffect(() => {
@@ -44,15 +44,18 @@ function Shell() {
     return () => window.removeEventListener('keydown', k);
   }, []);
 
+  const showComputer = !!botId && view === 'chat' && viewerOpen;
+  const showDetails = !!botId && view === 'chat' && detailsOpen && !showComputer;
+
   return (
-    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${detailsOpen && hasBot && view === 'chat' ? ' has-details' : ''}`}>
+    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${showDetails ? ' has-details' : ''}`}>
       <Sidebar />
       {view === 'tasks' ? <TasksView /> : <ChatView />}
-      {detailsOpen && hasBot && view === 'chat' && <DetailsPanel />}
+      {showDetails && <DetailsPanel />}
       {modal === 'create' && <CreateBotModal />}
       {modal === 'group' && <CreateGroupModal />}
       {modal === 'search' && <SearchModal />}
-      {viewerOpen && <ComputerViewer />}
+      {showComputer && <ComputerViewer key={botId} />}
       <ConfigLayer />
     </div>
   );
