@@ -60,6 +60,22 @@ async def serve(args, key):
     import model_tools
     import run_agent
 
+    if args.provider == "openai":
+        from gateway import run as gateway_run
+
+        def resolve_draft_api_runtime():
+            # This worker has one configured API route. The stock resolver may
+            # infer a Codex OAuth route from a model also offered by Codex.
+            return gateway_run._runtime_agent_kwargs({
+                "provider": "custom",
+                "requested_provider": "custom",
+                "base_url": args.base_url or "https://api.openai.com/v1",
+                "api_key": os.environ["OPENAI_API_KEY"],
+                "api_mode": "chat_completions",
+            })
+
+        gateway_run._resolve_runtime_agent_kwargs = resolve_draft_api_runtime
+
     class DraftAgent(run_agent.AIAgent):
         def __init__(self, **options):
             allowed_modes = {"codex_responses"} if args.provider == "openai-codex" else {

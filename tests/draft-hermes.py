@@ -52,7 +52,7 @@ def main():
                 finish = "stop"
             envelope = {
                 "id": "test-completion", "object": "chat.completion.chunk",
-                "created": 1, "model": "draft-fixture",
+                "created": 1, "model": "gpt-6.1-sol",
             }
             return [
                 {**envelope, "choices": [{
@@ -64,7 +64,7 @@ def main():
         def codex_frames(attack):
             response = {
                 "id": "resp_fixture", "object": "response", "created_at": 1,
-                "model": "draft-fixture", "status": "in_progress", "output": [],
+                "model": "gpt-6.1-sol", "status": "in_progress", "output": [],
             }
             if attack:
                 item = {
@@ -158,7 +158,7 @@ module.main()
                 "--persona", str(persona),
                 "--port", str(port),
                 "--provider", args.provider,
-                "--model", "draft-fixture",
+                "--model", "gpt-6.1-sol",
                 *provider_args,
             ], env={
                 **os.environ,
@@ -244,7 +244,7 @@ module.main()
             for path, _, payload, provider_auth in requests:
                 assert path == expected_path, path
                 assert provider_auth == f"Bearer {bearer}"
-                assert payload["model"] == "draft-fixture", payload
+                assert payload["model"] == "gpt-6.1-sol", payload
                 assert not payload.get("tools") and not payload.get("tool_choice"), payload
                 assert "Preview Persona ZK-183" in json.dumps(payload), payload
                 messages.append(json.dumps(payload.get("messages") or payload["input"]))
@@ -252,7 +252,7 @@ module.main()
             assert attack_messages.count("ATTACK-ONLY-183") == 1 and "DRAFT-ONLY-183" not in attack_messages
             assert draft_messages.count("DRAFT-ONLY-183") == 1 and "ATTACK-ONLY-183" not in draft_messages
             assert not marker.exists() and not (workspace / "untrusted-home").exists()
-            assert all(probe == {"name": "draft-fixture"} for probe in metadata_probes), metadata_probes
+            assert all(probe == {"name": "gpt-6.1-sol"} for probe in metadata_probes), metadata_probes
             print(f"Pinned Hermes ({args.provider}): 2 inference calls with zero schemas, forged terminal failed before dispatch, normal text completed.")
         except Exception:
             print(log_path.read_text(encoding="utf-8"), file=sys.stderr)
