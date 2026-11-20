@@ -19,7 +19,7 @@ interface ScreenProps {
   initialMode?: ScreenMode;
   /** Replaces "You're driving" under the frame, e.g. a sign-in the person has to finish. */
   hint?: string | null;
-  /** Stop streaming and show a placeholder (the large view has this screen). */
+  /** Show a placeholder while the large view has this screen. */
   paused?: boolean;
   /** Panel only: the person asked for the large view, in this mode. */
   onExpand?: (mode: ScreenMode) => void;
@@ -37,6 +37,17 @@ type StreamFrame = {
   size?: { width: number; height: number };
 };
 type StreamListener = (frame: StreamFrame) => void;
+const EMPTY_FRAME: StreamFrame = { conn: 'idle', clipped: false, snapshot: null };
+
+function pixelGrid(dpr: number) {
+  // Compositors can snap the clipping layer to CSS pixels before scaling it.
+  // Use the nearest grid shared by CSS and device pixels at common zoom levels.
+  for (let step = 1; step <= 20; step++) {
+    const pixels = step * dpr;
+    if (Math.abs(pixels - Math.round(pixels)) < 0.001) return step;
+  }
+  return 1 / dpr;
+}
 
 // noVNC 1.7 exposes clipping and scaling flags, but delegates pixel geometry and
 // framebuffer presentation to its Display. Keep that version-specific integration here.
@@ -50,6 +61,7 @@ type NoVnc = RFBType & {
     height: number;
     absX(x: number): number;
     absY(y: number): number;
+    viewportChangePos(x: number, y: number): void;
     flush(): Promise<void>;
   };
   _screenSize(): { w: number; h: number };
@@ -88,12 +100,23 @@ class ScreenStream {
     this.placement = placement;
     const { native, dpr, pan } = placement;
     this.host.style.width = this.host.style.height = `${dpr * 100}%`;
-    this.host.style.transform = `scale(${1 / dpr})`;
+    this.host.style.transform = dpr === 1 ? 'none' : `scale(${1 / dpr})`;
     const rfb = this.rfb;
     if (!rfb) return;
     rfb.scaleViewport = !native;
     rfb.clipViewport = native;
-    rfb.dragViewport = native && rfb.clippingViewport && (this.mode === 'watch' || pan);
+    this.updateInput(native && rfb.clippingViewport, pan);
+  }
+
+  private updateInput(clipped: boolean, pan: boolean) {
+    const rfb = this.rfb;
+    if (!rfb) return;
+    const watch = this.mode === 'watch';
+    rfb.dragViewport = clipped && (watch || pan);
+    // noVNC treats a drag below its movement threshold as a click.
+    const viewOnly = watch || (clipped && pan);
+    if (rfb.viewOnly !== viewOnly) rfb.viewOnly = viewOnly;
+    rfb.focusOnClick = !viewOnly;
   }
 
   detach(listener: StreamListener) {
@@ -141,8 +164,13 @@ class ScreenStream {
       const display = rfb._display;
       const absX = display.absX.bind(display);
       const absY = display.absY.bind(display);
+      const moveViewport = display.viewportChangePos.bind(display);
       display.absX = (x) => absX(x * (this.placement?.dpr ?? 1));
       display.absY = (y) => absY(y * (this.placement?.dpr ?? 1));
+      display.viewportChangePos = (x, y) => {
+        const dpr = rfb.dragViewport ? this.placement?.dpr ?? 1 : 1;
+        moveViewport(x * dpr, y * dpr);
+      };
       rfb._screenSize = () => {
         const { clientWidth, clientHeight } = rfb._screen;
         if (this.placement?.native) return { w: clientWidth, h: clientHeight };
@@ -187,8 +215,7 @@ class ScreenStream {
       });
       rfb.addEventListener('clippingviewport', () => {
         if (this.rfb !== rfb) return;
-        const placement = this.placement;
-        rfb.dragViewport = rfb.clippingViewport && (this.mode === 'watch' || !!placement?.pan);
+        this.updateInput(rfb.clippingViewport, this.placement?.pan ?? false);
         this.publish();
       });
       rfb.addEventListener('disconnect', (event) => {
@@ -222,7 +249,7 @@ class ScreenStream {
     rfb?.disconnect();
   }
 
-  private capture() {
+  capture() {
     const buffer = this.rfb?._display._backbuffer;
     if (!this.painted || !buffer?.width || !buffer.height) return;
     const snapshot = document.createElement('canvas');
@@ -259,7 +286,10 @@ class ScreenEntry {
 
   release() {
     this.retain();
-    this.timer = setTimeout(() => disposeScreen(this), WATCH_GRACE_MS);
+    this.timer = setTimeout(() => {
+      this.timer = undefined;
+      this.watch.stop();
+    }, WATCH_GRACE_MS);
   }
 }
 
@@ -269,18 +299,19 @@ function disposeScreen(entry: ScreenEntry) {
   entry.retain();
   entry.watch.stop();
   entry.control.stop();
+  entry.snapshot = null;
   screenEntries.delete(entry.botId);
+}
+
+function sameScreen(a: ScreenRegistration, b: ScreenRegistration | undefined) {
+  return a.screenId === b?.screenId && a.revision === b.revision;
 }
 
 function getScreen(registration: ScreenRegistration) {
   const previous = screenEntries.get(registration.botId);
-  if (previous?.registration.screenId === registration.screenId &&
-      previous.registration.revision === registration.revision) return previous;
+  if (previous && sameScreen(previous.registration, registration)) return previous;
+  if (previous) disposeScreen(previous);
   const entry = new ScreenEntry(registration.botId, registration);
-  if (previous) {
-    disposeScreen(previous);
-    entry.snapshot = previous.snapshot;
-  }
   screenEntries.set(entry.botId, entry);
   return entry;
 }
@@ -294,6 +325,12 @@ function prewarmSelection(state: ReturnType<typeof useStore.getState>, previous?
   }
   if (previous && state.user?.id === previous.user?.id &&
       state.selectedBotId === previous.selectedBotId && state.computer === previous.computer) return;
+  if (state.computer !== previous?.computer) {
+    for (const entry of screenEntries.values()) {
+      const registration = state.computer?.screens.find((screen) => screen.botId === entry.botId);
+      if (!sameScreen(entry.registration, registration)) disposeScreen(entry);
+    }
+  }
   const registration = state.user && state.computer?.screens.find((screen) => screen.botId === state.selectedBotId);
   const next = registration ? getScreen(registration) : undefined;
   if (selectedScreen === next) return;
@@ -313,14 +350,16 @@ import.meta.hot?.dispose(() => {
 /** A panel preview or native-pixel stage for the Agent computer. */
 export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paused = false, onExpand, onModeChange }: ScreenProps) {
   const computer = useStore((s) => s.computer);
+  const userId = useStore((s) => s.user?.id);
   const frameRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<HTMLDivElement>(null);
   const activeStream = useRef<ScreenStream | null>(null);
 
   const [mode, setMode] = useState<ScreenMode>(initialMode);
-  const [frame, setFrame] = useState<StreamFrame>({ conn: 'idle', clipped: false, snapshot: null });
+  const [frame, setFrame] = useState<StreamFrame>(EMPTY_FRAME);
   const [fullscreen, setFullscreen] = useState(false);
   const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   const [pan, setPan] = useState(false);
@@ -351,6 +390,32 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     };
   }, [dpr]);
 
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    const body = bodyRef.current;
+    if (!large || !frame || !body) return;
+    const grid = pixelGrid(dpr);
+    // Align the rounded frame itself so the browser doesn't resample its clipped contents.
+    const align = () => {
+      const outer = frame.getBoundingClientRect();
+      const inner = body.getBoundingClientRect();
+      const x = outer.left + (outer.width - inner.width) / 2;
+      const y = outer.top + (outer.height - inner.height) / 2;
+      body.style.left = `${Math.round(x / grid) * grid - x}px`;
+      body.style.top = `${Math.round(y / grid) * grid - y}px`;
+    };
+    align();
+    const observer = new ResizeObserver(align);
+    observer.observe(frame);
+    observer.observe(body);
+    window.addEventListener('resize', align);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', align);
+      body.style.left = body.style.top = '';
+    };
+  }, [dpr, fullscreen, large]);
+
   const placement = useRef<Placement | null>(null);
   useLayoutEffect(() => {
     const target = streamRef.current;
@@ -360,8 +425,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   }, [large, dpr, pan]);
 
   useLayoutEffect(() => {
-    if (screenId === undefined || paused || !placement.current) return;
+    if (!userId || screenId === undefined || paused || !placement.current) {
+      setFrame(EMPTY_FRAME);
+      return;
+    }
     const entry = getScreen({ botId: bot.id, screenId, revision: screenRevision });
+    if (mode === 'control') entry.watch.capture();
     const stream = entry[mode];
     const update: StreamListener = setFrame;
     activeStream.current = stream;
@@ -372,12 +441,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       stream.detach(update);
       if (mode === 'control') stream.stop();
     };
-  }, [bot.id, screenId, screenRevision, mode, paused]);
+  }, [userId, bot.id, screenId, screenRevision, mode, paused]);
 
   useLayoutEffect(() => {
     const host = snapshotRef.current;
     const view = viewRef.current;
-    if (!snapshot || !host || !view) return;
+    if (!snapshot || !host || !view || paused || screenId === undefined || conn === 'connected') return;
     const canvas = document.createElement('canvas');
     canvas.className = 'screen__cached-frame';
     canvas.width = snapshot.width;
@@ -389,7 +458,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       const h = canvas.height * scale;
       Object.assign(canvas.style, {
         position: 'absolute', width: `${w}px`, height: `${h}px`,
-        left: `${Math.max(0, (view.clientWidth - w) / 2)}px`, top: `${Math.max(0, (view.clientHeight - h) / 2)}px`,
+        left: `${large ? 0 : Math.max(0, (view.clientWidth - w) / 2)}px`,
+        top: `${large ? 0 : Math.max(0, (view.clientHeight - h) / 2)}px`,
       });
     };
     host.append(canvas);
@@ -400,7 +470,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       observer.disconnect();
       canvas.remove();
     };
-  }, [snapshot, dpr, large]);
+  }, [snapshot, dpr, large, paused, screenId, conn]);
 
   useEffect(() => {
     if (mode === 'control' && conn === 'connected') activeStream.current?.focus();
@@ -447,7 +517,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled;
   const expandable = variant === 'panel' && !fullscreen && phase === 'live';
   const mascot = large ? 64 : 40;
-  const hasControls = driving || phase === 'live' || phase === 'switching';
+  const canTakeOver = phase === 'live' || phase === 'switching';
+  const hasControls = driving || canTakeOver || fullscreen;
   const panning = large && clipped && (!driving || pan);
   const style = {
     ...botVars(bot.avatarColor),
@@ -461,7 +532,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       className={`screen screen--${variant} is-${phase}${driving ? ' is-driving' : ''}${fullscreen ? ' is-fullscreen' : ''}${hasControls ? ' has-controls' : ''}${panning ? ' is-panning' : ''}`}
       style={style}
     >
-      <div className="screen__body">
+      <div ref={bodyRef} className="screen__body">
         <div ref={viewRef} className="screen__view" style={large ? undefined : { aspectRatio: `${width} / ${height}` }}>
           <div className="screen__canvas">
             <div ref={streamRef} className="screen__stream" />
@@ -513,10 +584,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
 
         {hasControls && (
           <div className={`screen__chin${driving ? '' : ' screen__chin--watch'}`}>
-            <span className="screen__chin-text" role="status">
-              <i className="screen__ping" aria-hidden />
-              <span>{driving ? hint || 'You’re driving' : 'Agent has control'}</span>
-            </span>
+            {(driving || canTakeOver) && (
+              <span className="screen__chin-text" role="status">
+                <i className="screen__ping" aria-hidden />
+                <span>{driving ? hint || 'You’re driving' : 'Agent has control'}</span>
+              </span>
+            )}
             <span className="screen__chin-actions">
               {driving && clipped && (
                 <button type="button" className="screen__pan" aria-pressed={pan} onClick={() => setPan(!pan)}>
@@ -533,7 +606,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
                   <BotAvatarFor bot={bot} size={18} />
                   <span>Hand back to {bot.name}</span>
                 </button>
-              ) : (
+              ) : canTakeOver && (
                 <button type="button" className="screen__takeover" onClick={takeControl} aria-label="Take control">Take over</button>
               )}
             </span>

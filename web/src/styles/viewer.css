@@ -29,7 +29,11 @@
 .screen__canvas, .screen__snapshot, .screen__stream { position: absolute; inset: 0; overflow: hidden; }
 .screen__snapshot { pointer-events: none; }
 .screen__stream > div { background: transparent !important; }
+.screen--stage .screen__stream > div > div, .screen.is-fullscreen .screen__stream > div > div { overflow: hidden !important; }
+.screen--stage .screen__stream canvas, .screen.is-fullscreen .screen__stream canvas { margin: 0 !important; }
 .screen__canvas canvas { cursor: default !important; }
+.screen.is-panning .screen__stream canvas { cursor: grab !important; }
+.screen.is-panning .screen__stream canvas:active { cursor: grabbing !important; }
 .screen__cached-frame { display: block; }
 .screen:not(.is-live) .screen__stream { visibility: hidden; }
 .screen.is-live .screen__snapshot { visibility: hidden; }
@@ -96,15 +100,17 @@
 .screen__ping { position: relative; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 .screen__ping::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: currentColor; animation: screen-ping 1.8s ease-out infinite; }
 @keyframes screen-ping { from { opacity: 0.6; transform: scale(1); } to { opacity: 0; transform: scale(2.8); } }
-.screen__chin-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.screen__chin-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; color: inherit; }
+.screen__chin-actions { display: flex; align-items: center; gap: 6px; min-width: 0; margin-left: auto; }
+.screen__chin-icon { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; color: inherit; flex-shrink: 0; }
 .screen__chin-icon:hover { background: color-mix(in srgb, currentColor 16%, transparent); }
 .screen__handback, .screen__takeover, .screen__pan {
   display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px 0 8px; border-radius: var(--radius-full);
   background: var(--bot-on-action); color: var(--bot-action); font-size: 13px; font-weight: 600; line-height: 18px; white-space: nowrap;
   transition: opacity 120ms var(--ease-out);
 }
-.screen__pan { background: transparent; color: inherit; padding: 0 10px; }
+.screen__handback { min-width: 0; }
+.screen__handback > span { overflow: hidden; text-overflow: ellipsis; }
+.screen__pan { background: transparent; color: inherit; padding: 0 10px; flex-shrink: 0; }
 .screen__pan:hover, .screen__pan[aria-pressed="true"] { background: color-mix(in srgb, currentColor 16%, transparent); }
 .screen__takeover { background: var(--bot-action); color: var(--bot-on-action); padding: 0 14px; }
 .screen__handback:hover { opacity: 0.9; }
@@ -125,7 +131,6 @@
 .viewer__close { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 50%; background: #FFFFFF1A; }
 .viewer__close:hover { background: #FFFFFF2E; }
 .viewer__stage { position: relative; flex: 1 1 0; min-height: 0; width: 100%; padding: 4px 28px 32px; display: flex; align-items: center; justify-content: center; pointer-events: none; }
-/* No scale in this entrance: noVNC fits the picture to the frame's on-screen size when it connects, so a
-   scaled frame would leave the picture slightly too small until the next resize. */
-.viewer__stage .screen__body { pointer-events: auto; animation: rise 200ms var(--ease-out); }
+/* Keep the canvas aligned with the device pixel grid throughout the entrance. */
+.viewer__stage .screen__body { pointer-events: auto; animation: fade 200ms var(--ease-out); }
 @media (prefers-reduced-motion: reduce) { .viewer__stage .screen__body { animation: none; } }
