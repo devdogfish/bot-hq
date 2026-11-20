@@ -79,6 +79,7 @@ class VoiceCall {
   private unsubStore: (() => void) | null = null;
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private hangup: ReturnType<typeof setTimeout> | 'draining' | null = null;
   private onUnload = () => { if (this.sess && !this.ended) voiceApi.endBeacon(this.botId, this.sess.callId, this.transcript()); };
 
   constructor(readonly botId: string) {
@@ -145,7 +146,10 @@ class VoiceCall {
         if (this.inflight.size) void this.finishTools(spoke);
         else this.flushNotes();
       },
-      settled: () => this.flushNotes(),
+      settled: () => {
+        if (this.hangup) void this.finishHangup();
+        else this.flushNotes();
+      },
       error: (message) => this.end(message),
       closed: (reason) => {
         if (this.ended) return;
@@ -219,11 +223,20 @@ class VoiceCall {
     const { output, isError } = await tool.promise;
     this.inflight.delete(id);
     if (this.ended) return;
-    if (reply) this.transport?.sendToolResult(id, output, isError);
     if (tool.name === 'end_the_call') {
-      await this.player.whenIdle(8000);
-      this.end();
-    } else this.flushNotes();
+      // ElevenLabs can send the farewell after the tool result.
+      this.hangup ??= setTimeout(() => { void this.finishHangup(); }, 8000);
+    }
+    if (reply) this.transport?.sendToolResult(id, output, isError);
+    this.flushNotes();
+  }
+
+  private async finishHangup() {
+    if (!this.hangup || this.hangup === 'draining') return;
+    clearTimeout(this.hangup);
+    this.hangup = 'draining';
+    await this.player.whenIdle(8000);
+    this.end();
   }
 
   private async finishTools(spoke: boolean) {
@@ -320,7 +333,7 @@ class VoiceCall {
 
   private flushNotes() {
     if (!this.ready || this.ended || !this.notes.length) return;
-    if (this.responseActive || this.userSpeaking || this.inflight.size) return;
+    if (this.responseActive || this.userSpeaking || this.inflight.size || this.hangup) return;
     if (this.player.playing) {
       if (!this.flushWaiting) {
         this.flushWaiting = true;
@@ -339,6 +352,7 @@ class VoiceCall {
     this.ended = true;
     window.removeEventListener('pagehide', this.onUnload);
     if (this.connectTimer) clearTimeout(this.connectTimer);
+    if (this.hangup && this.hangup !== 'draining') clearTimeout(this.hangup);
     if (this.checkTimer) clearTimeout(this.checkTimer);
     this.unsubStore?.();
     this.transport?.close();

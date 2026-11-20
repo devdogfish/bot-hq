@@ -159,9 +159,9 @@ api.post('/bots', async (c) => {
 });
 
 api.patch('/bots/:id', async (c) => {
+  const p = await c.req.json();
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const p = await c.req.json();
   if (p.voice_provider !== undefined && !isVoiceProviderId(p.voice_provider)) {
     return c.json({ error: 'Unknown voice provider' }, 400);
   }

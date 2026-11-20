@@ -13,9 +13,10 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
       method,
       headers: { 'xi-api-key': apiKey, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       body: body ? JSON.stringify(body) : undefined,
+      redirect: 'error',
       signal: AbortSignal.timeout(15_000),
     });
-    if (!response.ok) throw new Error(`ElevenLabs ${method} ${path.split('?')[0]} failed (HTTP ${response.status}).`);
+    if (!response.ok) throw new Error(`ElevenLabs ${method} request failed (HTTP ${response.status}).`);
     return response.json() as Promise<T>;
   }
 
@@ -43,7 +44,7 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
   const config = {
     conversation_config: {
       asr: { user_input_audio_format: 'pcm_24000' },
-      tts: { voice_id: ELEVENLABS_DEFAULT_VOICE, model_id: 'eleven_v4_turbo', agent_output_audio_format: 'pcm_24000' },
+      tts: { voice_id: ELEVENLABS_DEFAULT_VOICE, model_id: 'eleven_flash_v2_5', agent_output_audio_format: 'pcm_24000' },
       conversation: {
         client_events: [
           'conversation_initiation_metadata', 'audio', 'interruption', 'client_tool_call', 'user_transcript',
@@ -59,7 +60,9 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
           },
         },
       },
-      language_presets: Object.fromEntries([...languages].map((code) => [code, { overrides: {} }])),
+      language_presets: Object.fromEntries([...languages].map((code) => [
+        code, { overrides: code === 'bn' ? { tts: { model_id: 'eleven_v4_turbo' } } : {} },
+      ])),
     },
     platform_settings: {
       auth: { enable_auth: true },

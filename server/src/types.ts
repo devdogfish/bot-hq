@@ -200,7 +200,7 @@ export type VoiceSessionConfig =
       type: 'conversation_initiation_client_data';
       conversation_config_override: {
         agent: { prompt: { prompt: string }; first_message: string; language?: string };
-        tts: { voice_id: string; speed: number };
+        tts: { voice_id: string; speed?: number };
       };
     };
   };

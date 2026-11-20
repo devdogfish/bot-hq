@@ -17,11 +17,11 @@ async function request(path: string, timeout: number, init?: RequestInit) {
   const headers = new Headers(init?.headers);
   headers.set('xi-api-key', env.elevenlabsKey);
   const response = await fetch(`${ELEVENLABS_API}${path}`, {
-    ...init, headers, signal: AbortSignal.timeout(timeout),
+    ...init, headers, redirect: 'error', signal: AbortSignal.timeout(timeout),
   }).catch(() => null);
   if (response?.ok) return response;
   // Provider error bodies may include sensitive request data.
-  console.warn('[voice] ElevenLabs request failed', path.split('?')[0], response?.status ?? 'network error');
+  console.warn('[voice] ElevenLabs request failed', response?.status ?? 'network error');
   return null;
 }
 
@@ -54,10 +54,14 @@ export const elevenlabsProvider: VoiceProvider = {
   unavailableMessage: 'Set ELEVENLABS_API_KEY to use ElevenLabs voice.',
   listVoices,
   async startSession(settings) {
-    const query = new URLSearchParams({ agent_id: env.elevenlabsAgentId });
+    const query = new URLSearchParams({ agent_id: env.elevenlabsAgentId, include_conversation_id: 'true' });
     const response = await request(`/v1/convai/conversation/get-signed-url?${query}`, 15_000);
     const data = await response?.json().catch(() => null) as { signed_url?: string } | null | undefined;
-    if (typeof data?.signed_url !== 'string' || !data.signed_url.startsWith('wss://')) return null;
+    if (typeof data?.signed_url !== 'string') return null;
+    const url = URL.parse(data.signed_url);
+    if (url?.origin !== 'wss://api.elevenlabs.io' || url.pathname !== '/v1/convai/conversation'
+      || url.username || url.password || url.hash
+      || !(url.searchParams.get('conversation_signature') || url.searchParams.get('token'))) return null;
     const language = elevenlabsLanguage(settings.language);
     const greeting = greetings[language ?? 'en'] ?? 'Hi';
     return {
@@ -71,12 +75,13 @@ export const elevenlabsProvider: VoiceProvider = {
             first_message: settings.userFirstName ? `${greeting}, ${settings.userFirstName}!` : `${greeting}!`,
             ...(language ? { language } : {}),
           },
-          tts: { voice_id: settings.voice, speed: clampSpeed(settings.speed, MAX_SPEED) },
+          tts: { voice_id: settings.voice, ...(language !== 'bn' ? { speed: clampSpeed(settings.speed, MAX_SPEED) } : {}) },
         },
       },
     };
   },
   async preview({ voice, language, text, speed, codec }) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(voice)) return null;
     const outputFormat = codec === 'pcm' ? `pcm_${SAMPLE_RATE}` : 'mp3_44100_128';
     const languageCode = elevenlabsLanguage(language);
     const response = await request(`/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=${outputFormat}`, 30_000, {
@@ -86,12 +91,13 @@ export const elevenlabsProvider: VoiceProvider = {
         text,
         model_id: languageCode === 'bn' ? 'eleven_v3' : 'eleven_flash_v2_5',
         language_code: languageCode,
-        voice_settings: { speed: clampSpeed(speed, MAX_SPEED) },
+        ...(languageCode !== 'bn' ? { voice_settings: { speed: clampSpeed(speed, MAX_SPEED) } } : {}),
       }),
     });
-    if (!response) return null;
+    const body = await response?.arrayBuffer().catch(() => null);
+    if (!body) return null;
     return {
-      body: await response.arrayBuffer(),
+      body,
       contentType: codec === 'pcm' ? `audio/pcm;rate=${SAMPLE_RATE}` : 'audio/mpeg',
     };
   },

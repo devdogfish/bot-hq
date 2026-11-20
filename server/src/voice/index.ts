@@ -19,8 +19,8 @@ export const voiceApi = new Hono<AuthVars>();
 
 // ---------- helpers ----------
 
-function ownBot(userId: string, botId: string | undefined) {
-  if (!botId) return null;
+function ownBot(userId: string, botId: unknown) {
+  if (typeof botId !== 'string' || !botId) return null;
   const b = getBotRow(botId);
   return b && b.user_id === userId ? b : null;
 }
@@ -139,6 +139,11 @@ ${recent || '(no messages yet)'}`;
 interface ActiveCall { id: string; botId: string; userId: string; startedAt: number; startSeq: number; tasks: string[] }
 const calls = new Map<string, ActiveCall>();
 
+function ownCall(userId: string, botId: string, callId: string | undefined) {
+  const call = callId ? calls.get(callId) : undefined;
+  return call?.botId === botId && call.userId === userId ? call : undefined;
+}
+
 function callEvent(text: string, call: VoiceCallRecord): EventBody {
   return { type: 'event', event: 'voice-call', text, ref: call.id, call };
 }
@@ -158,8 +163,8 @@ voiceApi.get('/options', async (c) => {
 
 voiceApi.post('/session', async (c) => {
   const user = c.get('user');
-  const { botId } = await c.req.json<{ botId: string }>().catch(() => ({ botId: '' }));
-  const bot = ownBot(user.id, botId);
+  const body = await c.req.json<{ botId?: string } | null>().catch(() => null);
+  const bot = ownBot(user.id, body?.botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
   const provider = providerFor(bot.voice_provider);
   if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
@@ -177,7 +182,7 @@ voiceApi.post('/session', async (c) => {
   calls.set(callId, { id: callId, botId: bot.id, userId: user.id, startedAt: now(), startSeq: startRow.seq, tasks: [] });
   emitBot(bot.id);
 
-  return c.json({ callId, ...session });
+  return c.json({ callId, ...session }, 200, { 'Cache-Control': 'no-store' });
 });
 
 voiceApi.post('/tool', async (c) => {
@@ -186,7 +191,13 @@ voiceApi.post('/tool', async (c) => {
   const bot = ownBot(user.id, botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
   const a = args && typeof args === 'object' ? args : {};
-  const call = callId ? calls.get(callId) : undefined;
+  const call = ownCall(user.id, bot.id, callId);
+  if (!call) {
+    // Keep the legacy xAI relay without a call ID when xAI is configured.
+    const provider = providerFor(bot.voice_provider);
+    if (callId !== undefined || provider.id !== 'xai') return c.json({ error: 'Call not found' }, 404);
+    if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
+  }
 
   switch (name) {
     case 'send_task': {
@@ -270,8 +281,8 @@ voiceApi.post('/end', async (c) => {
   const { botId, callId, transcript, error } = await c.req.json<{ botId: string; callId: string; transcript?: { role: string; text: string }[]; error?: string }>();
   const bot = ownBot(user.id, botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
-  const call = calls.get(callId);
-  if (!call || call.botId !== bot.id) return c.json({ ok: true, duplicate: true });
+  const call = ownCall(user.id, bot.id, callId);
+  if (!call) return c.json({ ok: true, duplicate: true });
   calls.delete(callId);
 
   const durationMs = now() - call.startedAt;
@@ -296,7 +307,9 @@ setInterval(() => {
   for (const call of calls.values()) {
     if (now() - call.startedAt < 2 * 3600_000) continue;
     calls.delete(call.id);
-    appendRow(call.botId, 'event', callEvent('Voice call ended', { id: call.id, phase: 'ended', tasks: call.tasks }));
+    if (ownBot(call.userId, call.botId)) {
+      appendRow(call.botId, 'event', callEvent('Voice call ended', { id: call.id, phase: 'ended', tasks: call.tasks }));
+    }
   }
 }, 10 * 60_000).unref();
 
@@ -304,13 +317,14 @@ setInterval(() => {
 
 voiceApi.post('/preview', async (c) => {
   const user = c.get('user');
-  const p = await c.req.json<{ botId?: string; voice?: string; speed?: number; language?: string; text?: string; codec?: 'mp3' | 'pcm' }>().catch(() => ({} as any));
+  const p = await c.req.json<{ botId?: string; voice?: string; speed?: number; language?: string; text?: string; codec?: 'mp3' | 'pcm' } | null>().catch(() => null) ?? {};
   const bot = ownBot(user.id, p.botId);
+  if (p.botId !== undefined && !bot) return c.json({ error: 'not found' }, 404);
   const provider = providerFor(bot?.voice_provider);
   if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
   const s = settingsOf(bot ?? {}, defaultVoiceFor(provider.id));
   const voice = String(p.voice || s.voice).slice(0, 80);
-  const language = p.language && langName(p.language) ? p.language : s.language;
+  const language = typeof p.language === 'string' && langName(p.language) ? p.language : s.language;
   const text = String(p.text || `Hi, I'm ${bot?.name ?? 'your Bot'}. This is how I'll sound when we talk.`).slice(0, 400);
   const codec = p.codec === 'pcm' ? 'pcm' : 'mp3';
   const audio = await provider.preview({ voice, language, text, codec, speed: clampSpeed(p.speed ?? s.speed) });

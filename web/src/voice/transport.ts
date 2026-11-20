@@ -35,7 +35,7 @@ function socket(url: string, init: Json, handle: (ev: Json) => void, closed: Cal
   ws.onopen = () => send(init);
   ws.onmessage = (message) => {
     if (typeof message.data !== 'string') return;
-    try { handle(JSON.parse(message.data)); } catch (e) { console.warn('[voice] bad event', e); }
+    try { handle(JSON.parse(message.data)); } catch { console.warn('[voice] bad event'); }
   };
   ws.onclose = (e) => closed(e.reason);
   return {
@@ -128,10 +128,10 @@ function connectElevenLabs(session: Extract<VoiceSession, { provider: 'elevenlab
         return;
       case 'client_error':
       case 'error':
-        events.error(ev.client_error_event?.message ?? ev.error?.message ?? ev.message ?? 'Voice service error');
+        events.error('ElevenLabs voice service error');
         return;
     }
-  }, events.closed);
+  }, () => events.closed(''));
   return {
     sendAudio: (pcm) => send({ user_audio_chunk: pcmToBase64(resamplePcm(pcm, inputRate)) }),
     sendToolResult: (id, output, isError) => send({ type: 'client_tool_result', tool_call_id: id, result: output, is_error: isError }),

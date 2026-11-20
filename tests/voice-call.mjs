@@ -36,19 +36,23 @@ else {
   initRooms();
   const app = new Hono().route('/api', api);
   db.exec(`
-    INSERT INTO users (id, email, name, created_at) VALUES ('owner', 'owner@example.test', 'Jo Tester', 0);
-    INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES ('voice-test', 'owner', 0, 9999999999999);
-    INSERT INTO bots (id, user_id, name, created_at, updated_at, engine)
-      VALUES ('xai-bot', 'owner', 'Default', 0, 0, 'primary'), ('eleven-bot', 'owner', 'Relay', 0, 0, 'primary');
+    INSERT INTO users (id, email, name, created_at)
+      VALUES ('owner', 'owner@example.test', 'Jo Tester', 0), ('other', 'other@example.test', 'Other User', 0);
+    INSERT INTO auth_sessions (token, user_id, created_at, expires_at)
+      VALUES ('voice-test', 'owner', 0, 9999999999999), ('other-session', 'other', 0, 9999999999999);
+    INSERT INTO bots (id, user_id, name, instructions, created_at, updated_at, engine)
+      VALUES ('xai-bot', 'owner', 'Default', 'Default-only prompt', 0, 0, 'primary'),
+        ('eleven-bot', 'owner', 'Relay', 'Relay-only prompt', 0, 0, 'primary'),
+        ('other-bot', 'other', 'Other bot', 'Other-owner prompt', 0, 0, 'primary');
   `);
   const cookie = 'grokbot_session=voice-test';
   const signedUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?token=test-signed-token';
   const voiceId = 'fake-elevenlabs-voice';
   const pcm = Buffer.alloc(24).toString('base64');
 
-  function request(path, method = 'GET', data) {
+  function request(path, method = 'GET', data, sessionCookie = cookie) {
     return app.request(path, {
-      method, headers: { cookie, 'Content-Type': 'application/json' },
+      method, headers: { cookie: sessionCookie, 'Content-Type': 'application/json' },
       body: data === undefined ? undefined : JSON.stringify(data),
     });
   }
@@ -76,10 +80,12 @@ else {
       switch (url.host) {
         case 'api.elevenlabs.io':
           assert.equal(req.headers.get('xi-api-key'), 'test-elevenlabs-key');
+          assert.equal(req.redirect, 'error');
           switch (url.pathname) {
             case '/v1/convai/conversation/get-signed-url':
               assert.equal(req.method, 'GET');
               assert.equal(url.searchParams.get('agent_id'), 'test-agent');
+              assert.equal(url.searchParams.get('include_conversation_id'), 'true');
               return Response.json({ signed_url: signedUrl });
             case '/v2/voices':
               return url.searchParams.has('next_page_token')
@@ -239,6 +245,68 @@ else {
     assert.deepEqual(unavailable.voices, { xai: [], elevenlabs: [] });
   });
 
+  test('ElevenLabs sessions and tool calls are scoped to the owner and the active bot', async (t) => {
+    const calls = fakeHttp(t);
+    const otherCookie = 'grokbot_session=other-session';
+    await configureElevenBot();
+    assert.equal((await request('/api/voice/session', 'POST', { botId: 'eleven-bot' }, '')).status, 401);
+    assert.equal((await request('/api/voice/session', 'POST', { botId: 'eleven-bot' }, otherCookie)).status, 404);
+    assert.equal((await request('/api/voice/preview', 'POST', { botId: 'eleven-bot' }, otherCookie)).status, 404);
+    assert.equal(calls.length, 0);
+
+    const response = await request('/api/voice/session', 'POST', {
+      botId: 'eleven-bot', agentId: 'other-agent', prompt: 'Untrusted override',
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+    const body = await response.text();
+    assert.doesNotMatch(body, /test-elevenlabs-key|Untrusted override|Default-only prompt|Other-owner prompt/);
+    const session = JSON.parse(body);
+    assert.equal(session.signedUrl, signedUrl);
+    assert.match(session.initData.conversation_config_override.agent.prompt.prompt, /Relay-only prompt/);
+
+    const tool = (botId, callId, sessionCookie) =>
+      request('/api/voice/tool', 'POST', { botId, callId, name: 'peek_activity' }, sessionCookie);
+    assert.equal((await tool('eleven-bot', session.callId, otherCookie)).status, 404);
+    assert.equal((await tool('xai-bot', session.callId)).status, 404);
+    assert.equal((await tool('eleven-bot')).status, 404);
+    assert.equal((await tool('xai-bot')).status, 200);
+    assert.equal((await tool('eleven-bot', session.callId)).status, 200);
+    assert.equal((await request('/api/voice/end', 'POST', { botId: 'eleven-bot', callId: session.callId })).status, 200);
+    assert.equal((await tool('eleven-bot', session.callId)).status, 404);
+  });
+
+  test('ElevenLabs reports missing configuration and keeps upstream diagnostics out of logs', async (t) => {
+    const key = env.elevenlabsKey;
+    const agentId = env.elevenlabsAgentId;
+    t.after(() => { env.elevenlabsKey = key; env.elevenlabsAgentId = agentId; });
+    const fetch = t.mock.method(http, 'fetch', async () => Response.json({ detail: key }, { status: 401 }));
+    const warn = t.mock.method(console, 'warn', () => {});
+    await configureElevenBot();
+    env.elevenlabsKey = '';
+    const start = () => request('/api/voice/session', 'POST', { botId: 'eleven-bot' });
+    const missingKey = await start();
+    assert.equal(missingKey.status, 503);
+    assert.match((await missingKey.json()).error, /ELEVENLABS_API_KEY/);
+    assert.equal((await request('/api/voice/preview', 'POST', { botId: 'eleven-bot' })).status, 503);
+    const form = new FormData();
+    form.append('botId', 'eleven-bot');
+    form.append('file', new Blob([Buffer.alloc(400)]), 'call.webm');
+    assert.equal((await app.request('/api/voice/stt', { method: 'POST', headers: { cookie }, body: form })).status, 503);
+    env.elevenlabsKey = key;
+    env.elevenlabsAgentId = '';
+    const missingAgent = await start();
+    assert.equal(missingAgent.status, 503);
+    assert.match((await missingAgent.json()).error, /ELEVENLABS_AGENT_ID/);
+    assert.equal(fetch.mock.callCount(), 0);
+    env.elevenlabsAgentId = agentId;
+    const rejected = await start();
+    assert.equal(rejected.status, 502);
+    assert.equal((await rejected.text()).includes(key), false);
+    assert.equal(warn.mock.callCount(), 1);
+    assert.deepEqual(warn.mock.calls[0].arguments, ['[voice] ElevenLabs request failed', 401]);
+  });
+
   test('ElevenLabs mints, relays work, clears interrupted audio, and speaks the landed result', async (t) => {
     const calls = fakeHttp(t);
     const browser = fakeBrowser(t);
@@ -247,6 +315,7 @@ else {
     t.after(() => { endCall(); unsub(); });
     startCall('eleven-bot');
     const ws = await until(() => browser.socket[0], 'ElevenLabs socket did not open');
+    const callId = useVoice.getState().callId;
     assert.equal(ws.url, signedUrl);
     assert.equal(ws.protocols, undefined);
     ws.open();
@@ -295,7 +364,7 @@ else {
     const relays = calls.filter((c) => c.url.pathname === '/api/voice/tool');
     assert.equal(relays.length, 1);
     assert.deepEqual(JSON.parse(relays[0].body), {
-      botId: 'eleven-bot', callId: useVoice.getState().callId, name: 'send_task', args: { request: text },
+      botId: 'eleven-bot', callId, name: 'send_task', args: { request: text },
     });
     ws.receive({ type: 'agent_response_complete', agent_response_complete_event: { event_id: 4 } });
     const note = await until(() => ws.sent.find((ev) => ev.type === 'contextual_update'), 'Missing work_landed note');
@@ -305,13 +374,24 @@ else {
     ws.receive({ type: 'agent_response', agent_response_event: { event_id: 6, agent_response: 'It is sunny.' } });
     ws.receive({ type: 'audio', audio_event: { event_id: 6, audio_base_64: pcm } });
     assert.equal(browser.playback.length, 2);
-    endCall();
-    const ended = await until(() => listRows('eleven-bot').find((row) => row.body.call?.phase === 'ended'), 'No call record');
+    browser.playback.at(-1).onended();
+    ws.receive({ type: 'agent_response_complete' });
+    ws.receive({ type: 'client_tool_call', client_tool_call: { tool_call_id: 'hangup', tool_name: 'end_the_call' } });
+    await until(() => ws.sent.find((ev) => ev.tool_call_id === 'hangup'), 'Missing hangup tool result');
+    assert.equal(useVoice.getState().status, 'live');
+    ws.receive({ type: 'audio', audio_event: { event_id: 7, audio_base_64: pcm } });
+    assert.equal(browser.playback.length, 3);
+    ws.receive({ type: 'agent_response_complete' });
+    assert.equal(useVoice.getState().status, 'live');
+    browser.playback.at(-1).onended();
+    const ended = await until(() => listRows('eleven-bot').find((row) =>
+      row.body.call?.id === callId && row.body.call.phase === 'ended'), 'No call record');
     assert.deepEqual(ended.body.call.transcript, [
       { role: 'user', text }, { role: 'assistant', text: 'I’ll check.' }, { role: 'assistant', text: 'It is sunny.' },
     ]);
     assert.deepEqual(ended.body.call.tasks, [text]);
-    await until(() => listRows('eleven-bot').some((row) => row.body.call?.summary === 'Talked on a call.'), 'No call summary');
+    await until(() => listRows('eleven-bot').some((row) =>
+      row.body.call?.id === callId && row.body.call.summary === 'Talked on a call.'), 'No call summary');
   });
 
   test('xAI still greets, streams PCM, interrupts and batches tool results', async (t) => {
@@ -366,6 +446,7 @@ else {
       const url = new URL(input);
       const method = init.method;
       assert.equal(init.headers['xi-api-key'], 'test-elevenlabs-key');
+      assert.equal(init.redirect, 'error');
       if (url.pathname === '/v1/convai/tools' && method === 'GET') {
         assert.equal(url.searchParams.get('used_by_agent_id'), 'synced-agent');
         return Response.json({ tools: [...tools.values()], has_more: false });
@@ -385,6 +466,8 @@ else {
     assert.deepEqual([...tools.values()].map(({ tool_config }) => tool_config), VOICE_TOOLS.map(({ name, description, parameters }) =>
       ({ type: 'client', name, description, parameters, expects_response: true })));
     assert.deepEqual(agent.conversation_config.agent.prompt.tool_ids, [...tools.keys()]);
+    assert.equal(agent.conversation_config.tts.model_id, 'eleven_flash_v2_5');
+    assert.equal(agent.conversation_config.language_presets.bn.overrides.tts.model_id, 'eleven_v4_turbo');
     assert.ok(agent.conversation_config.conversation.client_events.includes('agent_response_complete'));
     assert.deepEqual(agent.platform_settings, {
       auth: { enable_auth: true },
