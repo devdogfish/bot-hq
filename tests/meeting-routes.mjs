@@ -170,6 +170,9 @@ test('gate applies direct address, follow-ups and bare cues from configured Owne
   const before = requests.length;
   assert.deepEqual(await ask('Priya', 'Anyone have updates?'), { decision: 'silent' });
   assert.deepEqual(await ask('Priya', 'Stacy, what is the status?'), { decision: 'respond' });
+  // Speech-to-text often spells the name differently.
+  assert.deepEqual(await ask('Priya', 'Hey Stacey, say something please.'), { decision: 'respond' });
+  assert.deepEqual(await ask('Priya', 'Staci, what is the status?'), { decision: 'respond' });
   assert.deepEqual(await ask('Priya', 'Which update?', 1000), { decision: 'respond' });
   assert.deepEqual(await ask('Owner', 'Mute yourself.'), { decision: 'silent' });
   assert.deepEqual(await ask('Jo Tester Jr.', 'Mute yourself.'), { decision: 'silent' });

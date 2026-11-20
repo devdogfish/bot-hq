@@ -130,9 +130,28 @@ meetingApi.post('/session', ...meetingRequest(16 * 1024, 6), async (c) => {
   }, 200, { 'Cache-Control': 'no-store' });
 });
 
+// Speech-to-text spells names freely: "Stacy" often comes back as "Stacey".
+const NAME_ENDINGS: readonly (readonly [string, readonly string[]])[] = [
+  ['ey', ['y', 'ie', 'i', 'ee']], ['ie', ['y', 'ey', 'i']], ['ee', ['y', 'ey', 'ie']], ['y', ['ey', 'ie', 'i', 'ee']], ['i', ['y', 'ey', 'ie']],
+];
+
+function spellingVariants(word: string): string[] {
+  const lower = word.toLowerCase();
+  const ending = NAME_ENDINGS.find(([end]) => lower.length > end.length + 2 && lower.endsWith(end));
+  return ending ? ending[1].map((alt) => word.slice(0, -ending[0].length) + alt) : [];
+}
+
 export function meetingAliases(name: string): string[] {
-  const first = name.normalize('NFKC').trim().split(/\s+/u)[0] ?? '';
-  return first && first.toLowerCase() !== name.normalize('NFKC').trim().toLowerCase() ? [first] : [];
+  const full = name.normalize('NFKC').trim();
+  const [first = '', ...rest] = full.split(/\s+/u);
+  const aliases = new Set<string>();
+  if (first && rest.length) aliases.add(first);
+  for (const variant of spellingVariants(first)) {
+    aliases.add(variant);
+    if (rest.length) aliases.add([variant, ...rest].join(' '));
+  }
+  aliases.delete(full);
+  return [...aliases];
 }
 
 meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
