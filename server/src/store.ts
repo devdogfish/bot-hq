@@ -14,7 +14,7 @@ export function toBot(r: any): Bot {
   if (last) {
     const b = JSON.parse(last.body) as RowBody;
     lastPreview =
-      b.type === 'message' ? b.text : b.type === 'card' ? (b.card === 'approval' ? `Waiting for you: ${b.title}` : b.card === 'question' ? b.question : b.card === 'connect' ? `Connect ${b.toolkitName}` : 'Draft') : b.type === 'event' ? b.text : null;
+      b.type === 'message' ? b.text : b.type === 'card' ? (b.card === 'approval' ? `Waiting for you: ${b.title}` : b.card === 'question' ? b.question : b.card === 'connect' ? `Connect ${b.toolkitName}` : b.card === 'secure-input' ? 'Secure input' : 'Draft') : b.type === 'event' ? b.text : null;
   }
   return {
     id: r.id,

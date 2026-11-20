@@ -1,4 +1,4 @@
-import type { ApprovalChoice, Bot, ComputerState, LiveState, Routine, Row, User } from '@shared/types';
+import type { ApprovalChoice, Bot, ComputerState, LiveState, Routine, Row, SecureInputKind, SecureInputResult, User } from '@shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -23,6 +23,19 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 
 export interface RoomMember { id: string; name: string; label: string; avatarShape: string; avatarColor: string }
 
+export interface OwnerSecretMetadata {
+  ref: string;
+  kind: SecureInputKind;
+  site: string;
+  label: string;
+  one_time: boolean;
+  expires_at: string | null;
+}
+
+type SecureInputDecision =
+  | { decision: 'submit'; fields: Record<string, string>; one_time?: boolean }
+  | { decision: 'decline' };
+
 export const api = {
   me: () => req<{ user: User | null; devLogin: boolean }>('GET', '/auth/me'),
   devLogin: (email: string, name?: string) => req<{ ok: true }>('POST', '/auth/dev', { email, name }),
@@ -40,6 +53,10 @@ export const api = {
   approve: (approvalId: string, decision: ApprovalChoice) => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
   answer: (id: string, seq: number, answer: string) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/answer`, { answer }),
   dismiss: (id: string, seq: number) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/dismiss`),
+
+  secureInput: (id: string, input: SecureInputDecision) => req<SecureInputResult>('POST', `/secure-input/${encodeURIComponent(id)}`, input),
+  ownerSecrets: (botId: string) => req<OwnerSecretMetadata[]>('GET', `/config/bots/${encodeURIComponent(botId)}/owner-secrets`),
+  revokeOwnerSecret: (botId: string, ref: string) => req<void>('DELETE', `/config/bots/${encodeURIComponent(botId)}/owner-secrets/${encodeURIComponent(ref)}`),
 
   routines: (id: string) => req<{ routines: Routine[] }>('GET', `/bots/${id}/routines`),
   setRoutine: (rid: string, enabled: boolean) => req<{ routine: Routine }>('PATCH', `/routines/${rid}`, { enabled }),

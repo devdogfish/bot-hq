@@ -4,6 +4,7 @@ import { configApi } from '../lib/configApi';
 import { useStore } from '../store';
 import { AgentConnection } from './AgentConnection';
 import { Icon } from './Icon';
+import { OwnerSecretShares } from './OwnerSecretShares';
 
 const KIND: Record<EngineProvider['kind'], string> = { subscription: 'Subscription', api_key: 'API key' };
 const STATUS: Record<EngineInfo['status'], string> = { ready: 'ready', starting: 'starting', stopped: 'stopped', error: 'error' };
@@ -59,6 +60,7 @@ export function EngineSettings({ bot }: { bot: Bot }) {
     return (
       <>
         {connection}
+        <OwnerSecretShares key={botId} botId={botId} />
       <div className="panel-card">
         <div className="panel-empty engine__empty">
           {phase === 'loading' ? 'Checking…' : (
@@ -115,6 +117,7 @@ export function EngineSettings({ bot }: { bot: Bot }) {
   return (
     <>
       {connection}
+      <OwnerSecretShares key={botId} botId={botId} />
       <div className="panel-card engine">
         <div className="panel-row panel-row--setting">
           <span>Provider</span>

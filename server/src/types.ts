@@ -86,7 +86,23 @@ export interface ToolCallBody {
 
 export type ApprovalChoice = 'once' | 'session' | 'always' | 'deny';
 
+export type SecureInputKind = 'login' | 'phone' | 'code' | 'text';
+export type SecureInputResult = { status: 'ready'; ref: string } | { status: 'declined' };
+
+export interface SecureInputCard {
+  type: 'card';
+  card: 'secure-input';
+  requestId: string;
+  kind: SecureInputKind;
+  site: string;
+  label: string;
+  reason: string;
+  oneTime: boolean;
+  status: 'pending' | SecureInputResult['status'];
+}
+
 export type CardBody =
+  | SecureInputCard
   | {
       type: 'card';
       card: 'approval';

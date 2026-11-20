@@ -101,3 +101,7 @@
 .agent-connection label { display: grid; gap: 4px; text-align: left; }
 .agent-connection input { width: 100%; min-width: 0; }
 .agent-connection button { justify-self: start; }
+
+.owner-secret-shares { list-style: none; padding: 0; margin: 0; }
+.owner-secret-shares .panel-row__meta { white-space: normal; }
+.owner-secret-shares .link-btn { flex-shrink: 0; }

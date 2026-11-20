@@ -7,6 +7,8 @@ interface RemoteAgentRow {
   websockify_url: string | null;
   vnc_password: string | null;
   cdp_port: number | null;
+  owner_secret_port: number;
+  owner_secret_token: string | null;
 }
 
 function endpoint(protocols: string[], allowPath: boolean) {
@@ -28,6 +30,8 @@ const settingsSchema = z.object({
   websockifyUrl: endpoint(['ws:', 'wss:'], true),
   vncPassword: z.string().regex(/^[\x20-\x7e]{0,8}$/, 'Use a VNC password of up to 8 ASCII characters.').optional(),
   cdpPort: z.number().int().min(1).max(65535).nullable(),
+  ownerSecretPort: z.number().int().min(1).max(65535).optional(),
+  ownerSecretToken: z.string().trim().max(4096).regex(/^[!-~]*$/, 'Enter a valid owner secret token.').optional(),
 });
 
 export function remoteAgentSettings(row: RemoteAgentRow) {
@@ -37,6 +41,8 @@ export function remoteAgentSettings(row: RemoteAgentRow) {
     websockifyUrl: row.websockify_url ?? '',
     vncPasswordSet: !!row.vnc_password,
     cdpPort: row.cdp_port,
+    ownerSecretPort: row.owner_secret_port,
+    ownerSecretTokenSet: !!row.owner_secret_token,
   };
 }
 
@@ -46,14 +52,33 @@ export function saveRemoteAgent(botId: string, current: RemoteAgentRow, input: u
   const { hermesUrl, websockifyUrl, cdpPort } = result.data;
   const hermesKey = hermesUrl && (result.data.hermesKey || (hermesUrl === current.hermes_url && current.hermes_key));
   const vncPassword = websockifyUrl && (result.data.vncPassword || (websockifyUrl === current.websockify_url && current.vnc_password));
+  const ownerSecretPort = result.data.ownerSecretPort ?? current.owner_secret_port;
+  const sameHermesHost = hermesUrl && current.hermes_url &&
+    new URL(hermesUrl).hostname === URL.parse(current.hermes_url)?.hostname;
+  const ownerSecretToken = hermesUrl && (result.data.ownerSecretToken ||
+    (sameHermesHost && current.owner_secret_token));
   if (hermesUrl && !hermesKey) return 'Enter the API key for this Hermes URL.';
+  if (result.data.ownerSecretToken && !hermesUrl) return 'Enter a Hermes URL to identify the owner secret host.';
   if (websockifyUrl && !vncPassword) return 'Enter the password for this VNC screen.';
   if (cdpPort !== null && !websockifyUrl) return 'Enter a websockify URL to identify the Chrome host.';
   const changedScreen = websockifyUrl !== current.websockify_url || (vncPassword || null) !== current.vnc_password;
   db.prepare(`UPDATE bots SET hermes_url=?, hermes_key=?, websockify_url=?, vnc_password=?, cdp_port=?,
-    screen_revision=screen_revision+? WHERE id=?`)
-    .run(hermesUrl, hermesKey || null, websockifyUrl, vncPassword || null, cdpPort, Number(changedScreen), botId);
+    owner_secret_port=?, owner_secret_token=?, screen_revision=screen_revision+? WHERE id=?`)
+    .run(hermesUrl, hermesKey || null, websockifyUrl, vncPassword || null, cdpPort,
+      ownerSecretPort, ownerSecretToken || null, Number(changedScreen), botId);
   return null;
+}
+
+export function getOwnerSecretTarget(botId: string): { baseUrl: string; token: string } | null {
+  const row = db.prepare('SELECT hermes_url, owner_secret_port, owner_secret_token FROM bots WHERE id=?')
+    .get(botId) as Pick<RemoteAgentRow, 'hermes_url' | 'owner_secret_port' | 'owner_secret_token'> | undefined;
+  if (!row?.hermes_url || !row.owner_secret_token) return null;
+  const hermesUrl = URL.parse(row.hermes_url);
+  if (!hermesUrl?.hostname) return null;
+  return {
+    baseUrl: new URL(`http://${hermesUrl.hostname}:${row.owner_secret_port}`).origin,
+    token: row.owner_secret_token,
+  };
 }
 
 /** Chrome and websockify run on the same Agent. Keep discovery on the registered host. */

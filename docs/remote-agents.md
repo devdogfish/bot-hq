@@ -23,6 +23,39 @@ VNC relay uses the password on the server. Watch mode filters mouse, keyboard,
 clipboard and screen resize input. **Take control** enables input and **Hand
 back** tells the Agent to inspect the screen again on its next turn.
 
+## Owner secure input
+
+In **Engine → Agent connection**, enter the owner-secret port (default 8655)
+and the per-Agent `OWNER_SECRET_TOKEN` from the Agent's vault. Bot HQ uses the
+registered Hermes hostname and reaches the vault service over HTTP inside
+Tailscale. Grant only `tag:bot-hq` access to that Agent's owner-secret port.
+The token is write-only in the UI. Leaving it blank keeps the saved token for
+the same hostname. Use the Owner's browser origin as `APP_URL`.
+
+When a task needs the Owner's own data, the Agent calls
+`hq.request_secure_input` during a Bot HQ turn with `kind`, the exact HTTPS
+origin as `site`, `label`, `reason`, and `one_time`. The tool returns a
+`pending` receipt and displays a **Secure input** card in the Owner's chat.
+The Owner can share or decline it. The Agent should wait for the next-turn
+notice with the same request ID and `ready` plus an opaque `ref`, or
+`declined`. For logins, use `quantself_website_account` `fill` with
+`item_id` set to that reference. For other kinds, use `fill_secret` with the
+reference. Both require the same site origin.
+
+Logins persist in the Agent's **Owner-shared** vault folder. Verification
+codes are one-time. Phone numbers are one-time unless remembered, and private
+text follows the request's `one_time` setting. The Agent vault expires
+one-time values after use or ten minutes. Open **Engine → Shared with this
+Agent** to see shared item metadata or revoke an item.
+
+The browser submits values to the authenticated, same-origin
+`POST /api/secure-input/:request_id`. Bot HQ forwards them to
+`POST /v1/owner-secrets` using the Agent token and retains only request
+metadata and resolution. Values stay out of Bot HQ's logs, SQLite, chat,
+and Agent notifications. A retry after an unconfirmed response uses the
+same request ID so the Agent can return the existing reference. Use the form
+for secrets and keep them out of chat.
+
 ## Benchmark the screen
 
 From the Bot HQ checkout, install dependencies with `npm ci`. Set

@@ -5,6 +5,7 @@ import { useStore } from '../../store';
 import { Icon } from '../Icon';
 import { Menu } from '../Menu';
 import { ToolkitLogo } from '../ToolkitLogo';
+import { SecureInputCard } from './SecureInputCard';
 
 type Card<K extends CardBody['card']> = Extract<CardBody, { card: K }>;
 
@@ -169,6 +170,7 @@ export function CardRow({ row }: { row: Row }) {
     case 'approval': return <ApprovalCard body={b} />;
     case 'question': return <QuestionCard row={row} body={b} />;
     case 'connect': return <div className="card">App connection unavailable · {b.toolkitName}</div>;
+    case 'secure-input': return <SecureInputCard key={b.requestId} body={b} />;
     case 'draft': return <DraftCard body={b} />;
     default: return null;
   }

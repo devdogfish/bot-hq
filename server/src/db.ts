@@ -78,6 +78,19 @@ CREATE TABLE IF NOT EXISTS approvals (
   created_at INTEGER NOT NULL,
   resolved_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS secure_input_requests (
+  request_id TEXT PRIMARY KEY,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  generation INTEGER NOT NULL,
+  row_seq INTEGER NOT NULL,
+  turn_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  ref TEXT,
+  notified INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS secure_input_notifications
+  ON secure_input_requests(bot_id, generation, connection_id) WHERE notified=0 AND status<>'pending';
 CREATE TABLE IF NOT EXISTS owner_email_sends (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
@@ -153,6 +166,8 @@ addColumn('bots', 'hermes_key', 'TEXT');
 addColumn('bots', 'websockify_url', 'TEXT');
 addColumn('bots', 'vnc_password', 'TEXT');
 addColumn('bots', 'cdp_port', 'INTEGER');
+addColumn('bots', 'owner_secret_port', 'INTEGER NOT NULL DEFAULT 8655');
+addColumn('bots', 'owner_secret_token', 'TEXT');
 addColumn('bots', 'screen_revision', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'paused', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'pause_revision', 'INTEGER NOT NULL DEFAULT 0');
