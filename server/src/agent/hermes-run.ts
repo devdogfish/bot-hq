@@ -15,6 +15,7 @@ export interface ApprovalPrompt {
   description: string;
   choices: ApprovalChoice[];
   patternKey?: string;
+  patternKeys?: string[];
 }
 
 export function isApprovalChoice(value: unknown): value is ApprovalChoice {
@@ -98,6 +99,11 @@ export class HermesRun {
       signal: AbortSignal.timeout(8_000),
     });
     if (!res.ok) throw new Error(`Hermes rejected the approval decision (HTTP ${res.status}).`);
+    const receipt = await res.json() as { status?: unknown; prompt_id?: unknown; resolved?: unknown; request_id?: unknown } | null;
+    // The session authority can return HTTP 200 when another actor already answered.
+    const confirmed = receipt?.status === 'resolved' && receipt.prompt_id === prompt.promptId
+      || receipt?.resolved === 1 && receipt.request_id === prompt.promptId;
+    if (!confirmed) throw new Error('Hermes did not confirm the approval decision.');
   }
 
   /** Pinned Hermes can omit a canonical tool result from SSE. Read only this run's latest messages. */

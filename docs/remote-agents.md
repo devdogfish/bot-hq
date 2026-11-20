@@ -154,8 +154,13 @@ A transport failure is reported as an error.
 With `smart` and a guardian escalation, `/v1/responses` attempted to send the
 prompt through the API platform's unsupported outbound messaging path. The
 Runs stream emits `approval.request` with the prompt identity while the run
-waits. Bot HQ shows the returned command and reason with **Allow once** and
-**Don't allow**. The same prompt identity and generation go back to Hermes.
+waits. Bot HQ shows the returned command, reason, and offered choices.
+**Allow for this run** and **Always allow** also resolve pending prompts in the
+same run when they offer that choice and require no additional approval rules.
+Each decision goes back to Hermes with its prompt identity and generation.
+Bot HQ withholds **Allow for this run** on the pinned gateway's session authority,
+where a `session` choice can persist into later turns of the same conversation.
+The session authority also omits the rule keys needed to group its pending cards.
 Unattended turns deny prompts that require a human decision and post a
 notice. The guardian can still independently approve commands under
 `smart`. See the [Hermes Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#runs-api-streaming-friendly-alternative).

@@ -479,13 +479,16 @@ export async function resolveApproval(userId: string, approvalId: string, choice
   const primary = sendApproval(ap, waiter, choice);
   const siblings: Promise<void>[] = [];
   const hermes = waiter.hermes;
-  if ((choice === 'session' || choice === 'always') && hermes?.prompt.patternKey) {
+  if ((choice === 'session' || choice === 'always') && hermes?.prompt.patternKey && hermes.prompt.patternKeys) {
+    const approvedKeys = new Set(hermes.prompt.patternKeys);
     // Hermes resolves exact prompt IDs. Reserve each eligible sibling before awaiting the first POST.
     for (const row of pendingApprovals(ap.bot_id)) {
       const sibling = waiters.get(row.id);
       if (!sibling || sibling.sending || !sibling.choices.includes(choice)) continue;
       if (sibling.hermes?.run !== hermes.run || sibling.hermes.prompt.generation !== hermes.prompt.generation
           || sibling.hermes.prompt.patternKey !== hermes.prompt.patternKey) continue;
+      // Hermes grants every rule on a prompt, so siblings with additional rules need separate consent.
+      if (!sibling.hermes.prompt.patternKeys?.every((key) => approvedKeys.has(key))) continue;
       siblings.push(sendApproval(row, sibling, choice, primary));
     }
   }
@@ -782,12 +785,24 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         case 'approval.request': {
           if (!remote || remote.stopRequested) break;
           const run = remote;
+          const patternKey = typeof d.pattern_key === 'string' && d.pattern_key ? d.pattern_key : undefined;
+          let patternKeys: string[] | undefined;
+          if (patternKey) {
+            if (d.pattern_keys === undefined) patternKeys = [patternKey];
+            else if (Array.isArray(d.pattern_keys) && d.pattern_keys.includes(patternKey)
+                && d.pattern_keys.every((key: unknown) => typeof key === 'string' && key.length > 0)) {
+              patternKeys = d.pattern_keys;
+            }
+          }
+          const choices = Array.isArray(d.choices) ? d.choices.filter(isApprovalChoice) : [];
           const prompt: ApprovalPrompt = {
             promptId: d.prompt_id, generation: d.execution_generation,
             command: typeof d.command === 'string' ? d.command : '',
             description: typeof d.description === 'string' ? d.description : '',
-            choices: Array.isArray(d.choices) ? d.choices.filter(isApprovalChoice) : [],
-            patternKey: typeof d.pattern_key === 'string' ? d.pattern_key : undefined,
+            // Pinned Hermes authority events use the conversation route for session grants.
+            // Until Hermes scopes those grants to the run, do not offer them as run-only consent.
+            choices: d.kind === 'approval' ? choices.filter((choice: ApprovalChoice) => choice !== 'session') : choices,
+            patternKey, patternKeys,
           };
           if (typeof prompt.promptId !== 'string' || !Number.isInteger(prompt.generation)) {
             throw new Error('Hermes returned an approval without its prompt identity.');

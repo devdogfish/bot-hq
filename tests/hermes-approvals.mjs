@@ -33,6 +33,8 @@ test('Hermes passes through approval choices, rejects unoffered choices, and res
   const hq = new Hono();
   hq.route('/api', api);
   const decisions = [];
+  const rejected = new Set();
+  const alreadyResolved = new Set();
   const encoder = new TextEncoder();
   let stream;
   function emit(type, data = {}) {
@@ -52,8 +54,11 @@ test('Hermes passes through approval choices, rejects unoffered choices, and res
       }));
     }
     if (url.pathname === '/v1/runs/fixture-run/approval' && options.method === 'POST') {
-      decisions.push(JSON.parse(options.body));
-      return Response.json({ ok: true });
+      const decision = JSON.parse(options.body);
+      decisions.push(decision);
+      if (rejected.has(decision.request_id)) return Response.json({ ok: false }, { status: 409 });
+      const status = alreadyResolved.has(decision.request_id) ? 'already_resolved' : 'resolved';
+      return Response.json({ status, prompt_id: decision.request_id });
     }
     if (url.pathname === '/v1/runs/fixture-run/stop') return Response.json({ ok: true });
     assert.fail('Unexpected gateway API path: ' + url.pathname);
@@ -83,40 +88,76 @@ test('Hermes passes through approval choices, rejects unoffered choices, and res
   await until(() => stream, 'Hermes event stream did not start');
   try {
     const choices = ['once', 'session', 'always', 'deny'];
-    const prompt = (id, pattern, offered) => emit('approval.request', {
-      prompt_id: id, execution_generation: 3, command: id, pattern_key: pattern, choices: offered,
+    const prompt = (id, pattern, offered, keys, kind) => emit('approval.request', {
+      prompt_id: id, execution_generation: 3, command: id,
+      pattern_key: pattern, pattern_keys: keys, choices: offered, kind,
     });
     prompt('first', 'shared', choices);
     prompt('sibling', 'shared', choices);
     prompt('limited', 'shared', ['once', 'deny']);
     prompt('separate', 'different', choices);
+    prompt('extra-rule', 'shared', choices, ['shared', 'independent-rule']);
+    prompt('always-sibling', 'different', choices, ['different']);
     const cards = async () => (await request(path + '/rows')).rows
       .map(({ body }) => body).filter((body) => body.card === 'approval');
-    const [first, sibling, limited, separate] = await until(async () => {
+    const [first, sibling, limited, separate, extraRule, alwaysSibling] = await until(async () => {
       const rows = await cards();
-      if (rows.length === 4) return rows;
-    }, 'expected four approval cards');
+      if (rows.length === 6) return rows;
+    }, 'expected six approval cards');
 
     assert.deepEqual(first.choices, choices);
     assert.deepEqual(limited.choices, ['once', 'deny']);
     const decide = (card, decision, status) => request('/approvals/' + card.approvalId, 'POST', { decision }, status);
     await decide(limited, 'always', 409);
     assert.deepEqual(decisions, [], 'unoffered choice must not reach Hermes');
-    assert.deepEqual((await cards()).map(({ status }) => status), ['pending', 'pending', 'pending', 'pending']);
+    assert.ok((await cards()).every(({ status }) => status === 'pending'));
 
     await decide(first, 'session');
     assert.deepEqual(decisions, [
       { request_id: 'first', execution_generation: 3, choice: 'session' },
       { request_id: 'sibling', execution_generation: 3, choice: 'session' },
     ]);
-    assert.deepEqual((await cards()).map(({ status }) => status), ['session', 'session', 'pending', 'pending']);
+    assert.deepEqual((await cards()).map(({ status }) => status), ['session', 'session', 'pending', 'pending', 'pending', 'pending']);
     await decide(sibling, 'deny');
     assert.equal(decisions.length, 2, 'resolved sibling must not send a decision');
 
     await decide(limited, 'once');
     assert.deepEqual(decisions.at(-1), { request_id: 'limited', execution_generation: 3, choice: 'once' });
-    await decide(separate, 'always');
-    assert.deepEqual(decisions.at(-1), { request_id: 'separate', execution_generation: 3, choice: 'always' });
+    await decide(extraRule, 'deny');
+    assert.deepEqual(decisions.at(-1), { request_id: 'extra-rule', execution_generation: 3, choice: 'deny' });
+
+    rejected.add('always-sibling');
+    const partial = await decide(separate, 'always', 409);
+    assert.equal(partial.error, 'Could not resolve every related approval.');
+    assert.deepEqual(decisions.slice(-2), [
+      { request_id: 'separate', execution_generation: 3, choice: 'always' },
+      { request_id: 'always-sibling', execution_generation: 3, choice: 'always' },
+    ]);
+    assert.deepEqual((await cards()).slice(-3).map(({ status }) => status), ['always', 'denied', 'pending']);
+    rejected.delete('always-sibling');
+    await decide(alwaysSibling, 'always');
+    assert.equal((await cards()).at(-1).status, 'always');
+
+    prompt('stale', 'same', choices);
+    prompt('still-pending', 'same', choices);
+    const [stale] = await until(async () => {
+      const rows = await cards();
+      if (rows.length === 8) return rows.slice(-2);
+    }, 'expected two additional approval cards');
+    alreadyResolved.add('stale');
+    const count = decisions.length;
+    await decide(stale, 'session', 409);
+    assert.equal(decisions.length, count + 1, 'unconfirmed primary must not resolve another prompt');
+    assert.equal((await cards()).at(-1).status, 'pending');
+
+    prompt('authority', undefined, choices, undefined, 'approval');
+    const authority = await until(async () => {
+      const rows = await cards();
+      if (rows.length === 9) return rows.at(-1);
+    }, 'expected an approval from the session authority');
+    assert.deepEqual(authority.choices, ['once', 'always', 'deny']);
+    await decide(authority, 'session', 409);
+    assert.equal(decisions.length, count + 1, 'conversation-scoped session choice must not reach Hermes');
   } finally {
     emit('run.completed');
     stream.close();

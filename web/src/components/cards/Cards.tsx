@@ -48,28 +48,26 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
       </div>
       {body.detail && <div className="card__body">{body.detail}</div>}
       {pending ? (
-        <>
-          <div className="card__actions">
-            {choices.includes('deny') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>}
-            {choices.includes('once') && <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('once')}>Allow once</button>}
-            {choices.includes('session') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('session')}>Allow for this run</button>}
-            {canAlwaysAllow && (
-              <div className="approval-card__menu">
-                <button type="button" className="btn btn--secondary" aria-label="More approval options" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!busy} onClick={() => setMenuOpen(true)}>
-                  <Icon name="more" />
-                </button>
-                {menuOpen && <Menu align="right" placement="above" onClose={() => setMenuOpen(false)} items={[{ label: 'Always allow', onSelect: () => decide('always') }]} />}
-              </div>
-            )}
-          </div>
-          {error && <div className="card__error">{error}</div>}
-        </>
+        <div className="card__actions">
+          {choices.includes('deny') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>}
+          {choices.includes('once') && <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('once')}>Allow once</button>}
+          {choices.includes('session') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('session')}>Allow for this run</button>}
+          {canAlwaysAllow && (
+            <div className="approval-card__menu">
+              <button type="button" className="btn btn--secondary" aria-label="More approval options" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!busy} onClick={() => setMenuOpen(true)}>
+                <Icon name="more" />
+              </button>
+              {menuOpen && <Menu align="right" placement="above" onClose={() => setMenuOpen(false)} items={[{ label: 'Always allow', onSelect: () => decide('always') }]} />}
+            </div>
+          )}
+        </div>
       ) : (
         <div className={`card__outcome is-${body.status}`}>
           <Icon name={body.status === 'denied' || body.status === 'expired' || body.status === 'unconfirmed' ? 'close' : 'check'} size={12} opacity={0.7} />
           {APPROVAL_OUTCOME[body.status] ?? body.status}
         </div>
       )}
+      {error && <div className="card__error" role="alert">{error}</div>}
     </div>
   );
 }
