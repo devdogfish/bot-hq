@@ -14,7 +14,8 @@ import { assignEngine, draftEngineFor, provisionEngine, removeEngine, syncPerson
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
 import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
-import { voiceApi } from './voice.js';
+import { voiceApi } from './voice/index.js';
+import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
 import type { AvatarColor, AvatarShape } from './types.js';
 import { isSharingSecureInput } from './secure-input.js';
 
@@ -158,9 +159,17 @@ api.post('/bots', async (c) => {
 });
 
 api.patch('/bots/:id', async (c) => {
+  const p = await c.req.json();
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const p = await c.req.json();
+  if (p.voice_provider !== undefined && !isVoiceProviderId(p.voice_provider)) {
+    return c.json({ error: 'Unknown voice provider' }, 400);
+  }
+  if (p.voice_provider !== undefined && p.voice_provider !== b.voice_provider) {
+    db.prepare('UPDATE bots SET voice_provider=?, voice=?, updated_at=? WHERE id=?')
+      .run(p.voice_provider, p.voice || defaultVoiceFor(p.voice_provider), now(), b.id);
+    delete p.voice;
+  }
   const cols: Record<string, string> = { name: 'name', label: 'label', description: 'description', instructions: 'instructions', avatarShape: 'avatar_shape', avatarColor: 'avatar_color', mode: 'mode', effort: 'effort', pinned: 'pinned', voice: 'voice', voiceSpeed: 'voice_speed', voiceLanguage: 'voice_language' };
   for (const [k, col] of Object.entries(cols)) {
     if (p[k] !== undefined) db.prepare(`UPDATE bots SET ${col}=?, updated_at=? WHERE id=?`).run(typeof p[k] === 'boolean' ? (p[k] ? 1 : 0) : p[k], now(), b.id);

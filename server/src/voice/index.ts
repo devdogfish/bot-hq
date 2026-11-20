@@ -1,78 +1,26 @@
-// Voice calls, the way Grok Bot does them: a second, lightweight voice agent runs in the browser against
-// the xAI realtime API, speaks as the bot, and relays real work to the bot's main text agent loop.
-// This module mints the ephemeral secret, builds the voice agent's prompt and tools, serves the relay
-// tools, records call start/end rows, and proxies TTS (voice preview) and STT (composer dictation).
 import { Hono } from 'hono';
 import OpenAI from 'openai';
-import { db, now } from './db.js';
-import { env } from './env.js';
-import { newId } from './lib/ids.js';
-import type { AuthVars } from './lib/auth.js';
-import { appendRow, emitBot, getBotRow, getLive, listRoutines, listTasks, updateRow } from './store.js';
-import { enqueue, isBotResetting } from './agent/loop.js';
-import { computerState } from './computer.js';
-import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOption } from './types.js';
-import { listMemories } from './engine-memory.js';
+import { db, now } from '../db.js';
+import { env } from '../env.js';
+import { newId } from '../lib/ids.js';
+import type { AuthVars } from '../lib/auth.js';
+import { appendRow, emitBot, getBotRow, getLive, listRoutines, listTasks, updateRow } from '../store.js';
+import { enqueue, isBotResetting } from '../agent/loop.js';
+import { computerState } from '../computer.js';
+import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOptions } from '../types.js';
+import { listMemories } from '../engine-memory.js';
+
+import { LANGUAGES, SPEEDS, clampSpeed, langName, settingsOf } from './settings.js';
+import type { VoiceProvider } from './provider.js';
+import { defaultVoiceFor, providerFor, voiceProviders } from './providers.js';
+import { XAI } from './xai.js';
 
 export const voiceApi = new Hono<AuthVars>();
-voiceApi.use('*', async (c, next) => env.xaiKey ? next() : c.json({ error: 'Set XAI_API_KEY to use voice.' }, 503));
-
-const XAI = 'https://api.x.ai/v1';
-const VOICE_MODEL = process.env.XAI_VOICE_MODEL ?? 'grok-voice-latest';
-const STT_MODEL = process.env.XAI_STT_MODEL ?? 'grok-voice-transcribe-2.0';
-const SAMPLE_RATE = 24000;
-const xaiHeaders = () => ({ Authorization: `Bearer ${env.xaiKey}` });
-
-// ---------- voices / languages ----------
-
-const FALLBACK_VOICES: VoiceOption[] = [
-  ['altair', 'm'], ['ara', 'f'], ['atlas', 'm'], ['aurora', 'f'], ['carina', 'f'], ['castor', 'm'], ['celeste', 'f'], ['cosmo', 'm'],
-  ['eve', 'f'], ['helios', 'm'], ['helix', 'm'], ['iris', 'f'], ['kepler', 'm'], ['leo', 'm'], ['liora', 'f'], ['lumen', 'm'],
-  ['luna', 'f'], ['lux', 'm'], ['naksh', 'm'], ['orion', 'm'], ['perseus', 'm'], ['rex', 'm'], ['rigel', 'm'], ['sal', 'm'],
-  ['sirius', 'm'], ['ursa', 'f'], ['zagan', 'm'], ['zenith', 'm'],
-].map(([id, g]) => ({ id, name: id[0].toUpperCase() + id.slice(1), gender: g === 'f' ? 'female' : 'male' }));
-
-export const LANGUAGES: { code: string; name: string }[] = [
-  { code: 'auto', name: 'Auto-detect' }, { code: 'en', name: 'English' }, { code: 'ar-EG', name: 'Arabic (Egypt)' },
-  { code: 'ar-SA', name: 'Arabic (Saudi Arabia)' }, { code: 'ar-AE', name: 'Arabic (UAE)' }, { code: 'bn', name: 'Bengali' },
-  { code: 'zh', name: 'Chinese' }, { code: 'fr', name: 'French' }, { code: 'de', name: 'German' }, { code: 'hi', name: 'Hindi' },
-  { code: 'id', name: 'Indonesian' }, { code: 'it', name: 'Italian' }, { code: 'ja', name: 'Japanese' }, { code: 'ko', name: 'Korean' },
-  { code: 'pt-BR', name: 'Portuguese (Brazil)' }, { code: 'pt-PT', name: 'Portuguese (Portugal)' }, { code: 'ru', name: 'Russian' },
-  { code: 'es-MX', name: 'Spanish (Mexico)' }, { code: 'es-ES', name: 'Spanish (Spain)' }, { code: 'tr', name: 'Turkish' }, { code: 'vi', name: 'Vietnamese' },
-];
-export const SPEEDS = [0.7, 0.85, 1, 1.15, 1.3, 1.5];
-
-let voiceCache: { at: number; voices: VoiceOption[] } | null = null;
-async function listVoices(): Promise<VoiceOption[]> {
-  if (voiceCache && Date.now() - voiceCache.at < 3600_000) return voiceCache.voices;
-  try {
-    const r = await fetch(`${XAI}/tts/voices`, { headers: xaiHeaders(), signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const j = (await r.json()) as { voices?: { voice_id: string; name?: string; gender?: string }[] };
-    const voices = (j.voices ?? []).map((v) => ({ id: v.voice_id, name: v.name ?? v.voice_id, gender: v.gender }));
-    if (!voices.length) throw new Error('empty list');
-    voiceCache = { at: Date.now(), voices };
-  } catch (e: any) {
-    console.warn('[voice] voice list unavailable, using static list:', e?.message);
-    voiceCache = { at: Date.now() - 3000_000, voices: FALLBACK_VOICES }; // retry in ~10 min
-  }
-  return voiceCache.voices;
-}
-
-const clampSpeed = (s: unknown) => {
-  const n = Number(s);
-  return Number.isFinite(n) ? Math.min(1.5, Math.max(0.7, n)) : 1;
-};
-const langName = (code: string) => LANGUAGES.find((l) => l.code.toLowerCase() === code?.toLowerCase())?.name;
-function settingsOf(bot: any) {
-  const language = langName(bot.voice_language) ? String(bot.voice_language) : 'auto';
-  return { voice: String(bot.voice || 'luna'), speed: clampSpeed(bot.voice_speed ?? 1), language };
-}
 
 // ---------- helpers ----------
 
-function ownBot(userId: string, botId: string | undefined) {
-  if (!botId) return null;
+function ownBot(userId: string, botId: unknown) {
+  if (typeof botId !== 'string' || !botId) return null;
   const b = getBotRow(botId);
   return b && b.user_id === userId ? b : null;
 }
@@ -129,42 +77,6 @@ function activitySnapshot(botId: string) {
 }
 
 // ---------- the voice agent ----------
-
-const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
-
-export const VOICE_TOOLS = [
-  {
-    type: 'function', name: 'send_task',
-    description: 'Hand real work to yourself (your full text agent, which has your computer, connected apps, web search, memory and routines). Use it for anything beyond small talk or what you already know: looking things up, doing things, checking email, scheduling. Pass the request in the user\'s words plus any details they gave. Returns at once; the result arrives later as a [work_landed] note.',
-    parameters: obj({
-      request: { type: 'string', description: 'What to do, self-contained, with every detail the user gave.' },
-      already_announced: { type: 'boolean', description: 'True if you already told the user you are on it.' },
-    }, ['request']),
-  },
-  {
-    type: 'function', name: 'recall_text_messages',
-    description: 'Read the latest messages in your text chat with the user (including results of work you handed off).',
-    parameters: obj({ count: { type: 'integer', description: 'How many recent messages, 1-30. Default 10.' } }),
-  },
-  {
-    type: 'function', name: 'search_conversations',
-    description: 'Search past messages and call records for a word or phrase.',
-    parameters: obj({
-      query: { type: 'string' },
-      scope: { type: 'string', enum: ['this_chat', 'earlier', 'everything'], description: 'this_chat = current conversation, earlier = your older conversations, everything = all Bots on the team. Default this_chat.' },
-    }, ['query']),
-  },
-  {
-    type: 'function', name: 'peek_activity',
-    description: 'See what you (your text agent) are doing right now: whether work is running, open tasks, and anything waiting on the user.',
-    parameters: obj({}),
-  },
-  {
-    type: 'function', name: 'end_the_call',
-    description: 'Hang up. Use when the user says goodbye or asks to end the call. Say a short goodbye first.',
-    parameters: obj({}),
-  },
-];
 
 function voiceInstructions(userId: string, bot: any, language: string): string {
   const user = db.prepare('SELECT name, email FROM users WHERE id=?').get(userId) as any;
@@ -227,6 +139,11 @@ ${recent || '(no messages yet)'}`;
 interface ActiveCall { id: string; botId: string; userId: string; startedAt: number; startSeq: number; tasks: string[] }
 const calls = new Map<string, ActiveCall>();
 
+function ownCall(userId: string, botId: string, callId: string | undefined) {
+  const call = callId ? calls.get(callId) : undefined;
+  return call?.botId === botId && call.userId === userId ? call : undefined;
+}
+
 function callEvent(text: string, call: VoiceCallRecord): EventBody {
   return { type: 'event', event: 'voice-call', text, ref: call.id, call };
 }
@@ -236,62 +153,36 @@ const fmtDuration = (ms: number) => {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
 };
 
-voiceApi.get('/options', async (c) => c.json({ voices: await listVoices(), languages: LANGUAGES, speeds: SPEEDS }));
+voiceApi.get('/options', async (c) => {
+  const providers = Object.values(voiceProviders).map(({ id, name, available }) => ({ id, name, available }));
+  const list = (provider: VoiceProvider) => provider.available ? provider.listVoices() : [];
+  const [xai, elevenlabs] = await Promise.all([list(voiceProviders.xai), list(voiceProviders.elevenlabs)]);
+  const options: VoiceOptions = { providers, voices: { xai, elevenlabs }, languages: LANGUAGES, speeds: SPEEDS };
+  return c.json(options);
+});
 
 voiceApi.post('/session', async (c) => {
   const user = c.get('user');
-  const { botId } = await c.req.json<{ botId: string }>().catch(() => ({ botId: '' }));
-  const bot = ownBot(user.id, botId);
+  const body = await c.req.json<{ botId?: string } | null>().catch(() => null);
+  const bot = ownBot(user.id, body?.botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
-  const s = settingsOf(bot);
-
-  const r = await fetch(`${XAI}/realtime/client_secrets`, {
-    method: 'POST',
-    headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ expires_after: { seconds: 300 } }),
-    signal: AbortSignal.timeout(15_000),
-  }).catch((e) => ({ ok: false, status: 0, text: async () => String(e?.message ?? e) }) as any);
-  if (!r.ok) {
-    const detail = await r.text().catch(() => '');
-    console.warn('[voice] client secret mint failed', r.status, detail.slice(0, 300));
-    return c.json({ error: 'Could not start a voice session' }, 502);
-  }
-  const secret = (await r.json()) as { value: string; expires_at: number };
-
-  const instructions = voiceInstructions(user.id, bot, s.language);
-  const session: Record<string, unknown> = {
-    voice: s.voice,
-    instructions,
-    turn_detection: { type: 'server_vad' },
-    tools: VOICE_TOOLS,
-    audio: {
-      input: {
-        format: { type: 'audio/pcm', rate: SAMPLE_RATE },
-        transcription: { model: 'grok-transcribe', ...(s.language !== 'auto' ? { language_hint: s.language } : {}) },
-      },
-      output: { format: { type: 'audio/pcm', rate: SAMPLE_RATE }, speed: s.speed },
-    },
-  };
+  const provider = providerFor(bot.voice_provider);
+  if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
+  if (provider.id === 'elevenlabs' && !env.elevenlabsAgentId) return c.json({ error: 'Set ELEVENLABS_AGENT_ID to start ElevenLabs calls.' }, 503);
+  const settings = settingsOf(bot, defaultVoiceFor(provider.id));
+  const session = await provider.startSession({
+    ...settings,
+    instructions: () => voiceInstructions(user.id, bot, settings.language),
+    userFirstName: user.name.trim().split(/\s+/)[0],
+  });
+  if (!session) return c.json({ error: 'Could not start a voice session' }, 502);
 
   const callId = newId('call');
   const startRow = appendRow(bot.id, 'event', callEvent(`Voice call with ${bot.name} started`, { id: callId, phase: 'started' }));
   calls.set(callId, { id: callId, botId: bot.id, userId: user.id, startedAt: now(), startSeq: startRow.seq, tasks: [] });
   emitBot(bot.id);
 
-  return c.json({
-    callId,
-    clientSecret: secret.value,
-    expiresAt: secret.expires_at,
-    model: VOICE_MODEL,
-    websocketUrl: `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
-    sampleRate: SAMPLE_RATE,
-    instructions,
-    voice: s.voice,
-    speed: s.speed,
-    language: s.language,
-    tools: VOICE_TOOLS,
-    session,
-  });
+  return c.json({ callId, ...session }, 200, { 'Cache-Control': 'no-store' });
 });
 
 voiceApi.post('/tool', async (c) => {
@@ -300,7 +191,13 @@ voiceApi.post('/tool', async (c) => {
   const bot = ownBot(user.id, botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
   const a = args && typeof args === 'object' ? args : {};
-  const call = callId ? calls.get(callId) : undefined;
+  const call = ownCall(user.id, bot.id, callId);
+  if (!call) {
+    // Keep the legacy xAI relay without a call ID when xAI is configured.
+    const provider = providerFor(bot.voice_provider);
+    if (callId !== undefined || provider.id !== 'xai') return c.json({ error: 'Call not found' }, 404);
+    if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
+  }
 
   switch (name) {
     case 'send_task': {
@@ -384,8 +281,8 @@ voiceApi.post('/end', async (c) => {
   const { botId, callId, transcript, error } = await c.req.json<{ botId: string; callId: string; transcript?: { role: string; text: string }[]; error?: string }>();
   const bot = ownBot(user.id, botId);
   if (!bot) return c.json({ error: 'not found' }, 404);
-  const call = calls.get(callId);
-  if (!call || call.botId !== bot.id) return c.json({ ok: true, duplicate: true });
+  const call = ownCall(user.id, bot.id, callId);
+  if (!call) return c.json({ ok: true, duplicate: true });
   calls.delete(callId);
 
   const durationMs = now() - call.startedAt;
@@ -410,7 +307,9 @@ setInterval(() => {
   for (const call of calls.values()) {
     if (now() - call.startedAt < 2 * 3600_000) continue;
     calls.delete(call.id);
-    appendRow(call.botId, 'event', callEvent('Voice call ended', { id: call.id, phase: 'ended', tasks: call.tasks }));
+    if (ownBot(call.userId, call.botId)) {
+      appendRow(call.botId, 'event', callEvent('Voice call ended', { id: call.id, phase: 'ended', tasks: call.tasks }));
+    }
   }
 }, 10 * 60_000).unref();
 
@@ -418,45 +317,36 @@ setInterval(() => {
 
 voiceApi.post('/preview', async (c) => {
   const user = c.get('user');
-  const p = await c.req.json<{ botId?: string; voice?: string; speed?: number; language?: string; text?: string; codec?: 'mp3' | 'pcm' }>().catch(() => ({} as any));
+  const p = await c.req.json<{ botId?: string; voice?: string; speed?: number; language?: string; text?: string; codec?: 'mp3' | 'pcm' } | null>().catch(() => null) ?? {};
   const bot = ownBot(user.id, p.botId);
-  const s = bot ? settingsOf(bot) : { voice: 'luna', speed: 1, language: 'auto' };
+  if (p.botId !== undefined && !bot) return c.json({ error: 'not found' }, 404);
+  const provider = providerFor(bot?.voice_provider);
+  if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
+  const s = settingsOf(bot ?? {}, defaultVoiceFor(provider.id));
   const voice = String(p.voice || s.voice).slice(0, 80);
-  const language = p.language && langName(p.language) ? p.language : s.language;
+  const language = typeof p.language === 'string' && langName(p.language) ? p.language : s.language;
   const text = String(p.text || `Hi, I'm ${bot?.name ?? 'your Bot'}. This is how I'll sound when we talk.`).slice(0, 400);
   const codec = p.codec === 'pcm' ? 'pcm' : 'mp3';
-  const r = await fetch(`${XAI}/tts`, {
-    method: 'POST',
-    headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice_id: voice, language, speed: clampSpeed(p.speed ?? s.speed), output_format: { codec, sample_rate: SAMPLE_RATE } }),
-    signal: AbortSignal.timeout(30_000),
-  }).catch(() => null);
-  if (!r?.ok) {
-    console.warn('[voice] tts failed', r?.status, (await r?.text().catch(() => ''))?.slice(0, 200));
-    return c.json({ error: 'Preview unavailable' }, 502);
-  }
-  return c.body(Buffer.from(await r.arrayBuffer()), 200, {
-    'Content-Type': codec === 'pcm' ? `audio/pcm;rate=${SAMPLE_RATE}` : 'audio/mpeg',
+  const audio = await provider.preview({ voice, language, text, codec, speed: clampSpeed(p.speed ?? s.speed) });
+  if (!audio) return c.json({ error: 'Preview unavailable' }, 502);
+  return c.body(audio.body, 200, {
+    'Content-Type': audio.contentType,
     'Cache-Control': 'no-store',
   });
 });
 
 voiceApi.post('/stt', async (c) => {
   const form = await c.req.formData().catch(() => null);
+  const botId = form?.get('botId');
+  const bot = typeof botId === 'string' ? ownBot(c.get('user').id, botId) : null;
+  if (typeof botId === 'string' && !bot) return c.json({ error: 'not found' }, 404);
+  const provider = providerFor(bot?.voice_provider);
+  if (!provider.available) return c.json({ error: provider.unavailableMessage }, 503);
   const file = form?.get('file');
   if (!file || typeof file === 'string') return c.json({ error: 'file required' }, 400);
   if (file.size > 25 * 1024 * 1024) return c.json({ error: 'recording too long' }, 413);
   if (file.size < 200) return c.json({ text: '' });
-  const out = new FormData();
-  out.append('model', STT_MODEL);
-  const lang = String(form?.get('language') ?? '');
-  if (lang && lang !== 'auto' && /^[a-z]{2}$/.test(lang)) out.append('language', lang);
-  out.append('file', file, file.name || 'dictation.webm'); // must be last
-  const r = await fetch(`${XAI}/stt`, { method: 'POST', headers: xaiHeaders(), body: out, signal: AbortSignal.timeout(60_000) }).catch(() => null);
-  if (!r?.ok) {
-    console.warn('[voice] stt failed', r?.status, (await r?.text().catch(() => ''))?.slice(0, 200));
-    return c.json({ error: 'Transcription failed' }, 502);
-  }
-  const j = (await r.json()) as { text?: string };
-  return c.json({ text: (j.text ?? '').trim() });
+  const text = await provider.transcribe(file, String(form?.get('language') ?? ''));
+  if (text === null) return c.json({ error: 'Transcription failed' }, 502);
+  return c.json({ text });
 });

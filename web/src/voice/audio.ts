@@ -2,6 +2,27 @@
 
 export const RATE = 24000;
 
+/** Convert a mic frame to the negotiated PCM rate. Average when downsampling. */
+export function resamplePcm(pcm: Int16Array, rate: number): Int16Array {
+  if (rate === RATE || !pcm.length) return pcm;
+  const ratio = RATE / rate;
+  const frame = new Int16Array(Math.round(pcm.length / ratio));
+  for (let i = 0; i < frame.length; i++) {
+    const start = i * ratio;
+    const index = Math.floor(start);
+    if (ratio < 1) {
+      const next = pcm[Math.min(index + 1, pcm.length - 1)];
+      frame[i] = pcm[index] + (next - pcm[index]) * (start - index);
+    } else {
+      const end = Math.min(start + ratio, pcm.length);
+      let sum = 0;
+      for (let j = index; j < end; j++) sum += pcm[j] * (Math.min(j + 1, end) - Math.max(j, start));
+      frame[i] = sum / (end - start);
+    }
+  }
+  return frame;
+}
+
 // The worklet runs at the context's native rate (usually 48 kHz). It box-filters down to 24 kHz,
 // converts to Int16 and posts 40 ms frames plus a level for the UI.
 const WORKLET = `

@@ -1,11 +1,11 @@
-// The in-browser voice agent. Grok Bot runs calls as a second, lightweight agent against the xAI realtime
-// API that speaks as the bot and relays real work to the bot's main text agent (send_task). Results come
+// A lightweight voice agent speaks as the bot and relays work to its main text agent (send_task). Results come
 // back through the normal transcript stream and are injected into the call as [work_landed] notes.
 import { create } from 'zustand';
-import type { Row } from '@shared/types';
+import type { Row, VoiceSession } from '@shared/types';
 import { sortedRows, useStore } from '../store';
-import { voiceApi, type VoiceSession } from './api';
-import { MicCapture, PcmPlayer, base64ToPcm, createAudioContext, micErrorMessage, openMic, pcmToBase64 } from './audio';
+import { voiceApi } from './api';
+import { connectVoice, type VoiceTransport } from './transport';
+import { MicCapture, PcmPlayer, createAudioContext, micErrorMessage, openMic } from './audio';
 
 export interface Caption { id: string; role: 'user' | 'assistant'; text: string; final: boolean }
 
@@ -57,6 +57,8 @@ export const isCallActive = (s: VoiceState = useVoice.getState()) => s.status ==
 
 type Json = Record<string, any>;
 
+interface ToolResult { output: string; isError: boolean }
+
 interface PendingTask { seq: number; request: string; since: number; startedBusy: boolean; sawRunning: boolean; awaitingNoted: boolean; doneSince: number | null }
 
 class VoiceCall {
@@ -64,16 +66,12 @@ class VoiceCall {
   readonly ctx: AudioContext;
   readonly player: PcmPlayer;
   private mic: MicCapture | null = null;
-  private ws: WebSocket | null = null;
+  private transport: VoiceTransport | null = null;
   private sess: VoiceSession | null = null;
   private ready = false;
   private responseActive = false;
-  private responseSpoke = false;
-  private responseId: string | null = null;
-  /** Response the user talked over; its late audio deltas are dropped. */
-  private interruptedId: string | null = null;
   private userSpeaking = false;
-  private inflight = new Map<string, { name: string; promise: Promise<string> }>();
+  private inflight = new Map<string, { name: string; promise: Promise<ToolResult> }>();
   private handledCalls = new Set<string>();
   private tasks: PendingTask[] = [];
   private notes: string[] = [];
@@ -81,6 +79,7 @@ class VoiceCall {
   private unsubStore: (() => void) | null = null;
   private checkTimer: ReturnType<typeof setTimeout> | null = null;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private hangup: ReturnType<typeof setTimeout> | 'draining' | null = null;
   private onUnload = () => { if (this.sess && !this.ended) voiceApi.endBeacon(this.botId, this.sess.callId, this.transcript()); };
 
   constructor(readonly botId: string) {
@@ -107,6 +106,7 @@ class VoiceCall {
     try {
       this.mic = new MicCapture(this.ctx, stream, (pcm) => this.sendAudio(pcm));
       await this.mic.start();
+      if (this.ended) { this.mic.stop(); return; }
       this.sess = await voiceApi.session(this.botId);
       if (this.ended) { void voiceApi.end(this.botId, this.sess.callId, [], 'Cancelled'); return; }
       setV({ callId: this.sess.callId });
@@ -117,134 +117,57 @@ class VoiceCall {
   }
 
   private connect(sess: VoiceSession) {
-    const ws = new WebSocket(sess.websocketUrl, [`xai-client-secret.${sess.clientSecret}`]);
-    this.ws = ws;
+    this.transport = connectVoice(sess, {
+      ready: () => {
+        if (this.ready) return;
+        this.ready = true;
+        if (this.connectTimer) clearTimeout(this.connectTimer);
+        setV({ status: 'live', startedAt: Date.now() });
+        this.watchTranscript();
+      },
+      audio: (pcm, rate) => this.player.push(pcm, rate),
+      interrupted: () => { if (this.player.playing) this.player.clear(); },
+      speech: (on) => {
+        this.userSpeaking = on;
+        setV({ listening: on });
+        if (!on) this.flushNotes();
+      },
+      caption: (...args) => this.caption(...args),
+      response: (active) => {
+        this.responseActive = active;
+        setV({ thinking: active });
+      },
+      tool: (id, name, args, delivery) => {
+        if (id && name && this.startTool(id, name, args) && delivery !== 'batch') {
+          void this.finishTool(id, delivery === 'reply');
+        }
+      },
+      finishTools: (spoke) => {
+        if (this.inflight.size) void this.finishTools(spoke);
+        else this.flushNotes();
+      },
+      settled: () => {
+        if (this.hangup) void this.finishHangup();
+        else this.flushNotes();
+      },
+      error: (message) => this.end(message),
+      closed: (reason) => {
+        if (this.ended) return;
+        this.end(this.ready ? 'Call dropped' : `Couldn’t connect the call${reason ? ` (${reason})` : ''}`);
+      },
+    });
     this.connectTimer = setTimeout(() => { if (!this.ready) this.end('Couldn’t connect the call'); }, 15000);
-    ws.onopen = () => this.send({ type: 'session.update', session: sess.session });
-    ws.onmessage = (m) => {
-      if (typeof m.data !== 'string') return;
-      try { this.handle(JSON.parse(m.data)); } catch (e) { console.warn('[voice] bad event', e); }
-    };
-    ws.onclose = (e) => {
-      if (this.ended) return;
-      this.end(this.ready ? 'Call dropped' : `Couldn’t connect the call${e.reason ? ` (${e.reason})` : ''}`);
-    };
-  }
-
-  private send(ev: Json) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(ev));
   }
 
   private sendAudio(pcm: Int16Array) {
     if (!this.ready || this.ended || useVoice.getState().muted) return;
-    this.send({ type: 'input_audio_buffer.append', audio: pcmToBase64(pcm) });
+    this.transport?.sendAudio(pcm);
   }
 
   setMuted(m: boolean) {
     if (this.mic) this.mic.muted = m;
-    if (m && this.ready) this.send({ type: 'input_audio_buffer.clear' });
+    if (m && this.ready) this.transport?.clearInput?.();
     setV({ muted: m, listening: m ? false : useVoice.getState().listening });
-  }
-
-  // ---------- realtime events ----------
-
-  private handle(ev: Json) {
-    switch (ev.type) {
-      case 'session.updated':
-        if (!this.ready) {
-          this.ready = true;
-          if (this.connectTimer) clearTimeout(this.connectTimer);
-          setV({ status: 'live', startedAt: Date.now() });
-          this.watchTranscript();
-          this.send({ type: 'response.create' }); // the bot greets first
-        }
-        return;
-
-      case 'input_audio_buffer.speech_started':
-        this.userSpeaking = true;
-        setV({ listening: true });
-        // Barge-in: stop talking and listen.
-        if (this.player.playing) this.player.clear();
-        if (this.responseActive) {
-          this.interruptedId = this.responseId;
-          this.send({ type: 'response.cancel' });
-        }
-        return;
-      case 'input_audio_buffer.speech_stopped':
-      case 'input_audio_buffer.committed':
-        this.userSpeaking = false;
-        setV({ listening: false });
-        this.flushNotes();
-        return;
-
-      case 'conversation.item.added':
-      case 'conversation.item.created': {
-        const item = ev.item ?? {};
-        if (item.role === 'user' && Array.isArray(item.content) && item.content.some((c: Json) => c?.type === 'input_audio')) {
-          const t = item.content.find((c: Json) => c?.transcript)?.transcript;
-          this.caption(item.id, 'user', t ?? '', !!t, 'set');
-        }
-        return;
-      }
-      // xAI sends the cumulative transcript in `.updated`; OpenAI sends `.delta` increments.
-      case 'conversation.item.input_audio_transcription.updated':
-        this.caption(ev.item_id, 'user', ev.transcript ?? '', false, 'set');
-        return;
-      case 'conversation.item.input_audio_transcription.delta':
-        this.caption(ev.item_id, 'user', ev.delta ?? '', false, 'append');
-        return;
-      case 'conversation.item.input_audio_transcription.completed':
-        this.caption(ev.item_id, 'user', ev.transcript ?? '', true, 'set');
-        return;
-
-      case 'response.created':
-        this.responseActive = true;
-        this.responseSpoke = false;
-        this.responseId = ev.response?.id ?? null;
-        setV({ thinking: true });
-        return;
-      case 'response.output_item.added':
-        if (ev.item?.type === 'message') this.caption(ev.item.id, 'assistant', '', false, 'set');
-        return;
-      case 'response.output_audio_transcript.delta':
-      case 'response.audio_transcript.delta':
-      case 'response.output_text.delta':
-      case 'response.text.delta':
-        this.responseSpoke = true;
-        this.caption(ev.item_id, 'assistant', ev.delta ?? '', false, 'append');
-        return;
-      case 'response.output_audio_transcript.done':
-      case 'response.audio_transcript.done':
-        if (ev.transcript) this.caption(ev.item_id, 'assistant', ev.transcript, true, 'set');
-        return;
-      case 'response.output_audio.delta':
-      case 'response.audio.delta':
-        if (ev.delta && !(this.interruptedId && ev.response_id === this.interruptedId)) {
-          this.responseSpoke = true;
-          this.player.push(base64ToPcm(ev.delta), this.sess?.sampleRate);
-        }
-        return;
-
-      case 'response.function_call_arguments.done':
-        this.startTool(ev.call_id, ev.name, ev.arguments);
-        return;
-      case 'response.done': {
-        this.responseActive = false;
-        setV({ thinking: false });
-        for (const o of (ev.response?.output ?? []) as Json[]) if (o?.type === 'function_call') this.startTool(o.call_id, o.name, o.arguments);
-        if (this.inflight.size) void this.finishTools(this.responseSpoke);
-        else this.flushNotes();
-        return;
-      }
-
-      case 'error': {
-        const code = ev.error?.code ?? ev.code ?? '';
-        if (/cancel/i.test(String(code)) || /no active response/i.test(String(ev.error?.message ?? ''))) return;
-        console.warn('[voice] realtime error', ev.error ?? ev);
-        if (!this.ready) this.end(ev.error?.message ?? 'Voice service error');
-        return;
-      }
-    }
   }
 
   private caption(id: string | undefined, role: Caption['role'], text: string, final: boolean, mode: 'set' | 'append') {
@@ -268,13 +191,11 @@ class VoiceCall {
 
   // ---------- relay tools ----------
 
-  private startTool(callId: string | undefined, name: string | undefined, rawArgs: string | undefined) {
-    if (!callId || !name || this.handledCalls.has(callId)) return;
+  private startTool(callId: string, name: string, args: Json) {
+    if (this.handledCalls.has(callId)) return false;
     this.handledCalls.add(callId);
-    let args: Json = {};
-    try { args = rawArgs ? JSON.parse(rawArgs) : {}; } catch { /* model sent bad JSON */ }
-    let promise: Promise<string>;
-    if (name === 'end_the_call') promise = Promise.resolve('Ending the call.');
+    let promise: Promise<ToolResult>;
+    if (name === 'end_the_call') promise = Promise.resolve({ output: 'Ending the call.', isError: false });
     else {
       // Show "working" right away; replaced by the real task once the server answers.
       const placeholder = { seq: -1, request: String(args.request ?? '') };
@@ -282,18 +203,40 @@ class VoiceCall {
       if (name === 'send_task') setV({ working: [...useVoice.getState().working, placeholder] });
       promise = voiceApi.tool(this.botId, this.sess!.callId, name, args)
         .then((r) => {
-          if (name === 'send_task') {
+          if (name === 'send_task' && !this.ended) {
             dropOptimistic();
             if (r.taskSeq) this.addTask(r.taskSeq, String(args.request ?? ''));
           }
-          return r.output;
+          return { output: r.output, isError: false };
         })
         .catch((e) => {
-          if (name === 'send_task') dropOptimistic();
-          return `Tool error: ${(e as Error).message}. Tell the user it didn't go through.`;
+          if (name === 'send_task' && !this.ended) dropOptimistic();
+          return { output: `Tool error: ${(e as Error).message}. Tell the user it didn't go through.`, isError: true };
         });
     }
     this.inflight.set(callId, { name, promise });
+    return true;
+  }
+
+  private async finishTool(id: string, reply: boolean) {
+    const tool = this.inflight.get(id)!;
+    const { output, isError } = await tool.promise;
+    this.inflight.delete(id);
+    if (this.ended) return;
+    if (tool.name === 'end_the_call') {
+      // ElevenLabs can send the farewell after the tool result.
+      this.hangup ??= setTimeout(() => { void this.finishHangup(); }, 8000);
+    }
+    if (reply) this.transport?.sendToolResult(id, output, isError);
+    this.flushNotes();
+  }
+
+  private async finishHangup() {
+    if (!this.hangup || this.hangup === 'draining') return;
+    clearTimeout(this.hangup);
+    this.hangup = 'draining';
+    await this.player.whenIdle(8000);
+    this.end();
   }
 
   private async finishTools(spoke: boolean) {
@@ -302,7 +245,7 @@ class VoiceCall {
     const outputs = await Promise.all(batch.map(([, b]) => b.promise));
     if (this.ended) return;
     // Every output first, then a single response.create (xAI parallel-call rule).
-    batch.forEach(([callId], i) => this.send({ type: 'conversation.item.create', item: { type: 'function_call_output', call_id: callId, output: outputs[i] } }));
+    batch.forEach(([callId], i) => this.transport?.sendToolResult(callId, outputs[i].output, outputs[i].isError));
     if (batch.some(([, b]) => b.name === 'end_the_call')) {
       await this.player.whenIdle(8000);
       this.end();
@@ -312,7 +255,7 @@ class VoiceCall {
     const needsReply = !spoke || batch.some(([, b]) => b.name !== 'send_task');
     if (needsReply) {
       await this.player.whenIdle(8000); // don't talk over the current sentence
-      if (!this.ended && !this.responseActive && !this.inflight.size) this.send({ type: 'response.create' });
+      if (!this.ended && !this.responseActive && !this.inflight.size) this.transport?.requestResponse?.();
     } else this.flushNotes();
   }
 
@@ -366,8 +309,9 @@ class VoiceCall {
       task.awaitingNoted = false;
       const replies = after.filter((r) => r.body.type === 'message' && r.body.role === 'assistant' && !r.body.streaming);
       const streaming = after.some((r) => r.body.type === 'message' && r.body.streaming);
-      const finished = !live?.isRunning && !streaming && (replies.length > 0 || (task.sawRunning && !task.startedBusy)) && now - task.since > 1500;
+      const finished = !live?.isRunning && !streaming && (replies.length > 0 || (task.sawRunning && !task.startedBusy));
       if (!finished) { task.doneSince = null; continue; }
+      if (now - task.since <= 1500) { recheck = true; continue; }
       // Stay "finished" for a moment: back-to-back queued turns briefly look idle.
       if (task.doneSince === null) { task.doneSince = now; recheck = true; continue; }
       if (now - task.doneSince < 1200) { recheck = true; continue; }
@@ -389,7 +333,7 @@ class VoiceCall {
 
   private flushNotes() {
     if (!this.ready || this.ended || !this.notes.length) return;
-    if (this.responseActive || this.userSpeaking || this.inflight.size) return; // retried on response.done / speech_stopped
+    if (this.responseActive || this.userSpeaking || this.inflight.size || this.hangup) return;
     if (this.player.playing) {
       if (!this.flushWaiting) {
         this.flushWaiting = true;
@@ -398,9 +342,7 @@ class VoiceCall {
       return;
     }
     const text = this.notes.splice(0).map((n) => `[work_landed] ${n}`).join('\n\n');
-    // A user-role item: the voice model ignores system-role items mid-call (tested), but relays these.
-    this.send({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `${text}\n\n(Automatic note from your text agent, not spoken by ${this.firstName()}. Tell them the outcome now, briefly.)` }] } });
-    this.send({ type: 'response.create' });
+    this.transport?.sendNote(`${text}\n\n(Automatic note from your text agent, not spoken by ${this.firstName()}. Tell them the outcome now, briefly.)`);
   }
 
   // ---------- teardown ----------
@@ -410,9 +352,10 @@ class VoiceCall {
     this.ended = true;
     window.removeEventListener('pagehide', this.onUnload);
     if (this.connectTimer) clearTimeout(this.connectTimer);
+    if (this.hangup && this.hangup !== 'draining') clearTimeout(this.hangup);
     if (this.checkTimer) clearTimeout(this.checkTimer);
     this.unsubStore?.();
-    try { this.ws?.close(1000, 'call ended'); } catch { /* ignore */ }
+    this.transport?.close();
     this.mic?.stop();
     this.player.dispose();
     void this.ctx.close().catch(() => {});

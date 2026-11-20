@@ -34,6 +34,7 @@ export function toBot(r: any): Bot {
     voice: r.voice ?? 'luna',
     voiceSpeed: r.voice_speed ?? 1,
     voiceLanguage: r.voice_language ?? 'auto',
+    voiceProvider: r.voice_provider ?? 'xai',
     model: r.model ?? null,
     provider: r.provider ?? null,
     chatModel: r.chat_model ?? null,
