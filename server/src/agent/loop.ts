@@ -631,7 +631,20 @@ function captionFrom(reasoning: string): string | null {
 /** Hermes' own tool lookup (it loads rarely used tools on demand). */
 const TOOLBOX = new Set(['tool_search', 'tool_describe']);
 
+/** `HQ_TIMING=1` logs milliseconds from turn start to each step before the first token, for latency work. */
+const timingOn = process.env.HQ_TIMING === '1';
+function turnTimer(botId: string) {
+  const t0 = performance.now();
+  const seen = new Set<string>();
+  return (label: string) => {
+    if (!timingOn || seen.has(label)) return;
+    seen.add(label);
+    console.log(`[timing] ${botId} ${label} ${Math.round(performance.now() - t0)}ms`);
+  };
+}
+
 async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
+  const mark = turnTimer(botId);
   const bot = getBotRow(botId);
   if (!bot || bot.kind === 'room' || bot.paused || bot.pause_revision !== pauseRevision) return;
   const userId: string = bot.user_id;
@@ -721,6 +734,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
 
   try {
     const engine = draftEngine ?? await engineFor(botId);
+    mark('engine');
     if (ctrl.signal.aborted) throw new Error('interrupted');
 
     let input = triggerText(trigger);
@@ -762,7 +776,9 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       remote = new HermesRun(engine);
       remoteRuns.set(botId, remote);
       if (!draftOnly && !personal) turn.secureInput = { id: newId('turn'), proposals: new Map(), closed: false };
+      mark('payload');
       res = await remote.start(payload, conversation);
+      mark('stream-open');
     } else {
       res = await fetch(`${engine.url}/v1/responses`, {
         method: 'POST', signal: ctrl.signal, redirect: 'error',
@@ -774,6 +790,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (secureNotices.length) markSecureInputNotified(secureNotices.map(({ request_id }) => request_id));
 
     for await (const raw of sseEvents(res.body)) {
+      mark(`first-event:${raw.type}`);
       if (draftOnly) {
         const d = raw.data;
         const capabilityEvent = /(?:^|[._-])(?:tools?|approvals?|function_call)(?:[._-]|$)/i;
@@ -820,6 +837,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
           wroteText = true;
           if (msgSeq === null) setLive(botId, { activity: { kind: 'working', since: now() } });
           if (msgSeq === null || Date.now() - lastFlush > 120) flush(true);
+          mark('first-text-emitted');
           break;
         }
 
