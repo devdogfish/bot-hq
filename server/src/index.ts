@@ -20,10 +20,11 @@ import { configApi } from './routes-config.js';
 import { secureInputApi } from './routes-secure-input.js';
 import { mcpApi } from './mcp.js';
 import { hooksApi } from './routes-hooks.js';
-import { resumeEventRoutines } from './events.js';
+import { enqueueEvent, resumeEventRoutines } from './events.js';
 import { initEngines } from './engine.js';
 import { agentHealthRoutes } from './agent-health.js';
 import { startAgentGatewayMonitor } from './agent-gateway-monitor.js';
+import { gmailPushConfig, startGmailPush } from './gmail-push/index.js';
 
 if (!desSelfTest()) throw new Error('DES self-test failed');
 initSubagents();
@@ -58,6 +59,15 @@ const schedulerEnabled = process.env.GROKBOT_NO_SCHEDULER !== '1';
 if (schedulerEnabled) {
   initRoutines(enqueue, isBotBusy);
   initProactive(enqueue);
+  const gmailPush = gmailPushConfig();
+  if (gmailPush) {
+    const worker = startGmailPush(gmailPush, enqueueEvent).catch(() => {
+      console.error('[gmail-push] Could not start the Pub/Sub worker.');
+    });
+    server.once('close', () => {
+      void worker.then(stop => stop?.()).catch(() => console.error('[gmail-push] Could not close the Pub/Sub worker.'));
+    });
+  }
 } else console.log('[grokbot] scheduler disabled (GROKBOT_NO_SCHEDULER=1)');
 initEngines();
 // Recover accepted webhook work even when periodic scheduling is disabled.
