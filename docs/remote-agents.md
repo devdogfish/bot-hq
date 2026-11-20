@@ -27,17 +27,18 @@ back** tells the Agent to inspect the screen again on its next turn.
 
 From the Bot HQ checkout, install dependencies with `npm ci`. Set
 `OWNER_SESSION_COOKIE` to the full Owner cookie header value
-(`grokbot_session=<value>`), then measure the Bot HQ watch endpoint:
+(`grokbot_session=<value>`). Use HTTPS when benchmarking a remote HQ:
 
 ```sh
 node scripts/screen-bench.mjs --hq-url https://hq.example.com --bot-id "$BOT_ID" --seconds 10
 ```
 
-If the Agent's websockify endpoint is reachable directly, set `VNC_PASSWORD`
-in the environment and run:
+If the Agent's websockify endpoint is reachable directly, set
+`AGENT_WEBSOCKIFY_URL` to the full WebSocket URL, including any token in the
+query string. Set `VNC_PASSWORD` in the environment and run:
 
 ```sh
-node scripts/screen-bench.mjs --agent-url ws://agent:6080/websockify --seconds 10
+node scripts/screen-bench.mjs --seconds 10
 ```
 
 Export credentials in the shell environment before running either command.

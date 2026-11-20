@@ -11,6 +11,7 @@ const script = fileURLToPath(new URL('../scripts/screen-bench.mjs', import.meta.
 const version = Buffer.from('RFB 003.008\n');
 const password = 'fixtures';
 const cookie = 'session=fixture-owner; other=value';
+const agentPath = '/websockify?token=fixture-token';
 const challenge = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex');
 // Known DES response for the challenge and the bit-reversed password bytes.
 const authResponse = Buffer.from('2df6109c71d09221f0039f11c87d217e', 'hex');
@@ -74,7 +75,7 @@ async function fakeScreen(t, direct) {
     let fullFrameSent = false;
     socket.once('close', () => clearTimeout(fullFrameTimer));
     try {
-      assert.equal(request.url, direct ? '/websockify' : '/api/bots/fixture-bot/screen?mode=watch');
+      assert.equal(request.url, direct ? agentPath : '/api/bots/fixture-bot/screen?mode=watch');
       assert.equal(request.headers.cookie, direct ? undefined : cookie);
       send(version, 5);
     } catch (error) {
@@ -207,10 +208,10 @@ async function fakeScreen(t, direct) {
 for (const direct of [true, false]) {
   test(`screen benchmark measures fragmented RFB over ${direct ? 'direct VNC auth' : 'Owner watch'}`, async (t) => {
     const fixture = await fakeScreen(t, direct);
-    const args = direct
-      ? ['--agent-url', `${fixture.origin.replace('http:', 'ws:')}/websockify`]
-      : ['--hq-url', fixture.origin, '--bot-id', 'fixture-bot'];
-    const env = direct ? { VNC_PASSWORD: password } : { OWNER_SESSION_COOKIE: cookie };
+    const args = direct ? [] : ['--hq-url', fixture.origin, '--bot-id', 'fixture-bot'];
+    const env = direct
+      ? { AGENT_WEBSOCKIFY_URL: `${fixture.origin.replace('http:', 'ws:')}${agentPath}`, VNC_PASSWORD: password }
+      : { OWNER_SESSION_COOKIE: cookie };
     const { stdout } = await execFileAsync(
       process.execPath,
       [script, ...args, '--seconds', String(sampleSeconds)],
@@ -222,7 +223,7 @@ for (const direct of [true, false]) {
     const metrics = JSON.parse(stdout);
     assert.ok(Number.isFinite(metrics.firstFrameMs) && metrics.firstFrameMs >= 30);
     assert.equal(metrics.medianRects, 2.5);
-    assert.ok(Math.abs(metrics.updatesPerSecond * sampleSeconds - rectangleCounts.length) < 0.2);
-    assert.ok(Math.abs(metrics.bytesPerSecond * sampleSeconds - fixture.sampleBytes) < fixture.sampleBytes * 0.05);
+    assert.equal(metrics.updatesPerSecond, rectangleCounts.length / sampleSeconds);
+    assert.equal(metrics.bytesPerSecond, fixture.sampleBytes / sampleSeconds);
   });
 }

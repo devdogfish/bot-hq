@@ -5,7 +5,7 @@ import { WebSocket } from 'ws';
 const FIRST_FRAME_TIMEOUT_MS = 15_000;
 const HELP = `Usage:
   OWNER_SESSION_COOKIE=… node scripts/screen-bench.mjs --hq-url <base URL> --bot-id <id> [--seconds <N>]
-  VNC_PASSWORD=… node scripts/screen-bench.mjs --agent-url <websockify URL> [--seconds <N>]
+  AGENT_WEBSOCKIFY_URL=… VNC_PASSWORD=… node scripts/screen-bench.mjs [--seconds <N>]
 
 Duration defaults to 10 seconds. Credentials are read from the environment.`;
 
@@ -16,7 +16,6 @@ function argumentsForBench() {
       options: {
         'hq-url': { type: 'string' },
         'bot-id': { type: 'string' },
-        'agent-url': { type: 'string' },
         seconds: { type: 'string', default: '10' },
         help: { type: 'boolean', short: 'h' },
       },
@@ -27,11 +26,13 @@ function argumentsForBench() {
   if (values.help) return null;
 
   const hqUrl = values['hq-url'];
-  const agentUrl = values['agent-url'];
   const botId = values['bot-id'];
-  if (!(hqUrl && botId && agentUrl === undefined) && !(agentUrl && hqUrl === undefined && botId === undefined)) {
-    throw new Error('Supply either --hq-url with --bot-id or --agent-url.');
+  const useHq = hqUrl !== undefined || botId !== undefined;
+  if (useHq && !(hqUrl && botId)) {
+    throw new Error('Supply both --hq-url and --bot-id for Owner watch mode.');
   }
+  const endpoint = useHq ? hqUrl : process.env.AGENT_WEBSOCKIFY_URL;
+  if (!endpoint) throw new Error('Set AGENT_WEBSOCKIFY_URL for direct Agent mode.');
   const seconds = Number(values.seconds);
   if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1000 > 2_147_483_647) {
     throw new Error('--seconds must be positive and within the Node timer range.');
@@ -39,16 +40,16 @@ function argumentsForBench() {
 
   let url;
   try {
-    url = new URL(hqUrl ?? agentUrl);
+    url = new URL(endpoint);
   } catch {
     throw new Error('Invalid endpoint URL.');
   }
-  if (hqUrl && url.protocol === 'http:') url.protocol = 'ws:';
-  if (hqUrl && url.protocol === 'https:') url.protocol = 'wss:';
+  if (useHq && url.protocol === 'http:') url.protocol = 'ws:';
+  if (useHq && url.protocol === 'https:') url.protocol = 'wss:';
   if (!['ws:', 'wss:'].includes(url.protocol) || url.username || url.password || url.hash) {
     throw new Error('Invalid WebSocket endpoint. Use a URL with no user info or fragment.');
   }
-  if (hqUrl) {
+  if (useHq) {
     // Avoid URL path normalization for the special dot segments.
     if (botId === '.' || botId === '..') throw new Error('Invalid bot ID.');
     const cookie = process.env.OWNER_SESSION_COOKIE;
@@ -154,7 +155,7 @@ const LAST_RECT = -224;
 const TIGHT_QUALITY_LEVEL_6 = -26;
 const TIGHT_COMPRESSION_LEVEL_2 = -254;
 
-function setEncodings(send) {
+function configureFramebuffer(send) {
   // 32bpp, 24-bit true color, little endian, 8 bits per channel, RGB shifts 0/8/16.
   send(Buffer.from([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0]));
   const encodings = [COPY_RECT, TIGHT, RAW, TIGHT_QUALITY_LEVEL_6, TIGHT_COMPRESSION_LEVEL_2, LAST_RECT];
@@ -290,7 +291,7 @@ async function benchmark({ url, headers, password, seconds }) {
   let timer = setTimeout(() => reader.stop(new Error('Timed out waiting for the first framebuffer.')), FIRST_FRAME_TIMEOUT_MS);
   try {
     const size = await handshake(reader, send, password, vncAuthResponse);
-    setEncodings(send);
+    configureFramebuffer(send);
     do {
       requestFramebuffer(send, size, false);
     } while (await readUpdate(reader) === 0);
