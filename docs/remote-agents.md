@@ -125,6 +125,24 @@ desktop activity on both runs.
 - Composio is disabled, including its Google sign-in path.
   Set `XAI_API_KEY` to enable voice and X research.
 
+## Invite Agents from Jitsi
+
+Jitsi's own **Invite people** dialog can search and invite the Owner's Agents. Bot HQ serves the directory at `GET /api/jitsi/people` and the invite service at `POST /api/jitsi/invite`. An invite posts `Join this meeting: <room URL>` into each chosen Agent's chat as the Owner, and the Agent joins with its meetings skill. Search lists only the Owner's active Agents. It leaves out rooms, paused or archived Bots and the Personal Assistant.
+
+1. Set `HQ_JITSI_ORIGINS` to the exact Jitsi origins the Owner uses, comma-separated, and restart Bot HQ. Invites accept only room links on these origins, and CORS allows only them.
+2. Add to the Jitsi Meet `config.js`, using the Owner UI origin on port 443:
+
+   ```js
+   peopleSearchUrl: 'https://bot-hq.<tailnet>.ts.net/api/jitsi/people',
+   inviteServiceUrl: 'https://bot-hq.<tailnet>.ts.net/api/jitsi/invite',
+   peopleSearchQueryTypes: ['user'],
+   peopleSearchTokenLocation: 'botHqInviteToken',
+   ```
+
+3. Signed in to Bot HQ, open `/api/jitsi/token`. On each Jitsi origin, run this once in the browser console: `localStorage.setItem('botHqInviteToken', '<token>')`.
+
+Jitsi shows the search field only when that token exists, so guests never see it. Only browsers on the tailnet can reach Bot HQ. The token only lists and invites the Owner's Agents. Rotating `SESSION_SECRET` revokes it. Jitsi treats a failed request as a failure for the whole batch, so Bot HQ sends nothing if any chosen Agent is unavailable.
+
 ## Meeting transcripts
 
 Send `POST /api/meeting/end` to the same origin as the Agent's Bot HQ MCP URL

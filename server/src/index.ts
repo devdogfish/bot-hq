@@ -20,6 +20,7 @@ import { configApi } from './routes-config.js';
 import { secureInputApi } from './routes-secure-input.js';
 import { mcpApi } from './mcp.js';
 import { meetingApi } from './meeting/routes.js';
+import { jitsiInviteApi } from './jitsi-invite.js';
 import { closeInterruptedMeetings } from './voice/index.js';
 import { hooksApi } from './routes-hooks.js';
 import { enqueueEvent, resumeEventRoutines } from './events.js';
@@ -41,6 +42,7 @@ app.route('/api/agent-health', agentHealthRoutes(env.agentHealthTargets));
 // The app's tools for the agent engines (MCP).
 app.route('/mcp', mcpApi);
 app.route('/api/meeting', meetingApi);
+app.route('/api/jitsi', jitsiInviteApi);
 app.route('/hooks', hooksApi);
 app.route('/api/checkins', checkinsApi);
 app.route('/api/rooms', roomsApi);
