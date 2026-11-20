@@ -5,13 +5,18 @@ export function AgentConnection({ botId, onSaved }: { botId: string; onSaved: ()
   const [agent, setAgent] = useState<AgentSettings | null>(null);
   const [hermesKey, setHermesKey] = useState('');
   const [vncPassword, setVncPassword] = useState('');
+  const [ownerSecretToken, setOwnerSecretToken] = useState('');
+  const [ownerSecretPort, setOwnerSecretPort] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<{ text: string; error?: boolean } | null>(null);
 
   useEffect(() => {
     let active = true;
     configApi.agent(botId).then(({ agent }) => {
-      if (active) setAgent(agent);
+      if (active) {
+        setAgent(agent);
+        setOwnerSecretPort(String(agent.ownerSecretPort));
+      }
     }).catch((err: Error) => {
       if (active) setNote({ text: err.message, error: true });
     });
@@ -24,10 +29,13 @@ export function AgentConnection({ botId, onSaved }: { botId: string; onSaved: ()
     setBusy(true);
     setNote(null);
     try {
-      const { agent: next } = await configApi.setAgent(botId, { ...agent, hermesKey, vncPassword });
+      const { agent: next } = await configApi.setAgent(botId, {
+        ...agent, hermesKey, vncPassword, ownerSecretPort: Number(ownerSecretPort), ownerSecretToken,
+      });
       setAgent(next);
       setHermesKey('');
       setVncPassword('');
+      setOwnerSecretToken('');
       setNote({ text: 'Saved.' });
       onSaved();
     } catch (err) {
@@ -64,6 +72,15 @@ export function AgentConnection({ botId, onSaved }: { botId: string; onSaved: ()
               <input type="password" className="text-input" autoComplete="new-password" value={hermesKey}
                 placeholder={agent.hermesKeySet ? 'Saved · enter a new key to replace' : undefined}
                 onChange={(e) => setHermesKey(e.target.value)} />
+            </label>
+            <label>Owner secret port
+              <input type="number" className="text-input" min={1} max={65535} required value={ownerSecretPort}
+                onChange={(e) => setOwnerSecretPort(e.target.value)} />
+            </label>
+            <label>Owner secret token
+              <input type="password" className="text-input" autoComplete="new-password" value={ownerSecretToken}
+                placeholder={agent.ownerSecretTokenSet ? 'Saved · enter a new token to replace' : undefined}
+                onChange={(e) => setOwnerSecretToken(e.target.value)} />
             </label>
             <label>Websockify URL
               <input type="url" className="text-input" value={agent.websockifyUrl} placeholder="ws://agent:6080/websockify"

@@ -32,6 +32,8 @@ export interface AgentSettings {
   websockifyUrl: string;
   vncPasswordSet: boolean;
   cdpPort: number | null;
+  ownerSecretPort: number;
+  ownerSecretTokenSet: boolean;
 }
 
 export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>>;
@@ -63,7 +65,7 @@ export const configApi = {
   handback: (botId: string) => req<{ ok: true }>('POST', `/bots/${botId}/handback`),
 
   agent: (botId: string) => req<{ agent: AgentSettings }>('GET', `/bots/${botId}/agent`),
-  setAgent: (botId: string, input: AgentSettings & { hermesKey: string; vncPassword: string }) =>
+  setAgent: (botId: string, input: AgentSettings & { hermesKey: string; vncPassword: string; ownerSecretToken: string }) =>
     req<{ agent: AgentSettings }>('PUT', `/bots/${botId}/agent`, input),
 
   checkChrome: (botId: string) => req<{ browser: string }>('GET', `/bots/${botId}/agent/chrome`),

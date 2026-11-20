@@ -58,3 +58,12 @@
 .approval-card .card__actions > .btn { flex-basis: auto; }
 .approval-card__menu { position: relative; display: flex; margin-left: auto; }
 .approval-card__menu .menu { min-width: 116px; }
+
+.secure-input-card__fields {
+  display: grid; gap: 10px; padding: 12px 16px 0; margin: 0; border: 0; min-width: 0;
+  font-size: 13px; line-height: 18px; color: var(--color-text-secondary);
+}
+.secure-input-card__fields label { display: grid; gap: 4px; }
+.secure-input-card__fields .secure-input-card__remember { display: flex; align-items: center; gap: 6px; }
+.secure-input-card__remember input { appearance: auto; }
+.secure-input-card__hint { color: var(--color-text-tertiary); font-size: 12px; }

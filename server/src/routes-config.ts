@@ -18,6 +18,7 @@ import { engineInfo, engineKind, forgetEngineOptions, mcpToken, restartEngine, s
 import { isBotBusy } from './agent/loop.js';
 import { listMemories } from './engine-memory.js';
 import type { LibraryFile, Skill } from './types.js';
+import { isSharingSecureInput } from './secure-input.js';
 
 /**
  * Bot settings, skills, library, computer controls and memory maintenance.
@@ -247,6 +248,7 @@ configApi.put('/bots/:id/agent', async (c) => {
   const userId = c.get('user').id;
   const bot = ownBot(userId, c.req.param('id'));
   if (!bot || bot.kind === 'room') return c.json({ error: 'not found' }, 404);
+  if (isSharingSecureInput(bot.id)) return c.json({ error: 'Wait for the secure input submission to finish.' }, 409);
   if (isBotBusy(bot.id)) return c.json({ error: 'Wait for the current turn to end.' }, 409);
   const error = saveRemoteAgent(bot.id, bot, input);
   if (error) return c.json({ error }, 400);

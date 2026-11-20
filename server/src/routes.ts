@@ -16,6 +16,7 @@ import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice.js';
 import type { AvatarColor, AvatarShape } from './types.js';
+import { isSharingSecureInput } from './secure-input.js';
 
 export const api = new Hono<AuthVars>();
 
@@ -174,6 +175,7 @@ api.patch('/bots/:id', async (c) => {
 api.delete('/bots/:id', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  if (isSharingSecureInput(b.id)) return c.json({ error: 'Wait for the secure input submission to finish.' }, 409);
   const deleted = await resetBotQueue(b.id, async () => {
     for (const r of listRoutines(b.id)) unscheduleRoutine(r.id);
     if (b.kind !== 'room') {
@@ -250,6 +252,7 @@ api.patch('/bots/:id/pause', async (c) => {
 api.post('/bots/:id/fresh', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
+  if (isSharingSecureInput(b.id)) return c.json({ error: 'Wait for the secure input submission to finish.' }, 409);
   const cleared = await resetBotQueue(b.id, () => { clearConversation(b.id); });
   if (!cleared) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   emitBot(b.id);
@@ -284,6 +287,7 @@ api.post('/bots/:id/cards/:seq/dismiss', (c) => {
   if (!b) return c.json({ error: 'not found' }, 404);
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'card') return c.json({ error: 'not a card' }, 400);
+  if (row.body.card === 'secure-input') return c.json({ error: 'Use Decline on the secure input card.' }, 400);
   if (row.body.card === 'connect' && b.paused) return c.json({ error: 'This bot is paused.' }, 409);
   const body: any = { ...row.body, status: row.body.card === 'connect' ? 'skipped' : 'dismissed' };
   updateRow(b.id, row.seq, body);

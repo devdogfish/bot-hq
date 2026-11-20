@@ -10,6 +10,7 @@ import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
 import { Cron } from 'croner';
 import { OWNER_EMAIL_TOOL } from './owner-email-policy.js';
+import { SECURE_INPUT_KINDS, SECURE_INPUT_TOOL } from '../secure-input.js';
 
 export interface ToolCtx {
   userId: string;
@@ -87,6 +88,19 @@ async function xSearch(a: any): Promise<string> {
 }
 
 export const TOOLS: ToolDef[] = [
+  {
+    name: SECURE_INPUT_TOOL,
+    description: "Ask for the Owner's own login, phone number, verification code, or other private value through a secure card. Supply only the request details. After the pending receipt, end this turn and wait for the next-turn ready or declined notice. Use the returned ref to fill the requested site, using fill for login and fill_secret for other kinds. Never ask the Owner to paste values in chat.",
+    parameters: obj({
+      kind: { type: 'string', enum: SECURE_INPUT_KINDS },
+      site: { type: 'string', description: 'The exact HTTPS origin, without a path or query.' },
+      label: { type: 'string', maxLength: 160 },
+      reason: { type: 'string', maxLength: 1000 },
+      one_time: { type: 'boolean', description: 'Use false for login and true for phone and code. Default to true for text. The Owner can choose to remember a phone number.' },
+    }, ['kind', 'site', 'label', 'reason', 'one_time']),
+    activity: 'waiting_for_you',
+    label: 'Requesting secure input',
+  },
   {
     name: OWNER_EMAIL_TOOL,
     description: "Stage a plain-text email for Bot HQ to send to the Owner's configured addresses when they ask in this chat. Use the provided request_id. A staged result is a proposal. Bot HQ will show whether the email was accepted.",
