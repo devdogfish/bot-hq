@@ -59,6 +59,15 @@
 .approval-card__menu { position: relative; display: flex; margin-left: auto; }
 .approval-card__menu .menu { min-width: 116px; }
 
+.secure-pill {
+  display: inline-flex; align-items: center; gap: 12px; max-width: 100%; height: 48px; padding: 6px 16px 6px 6px;
+  border-radius: var(--radius-full); background: var(--color-bubble-agent); color: var(--color-ink);
+  font-size: 15px; line-height: 20px; letter-spacing: 0.1px;
+}
+.secure-pill__icon { display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; background: #FFFFFF; color: var(--color-bot-purple); }
+.secure-pill__text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.secure-pill.is-off { color: var(--color-text-secondary); }
+.secure-pill.is-off .secure-pill__icon { color: #8A8A8A; }
 .secure-input-card__fields {
   display: grid; gap: 10px; padding: 12px 16px 0; margin: 0; border: 0; min-width: 0;
   font-size: 13px; line-height: 18px; color: var(--color-text-secondary);
