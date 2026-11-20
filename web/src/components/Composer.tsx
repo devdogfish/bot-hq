@@ -72,7 +72,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
       return before + pre + t + post + after;
     });
   };
-  const dictation = useDictation(insertText, setError, bot.voiceLanguage);
+  const dictation = useDictation(insertText, setError, bot.voiceLanguage, bot.id);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
 
   const hasText = text.trim().length > 0;

@@ -17,6 +17,8 @@ export const env = {
   port: Number(process.env.PORT ?? 8787),
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   xaiKey: process.env.XAI_API_KEY ?? '',
+  elevenlabsKey: process.env.ELEVENLABS_API_KEY ?? '',
+  elevenlabsAgentId: process.env.ELEVENLABS_AGENT_ID ?? '',
   xaiModel: process.env.XAI_MODEL ?? 'grok-4.7',
   sessionSecret: req('SESSION_SECRET'),
   devLogin: process.env.DEV_LOGIN === '1',

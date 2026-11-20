@@ -1,71 +1,397 @@
-// Two-way voice call test: headless Chrome with a fake mic playing tests/ask-weather.wav.
-// Usage: node tests/voice-call.mjs <outDir> <throwawayBotId>   (changes that bot's voice settings)
-import { createRequire } from 'node:module';
-const require = createRequire(new URL('../package.json', import.meta.url));
-const { chromium } = require('playwright');
-const S = process.argv[2]; const BOT = process.argv[3]; const BASE = 'http://localhost:8787';
-const t0 = Date.now(); const log = (...a) => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s]`, ...a);
-const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: [
-  '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', `--use-file-for-fake-audio-capture=${S}/ask-fixed.wav`, '--autoplay-policy=no-user-gesture-required'] });
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, permissions: ['microphone'] });
-await ctx.addInitScript((bot) => {
-  localStorage.setItem('grokbot.selectedBot', bot); localStorage.setItem('grokbot.detailsOpen', '1');
-  window.__audio = { starts: 0, seconds: 0 };
-  const orig = AudioBufferSourceNode.prototype.start;
-  AudioBufferSourceNode.prototype.start = function (...a) { window.__audio.starts++; window.__audio.seconds += this.buffer?.duration ?? 0; return orig.apply(this, a); };
-  const OrigWS = window.WebSocket; window.__ws = { sent: {}, recv: {} };
-  window.WebSocket = class extends OrigWS { constructor(u, p) { super(u, p); if (String(u).includes('x.ai')) { this.addEventListener('message', (m) => { try { const t = JSON.parse(m.data).type; window.__ws.recv[t] = (window.__ws.recv[t] ?? 0) + 1; if (t === 'error') (window.__ws.errors ??= []).push(m.data.slice(0, 300)); } catch {} }); const s = this.send.bind(this); this.send = (d) => { try { const t = JSON.parse(d).type; window.__ws.sent[t] = (window.__ws.sent[t] ?? 0) + 1; } catch {} return s(d); }; } } };
-}, BOT);
-const page = await ctx.newPage();
-page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) log('console.' + m.type(), m.text().slice(0, 300)); });
-page.on('pageerror', (e) => log('pageerror', e.message));
-await page.goto(BASE);
-await page.evaluate((email) => fetch('/api/auth/dev', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, name: 'Dev' }) }), process.env.E2E_EMAIL ?? 'dev@example.com');
-await page.goto(BASE);
-await page.waitForSelector('.composer__input', { timeout: 15000 });
-await page.waitForSelector('text=Voice chat');
-await page.screenshot({ path: `${S}/shots/01-details.png` });
+// Offline: node --import tsx --test tests/voice-call.mjs
+// Live xAI smoke: node tests/voice-call.mjs <outDir> <throwawayBotId>
+if (process.argv[3]) await import('./voice-call-live.mjs');
+else {
+  const { default: assert } = await import('node:assert/strict');
+  const { after, test } = await import('node:test');
+  const { setTimeout: delay } = await import('node:timers/promises');
+  const { Hono } = await import('hono');
 
-// --- Preview (TTS → same PCM player path) ---
-await page.click('button.voice-preview');
-await page.waitForSelector('button.voice-preview:has-text("Playing")', { timeout: 5000 }).catch(() => log('no Playing state seen'));
-await page.waitForSelector('button.voice-preview:has-text("Preview")', { timeout: 30000 });
-log('preview audio:', JSON.stringify(await page.evaluate(() => window.__audio)), 'error:', await page.locator('.voice-error').textContent().catch(() => null));
+  const realFetch = globalThis.fetch;
+  const http = { fetch: (input) => assert.fail(`Unhandled test fetch: ${input}`) };
+  // Install before import so the summary SDK also captures the fake fetch.
+  globalThis.fetch = (...args) => http.fetch(...args);
+  after(() => { globalThis.fetch = realFetch; });
 
-// --- settings ---
-await page.selectOption('select[aria-label="Voice"]', 'eve');
-await page.selectOption('select[aria-label="Speed"]', '1.15');
-await page.waitForTimeout(800);
-const saved = await page.evaluate(async (bot) => (await (await fetch('/api/bots')).json()).bots.find((b) => b.id === bot), BOT);
-log('saved settings:', saved.voice, saved.voiceSpeed, saved.voiceLanguage);
+  Object.assign(process.env, {
+    DB_PATH: ':memory:', SESSION_SECRET: 'voice-test', XAI_API_KEY: 'test-xai-key',
+    ELEVENLABS_API_KEY: 'test-elevenlabs-key', ELEVENLABS_AGENT_ID: 'test-agent',
+    HQ_LOCAL_ENGINES: '1', HERMES_HOME_PRIMARY: '/nonexistent/voice-test-home',
+    HERMES_URL: 'https://hermes.voice.test', HERMES_KEY: 'test-hermes-key',
+  });
+  const { env } = await import('../server/src/env.ts');
+  const { db } = await import('../server/src/db.ts');
+  const { api } = await import('../server/src/routes.ts');
+  const { initRooms } = await import('../server/src/agent/rooms.ts');
+  const { initSubagents } = await import('../server/src/agent/subagents.ts');
+  const { listRows } = await import('../server/src/store.ts');
+  const { hub } = await import('../server/src/lib/hub.ts');
+  const { VOICE_TOOLS } = await import('../server/src/voice/tools.ts');
+  const { syncElevenLabsAgent } = await import('../server/scripts/elevenlabs-sync-agent.ts');
+  const { useStore } = await import('../web/src/store.ts');
+  const { startCall, endCall, useVoice, toggleMute } = await import('../web/src/voice/call.ts');
+  const { voiceApi } = await import('../web/src/voice/api.ts');
 
-// --- call ---
-const before = await page.evaluate(() => window.__audio.starts);
-await page.click('button[aria-label^="Start voice chat"]');
-await page.waitForSelector('.vcall', { timeout: 5000 });
-await page.screenshot({ path: `${S}/shots/02-connecting.png` });
-await page.waitForSelector('.vcall.is-live', { timeout: 20000 });
-log('live'); log('cta live:', await page.locator('.composer__cta').getAttribute('class'), await page.locator('.composer__cta').evaluate((e) => getComputedStyle(e).backgroundColor));
-let lastStatus = ''; let sawWorking = false; let shotWorking = false; let landedAt = 0;
-for (let i = 0; i < 200; i++) {
-  await page.waitForTimeout(500);
-  const st = await page.locator('.vcall__status').textContent().catch(() => '');
-  const cap = await page.locator('.vcall__captions').innerText().catch(() => '');
-  if (st !== lastStatus) { log('status:', st, '| captions:', cap.replace(/\n/g, ' / ').slice(0, 200)); lastStatus = st; }
-  if (st.startsWith('Working') && !shotWorking) { log('cta class:', await page.locator('.composer__cta').getAttribute('class'), await page.locator('.composer__cta').evaluate((e) => getComputedStyle(e).backgroundColor)); sawWorking = true; shotWorking = true; await page.screenshot({ path: `${S}/shots/03-working.png` }); }
-  if (sawWorking && !st.includes('Working') && !landedAt) landedAt = Date.now();
-  if (landedAt && Date.now() - landedAt > 12000) break;
-  if (i === 30 && !sawWorking) await page.screenshot({ path: `${S}/shots/03b-midcall.png` });
+  initSubagents();
+  initRooms();
+  const app = new Hono().route('/api', api);
+  db.exec(`
+    INSERT INTO users (id, email, name, created_at) VALUES ('owner', 'owner@example.test', 'Jo Tester', 0);
+    INSERT INTO auth_sessions (token, user_id, created_at, expires_at) VALUES ('voice-test', 'owner', 0, 9999999999999);
+    INSERT INTO bots (id, user_id, name, created_at, updated_at, engine)
+      VALUES ('xai-bot', 'owner', 'Default', 0, 0, 'primary'), ('eleven-bot', 'owner', 'Relay', 0, 0, 'primary');
+  `);
+  const cookie = 'grokbot_session=voice-test';
+  const signedUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?token=test-signed-token';
+  const voiceId = 'fake-elevenlabs-voice';
+  const pcm = Buffer.alloc(24).toString('base64');
+
+  function request(path, method = 'GET', data) {
+    return app.request(path, {
+      method, headers: { cookie, 'Content-Type': 'application/json' },
+      body: data === undefined ? undefined : JSON.stringify(data),
+    });
+  }
+
+  async function configureElevenBot() {
+    const response = await request('/api/bots/eleven-bot', 'PATCH', {
+      voice_provider: 'elevenlabs', voice: voiceId, voiceSpeed: 1.5, voiceLanguage: 'pt-BR',
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).bot;
+  }
+
+  function fakeHttp(t) {
+    const calls = [];
+    t.mock.method(http, 'fetch', async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : input, 'https://app.voice.test');
+      if (url.host === 'app.voice.test') {
+        calls.push({ url, method: init?.method, body: init?.body });
+        const headers = new Headers(init?.headers);
+        headers.set('cookie', cookie);
+        return app.request(url, { ...init, headers });
+      }
+      const req = new Request(input, init);
+      calls.push({ url, method: req.method, body: await req.clone().text() });
+      switch (url.host) {
+        case 'api.elevenlabs.io':
+          assert.equal(req.headers.get('xi-api-key'), 'test-elevenlabs-key');
+          switch (url.pathname) {
+            case '/v1/convai/conversation/get-signed-url':
+              assert.equal(req.method, 'GET');
+              assert.equal(url.searchParams.get('agent_id'), 'test-agent');
+              return Response.json({ signed_url: signedUrl });
+            case '/v2/voices':
+              return url.searchParams.has('next_page_token')
+                ? Response.json({ voices: [{ voice_id: 'next-id', name: 'Other' }] })
+                : Response.json({ voices: [{ voice_id: voiceId, name: 'Sample', labels: { gender: 'female' } }], has_more: true, next_page_token: 'next' });
+            case `/v1/text-to-speech/${voiceId}`:
+              assert.equal(url.searchParams.get('output_format'), 'pcm_24000');
+              assert.deepEqual(await req.json(), { text: "Hi, I'm Relay. This is how I'll sound when we talk.", model_id: 'eleven_flash_v2_5', language_code: 'pt', voice_settings: { speed: 1.2 } });
+              return new Response(Buffer.alloc(24));
+            case '/v1/speech-to-text': {
+              const form = await req.formData();
+              assert.equal(form.get('model_id'), 'scribe_v2');
+              assert.equal(form.get('language_code'), 'pt');
+              assert.equal(form.get('file').size, 400);
+              return Response.json({ text: '  hello there  ' });
+            }
+          }
+          break;
+        case 'api.x.ai':
+          assert.equal(req.headers.get('authorization'), 'Bearer test-xai-key');
+          switch (url.pathname) {
+            case '/v1/tts/voices':
+              return Response.json({ voices: [{ voice_id: 'luna', name: 'Luna' }] });
+            case '/v1/realtime/client_secrets':
+              assert.deepEqual(await req.json(), { expires_after: { seconds: 300 } });
+              return Response.json({ value: 'ephemeral-xai', expires_at: 12345 });
+            case '/v1/tts':
+              assert.deepEqual(await req.json(), {
+                text: "Hi, I'm Default. This is how I'll sound when we talk.",
+                voice_id: 'luna', language: 'auto', speed: 1, output_format: { codec: 'pcm', sample_rate: 24000 },
+              });
+              return new Response(Buffer.alloc(24));
+            case '/v1/stt': {
+              const form = await req.formData();
+              assert.deepEqual([...form.keys()], ['model', 'language', 'file']);
+              assert.equal(form.get('language'), 'fr');
+              return Response.json({ text: ' salut ' });
+            }
+            case '/v1/responses':
+              return Response.json({ object: 'response', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Talked on a call.' }] }] });
+          }
+          break;
+        case 'hermes.voice.test': {
+          const { input: prompt } = await req.json();
+          assert.match(prompt, /\[Voice call: Jo asked/);
+          assert.match(prompt, /Can you check the weather\?/);
+          return new Response('event: run.completed\ndata: {"output":"It is sunny."}\n\n', {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
+      }
+      assert.fail(`Unexpected fetch ${req.method} ${url}`);
+    });
+    return calls;
+  }
+
+  function fakeBrowser(t) {
+    const socket = [];
+    const playback = [];
+    const mic = { enabled: true, stop() {} };
+    let worklet;
+    class FakeSocket {
+      static OPEN = 1;
+      readyState = 0;
+      sent = [];
+      constructor(url, protocols) { Object.assign(this, { url, protocols }); socket.push(this); }
+      open() { this.readyState = FakeSocket.OPEN; this.onopen(); }
+      send(data) { this.sent.push(JSON.parse(data)); }
+      receive(event) { this.onmessage({ data: JSON.stringify(event) }); }
+      close() { this.readyState = 3; this.onclose({ reason: '' }); }
+    }
+    class FakeWorklet {
+      port = {};
+      constructor() { worklet = this; }
+      connect(node) { return node; }
+      disconnect() {}
+    }
+    class FakeContext {
+      state = 'running';
+      currentTime = 0;
+      audioWorklet = { addModule: async () => {} };
+      resume = async () => {};
+      close = async () => {};
+      createGain() { return { gain: {}, connect: (node) => node, disconnect() {} }; }
+      createAnalyser() { return this.createGain(); }
+      createMediaStreamSource() { return this.createGain(); }
+      createBuffer(_, length, rate) {
+        return { rate, duration: length / rate, getChannelData: () => new Float32Array(length) };
+      }
+      createBufferSource() {
+        return {
+          connect() {},
+          start() { playback.push(this); },
+          stop() { this.stopped = true; },
+        };
+      }
+    }
+    const globals = {
+      WebSocket: FakeSocket,
+      window: Object.assign(new EventTarget(), { AudioContext: FakeContext }),
+      AudioWorkletNode: FakeWorklet,
+      navigator: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [mic], getAudioTracks: () => [mic] }) } },
+    };
+    for (const [key, value] of Object.entries(globals)) {
+      const previous = Object.getOwnPropertyDescriptor(globalThis, key);
+      Object.defineProperty(globalThis, key, { value, configurable: true });
+      t.after(() => {
+        if (previous) Object.defineProperty(globalThis, key, previous);
+        else delete globalThis[key];
+      });
+    }
+    return {
+      socket, playback, mic,
+      capture: () => worklet.port.onmessage({ data: { pcm: new Int16Array(960).buffer, level: 0.6 } }),
+    };
+  }
+
+  async function until(predicate, message) {
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      const result = predicate();
+      if (result) return result;
+      await delay(20);
+    }
+    assert.fail(message);
+  }
+
+  test('voice options, provider setting, and ElevenLabs preview and dictation', async (t) => {
+    fakeHttp(t);
+    assert.equal((await app.request('/api/voice/options')).status, 401);
+    const saved = await (await request('/api/voice/options')).json();
+    assert.deepEqual(saved.providers, [{ id: 'xai', name: 'xAI', available: true }, { id: 'elevenlabs', name: 'ElevenLabs', available: true }]);
+    assert.deepEqual(saved.voices.xai, [{ id: 'luna', name: 'Luna' }]);
+    assert.deepEqual(saved.voices.elevenlabs, [{ id: voiceId, name: 'Sample', gender: 'female' }, { id: 'next-id', name: 'Other' }]);
+    assert.equal((await voiceApi.options()).voices[0].id, 'luna');
+    assert.equal((await request('/api/bots/eleven-bot', 'PATCH', { voice_provider: 'other' })).status, 400);
+    const patched = await configureElevenBot();
+    assert.equal(patched.voiceProvider, 'elevenlabs');
+    assert.equal(patched.voice, voiceId);
+    assert.equal((await voiceApi.preview({ botId: 'eleven-bot' })).length, 12);
+    assert.equal(await voiceApi.transcribe(new Blob([Buffer.alloc(400)]), 'pt-BR', 'eleven-bot'), 'hello there');
+    assert.equal((await voiceApi.preview({ botId: 'xai-bot' })).length, 12);
+    assert.equal(await voiceApi.transcribe(new Blob([Buffer.alloc(400)]), 'fr', 'xai-bot'), 'salut');
+    const patch = await (await request('/api/bots/xai-bot', 'PATCH', { voice_provider: 'elevenlabs' })).json();
+    assert.ok(patch.bot.voice && patch.bot.voice !== 'luna');
+    const reset = await (await request('/api/bots/xai-bot', 'PATCH', { voice_provider: 'xai' })).json();
+    assert.equal(reset.bot.voice, 'luna');
+    const xaiKey = env.xaiKey;
+    const elevenKey = env.elevenlabsKey;
+    t.after(() => { env.xaiKey = xaiKey; env.elevenlabsKey = elevenKey; });
+    env.xaiKey = '';
+    const elevenOnly = await (await request('/api/voice/options')).json();
+    assert.deepEqual(elevenOnly.providers.map((p) => p.available), [false, true]);
+    env.elevenlabsKey = '';
+    const unavailable = await (await request('/api/voice/options')).json();
+    assert.deepEqual(unavailable.providers.map((p) => p.available), [false, false]);
+    assert.deepEqual(unavailable.voices, { xai: [], elevenlabs: [] });
+  });
+
+  test('ElevenLabs mints, relays work, clears interrupted audio, and speaks the landed result', async (t) => {
+    const calls = fakeHttp(t);
+    const browser = fakeBrowser(t);
+    await configureElevenBot();
+    const unsub = hub.subscribe('owner', (event) => useStore.getState().handleEvent(event));
+    t.after(() => { endCall(); unsub(); });
+    startCall('eleven-bot');
+    const ws = await until(() => browser.socket[0], 'ElevenLabs socket did not open');
+    assert.equal(ws.url, signedUrl);
+    assert.equal(ws.protocols, undefined);
+    ws.open();
+    const init = ws.sent[0];
+    assert.equal(init.type, 'conversation_initiation_client_data');
+    const { agent, tts } = init.conversation_config_override;
+    assert.match(agent.prompt.prompt, /You are Relay, on a live voice call with Jo/);
+    assert.equal(agent.first_message, 'Olá, Jo!');
+    assert.equal(agent.language, 'pt');
+    assert.deepEqual(tts, { voice_id: voiceId, speed: 1.2 });
+    assert.doesNotMatch(JSON.stringify(ws.sent), /test-elevenlabs-key/);
+    ws.receive({
+      type: 'conversation_initiation_metadata',
+      conversation_initiation_metadata_event: { user_input_audio_format: 'pcm_16000', agent_output_audio_format: 'pcm_22050' },
+    });
+    assert.equal(useVoice.getState().status, 'live');
+    browser.capture();
+    assert.equal(Buffer.from(ws.sent.at(-1).user_audio_chunk, 'base64').length, 1280);
+    toggleMute();
+    assert.equal(browser.mic.enabled, false);
+    const beforeMute = ws.sent.length;
+    browser.capture();
+    assert.equal(ws.sent.length, beforeMute);
+    toggleMute();
+    ws.receive({ type: 'ping', ping_event: { event_id: 7, ping_ms: 4 } });
+    assert.deepEqual(ws.sent.at(-1), { type: 'pong', event_id: 7 });
+
+    ws.receive({ type: 'audio', audio_event: { event_id: 1, audio_base_64: pcm } });
+    assert.equal(browser.playback[0].buffer.rate, 22050);
+    ws.receive({ type: 'interruption', interruption_event: { event_id: 2 } });
+    assert.equal(browser.playback[0].stopped, true);
+    assert.equal(useVoice.getState().speaking, false);
+    ws.receive({ type: 'audio', audio_event: { event_id: 1, audio_base_64: pcm } });
+    assert.equal(browser.playback.length, 1);
+
+    const text = 'Can you check the weather?';
+    ws.receive({ type: 'user_transcript', user_transcription_event: { event_id: 3, user_transcript: text } });
+    ws.receive({ type: 'agent_response', agent_response_event: { event_id: 4, agent_response: 'I’ll check.' } });
+    const tool = { type: 'client_tool_call', client_tool_call: { tool_call_id: 'work', tool_name: 'send_task', parameters: { request: text }, expects_response: true } };
+    ws.receive(tool);
+    ws.receive(tool);
+    const result = await until(() => ws.sent.find((ev) => ev.type === 'client_tool_result'), 'Missing ElevenLabs tool result');
+    assert.equal(result.tool_call_id, 'work');
+    assert.equal(result.is_error, false);
+    assert.match(result.result, /Handed off/);
+    const relays = calls.filter((c) => c.url.pathname === '/api/voice/tool');
+    assert.equal(relays.length, 1);
+    assert.deepEqual(JSON.parse(relays[0].body), {
+      botId: 'eleven-bot', callId: useVoice.getState().callId, name: 'send_task', args: { request: text },
+    });
+    ws.receive({ type: 'agent_response_complete', agent_response_complete_event: { event_id: 4 } });
+    const note = await until(() => ws.sent.find((ev) => ev.type === 'contextual_update'), 'Missing work_landed note');
+    assert.match(note.text, /\[work_landed\][\s\S]*It is sunny/);
+    assert.equal(ws.sent.at(-1).type, 'user_message');
+    ws.receive({ type: 'user_transcript', user_transcription_event: { event_id: 5, user_transcript: ws.sent.at(-1).text } });
+    ws.receive({ type: 'agent_response', agent_response_event: { event_id: 6, agent_response: 'It is sunny.' } });
+    ws.receive({ type: 'audio', audio_event: { event_id: 6, audio_base_64: pcm } });
+    assert.equal(browser.playback.length, 2);
+    endCall();
+    const ended = await until(() => listRows('eleven-bot').find((row) => row.body.call?.phase === 'ended'), 'No call record');
+    assert.deepEqual(ended.body.call.transcript, [
+      { role: 'user', text }, { role: 'assistant', text: 'I’ll check.' }, { role: 'assistant', text: 'It is sunny.' },
+    ]);
+    assert.deepEqual(ended.body.call.tasks, [text]);
+    await until(() => listRows('eleven-bot').some((row) => row.body.call?.summary === 'Talked on a call.'), 'No call summary');
+  });
+
+  test('xAI still greets, streams PCM, interrupts and batches tool results', async (t) => {
+    const calls = fakeHttp(t);
+    const browser = fakeBrowser(t);
+    t.after(endCall);
+    startCall('xai-bot');
+    const ws = await until(() => browser.socket[0], 'xAI socket did not open');
+    assert.match(ws.url, /^wss:\/\/api\.x\.ai\/v1\/realtime/);
+    assert.deepEqual(ws.protocols, ['xai-client-secret.ephemeral-xai']);
+    ws.open();
+    assert.equal(ws.sent[0].type, 'session.update');
+    assert.equal(ws.sent[0].session.voice, 'luna');
+    assert.deepEqual(ws.sent[0].session.tools, VOICE_TOOLS);
+    ws.receive({ type: 'session.updated' });
+    assert.deepEqual(ws.sent.at(-1), { type: 'response.create' });
+    browser.capture();
+    assert.equal(ws.sent.at(-1).type, 'input_audio_buffer.append');
+    assert.equal(Buffer.from(ws.sent.at(-1).audio, 'base64').length, 1920);
+    toggleMute();
+    assert.deepEqual(ws.sent.at(-1), { type: 'input_audio_buffer.clear' });
+    toggleMute();
+
+    ws.receive({ type: 'response.created', response: { id: 'greeting' } });
+    const audio = { type: 'response.output_audio.delta', response_id: 'greeting', delta: pcm };
+    ws.receive(audio);
+    assert.equal(browser.playback[0].buffer.rate, 24000);
+    ws.receive({ type: 'input_audio_buffer.speech_started' });
+    assert.deepEqual(ws.sent.at(-1), { type: 'response.cancel' });
+    assert.equal(browser.playback[0].stopped, true);
+    ws.receive(audio);
+    assert.equal(browser.playback.length, 1);
+    ws.receive({ type: 'input_audio_buffer.speech_stopped' });
+
+    const tool = { call_id: 'read', name: 'peek_activity', arguments: '{}' };
+    ws.receive({ type: 'response.function_call_arguments.done', ...tool });
+    ws.receive({ type: 'response.done', response: { output: [
+      { type: 'function_call', ...tool },
+      { type: 'function_call', call_id: 'recall', name: 'recall_text_messages', arguments: '{}' },
+    ] } });
+    await until(() => ws.sent.filter((ev) => ev.type === 'response.create').length === 2, 'xAI did not continue after batched tools');
+    assert.deepEqual(ws.sent.slice(-3).map((ev) => ev.item?.call_id ?? ev.type), ['read', 'recall', 'response.create']);
+    assert.equal(calls.filter((call) => call.url.pathname === '/api/voice/tool').length, 2);
+    endCall();
+    await until(() => listRows('xai-bot').find((row) => row.body.call?.phase === 'ended'), 'No xAI call record');
+  });
+
+  test('agent sync creates and updates client tools and enables session overrides', async (t) => {
+    const tools = new Map();
+    let agent;
+    t.mock.method(http, 'fetch', async (input, init) => {
+      const url = new URL(input);
+      const method = init.method;
+      assert.equal(init.headers['xi-api-key'], 'test-elevenlabs-key');
+      if (url.pathname === '/v1/convai/tools' && method === 'GET') {
+        assert.equal(url.searchParams.get('used_by_agent_id'), 'synced-agent');
+        return Response.json({ tools: [...tools.values()], has_more: false });
+      }
+      if (method === 'POST' && url.pathname === '/v1/convai/tools' || method === 'PATCH' && url.pathname.startsWith('/v1/convai/tools/')) {
+        const id = method === 'POST' ? `tool-${tools.size}` : url.pathname.split('/').at(-1);
+        const tool = { id, ...JSON.parse(init.body) };
+        tools.set(id, tool);
+        return Response.json(tool);
+      }
+      assert.ok(method === 'POST' && url.pathname === '/v1/convai/agents/create' || method === 'PATCH' && url.pathname === '/v1/convai/agents/synced-agent');
+      agent = JSON.parse(init.body);
+      return Response.json({ agent_id: 'synced-agent' });
+    });
+    assert.equal(await syncElevenLabsAgent('test-elevenlabs-key'), 'synced-agent');
+    assert.equal(await syncElevenLabsAgent('test-elevenlabs-key', 'synced-agent'), 'synced-agent');
+    assert.deepEqual([...tools.values()].map(({ tool_config }) => tool_config), VOICE_TOOLS.map(({ name, description, parameters }) =>
+      ({ type: 'client', name, description, parameters, expects_response: true })));
+    assert.deepEqual(agent.conversation_config.agent.prompt.tool_ids, [...tools.keys()]);
+    assert.ok(agent.conversation_config.conversation.client_events.includes('agent_response_complete'));
+    assert.deepEqual(agent.platform_settings, {
+      auth: { enable_auth: true },
+      overrides: { conversation_config_override: {
+        agent: { prompt: { prompt: true }, first_message: true, language: true },
+        tts: { voice_id: true, speed: true },
+      } },
+    });
+  });
 }
-await page.screenshot({ path: `${S}/shots/04-after-landed.png` });
-await page.click('.vcall__captions').catch(() => {});
-await page.waitForTimeout(300);
-await page.screenshot({ path: `${S}/shots/05-transcript.png` });
-log('full call transcript:\n' + (await page.locator('.vcall__log').innerText().catch(() => '(none)')));
-log('ws counts:', JSON.stringify(await page.evaluate(() => window.__ws)));
-log('audio sources during call:', (await page.evaluate(() => window.__audio.starts)) - before);
-await page.click('button[aria-label="End call"]');
-await page.waitForTimeout(4000);
-await page.screenshot({ path: `${S}/shots/06-ended.png` });
-log('events in transcript:', JSON.stringify(await page.locator('.system-event').allInnerTexts()).slice(-500));
-await browser.close();

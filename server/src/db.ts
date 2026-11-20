@@ -154,6 +154,7 @@ function addColumn(table: string, col: string, ddl: string) {
 addColumn('bots', 'voice', "TEXT NOT NULL DEFAULT 'luna'");
 addColumn('bots', 'voice_speed', 'REAL NOT NULL DEFAULT 1');
 addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
+addColumn('bots', 'voice_provider', "TEXT NOT NULL DEFAULT 'xai'");
 // Hermes engine: per-bot model choice, which engine runs the bot ('primary' = the existing agent,
 // 'managed' = a gateway we start), and the managed gateway's port.
 addColumn('bots', 'model', 'TEXT');

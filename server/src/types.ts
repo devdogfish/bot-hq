@@ -26,10 +26,11 @@ export interface Bot {
   kind?: 'agent' | 'room';
   pinned: boolean;
   effort: 'low' | 'medium' | 'high' | 'xhigh';
-  /** Voice chat settings: xAI voice id, speed multiplier (0.7–1.5), BCP-47 language or 'auto'. */
+  /** Voice chat settings: provider-specific voice ID, speed multiplier, BCP-47 language or 'auto'. */
   voice: string;
   voiceSpeed: number;
   voiceLanguage: string;
+  voiceProvider: VoiceProviderId;
   /** Hermes engine: production model id and provider for this bot; null = the engine's default. */
   model: string | null;
   provider: string | null;
@@ -167,6 +168,44 @@ export interface VoiceCallRecord {
 }
 
 export interface VoiceOption { id: string; name: string; gender?: string }
+
+export type VoiceProviderId = 'xai' | 'elevenlabs';
+
+export interface VoiceOptions {
+  providers: { id: VoiceProviderId; name: string; available: boolean }[];
+  voices: Record<VoiceProviderId, VoiceOption[]>;
+  languages: { code: string; name: string }[];
+  speeds: number[];
+}
+
+export type VoiceSessionConfig =
+  | {
+    provider: 'xai';
+    clientSecret: string;
+    expiresAt: number;
+    model: string;
+    websocketUrl: string;
+    sampleRate: number;
+    instructions: string;
+    voice: string;
+    speed: number;
+    language: string;
+    tools: unknown[];
+    session: Record<string, unknown>;
+  }
+  | {
+    provider: 'elevenlabs';
+    signedUrl: string;
+    initData: {
+      type: 'conversation_initiation_client_data';
+      conversation_config_override: {
+        agent: { prompt: { prompt: string }; first_message: string; language?: string };
+        tts: { voice_id: string; speed: number };
+      };
+    };
+  };
+
+export type VoiceSession = VoiceSessionConfig & { callId: string };
 
 export interface NoticeBody { type: 'notice'; text: string; tone?: 'info' | 'warn' | 'error' }
 

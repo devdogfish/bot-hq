@@ -15,13 +15,13 @@ function pickMime(): string | undefined {
   return undefined;
 }
 
-export function useDictation(onText: (text: string) => void, onError: (msg: string) => void, language?: string) {
+export function useDictation(onText: (text: string) => void, onError: (msg: string) => void, language?: string, botId?: string) {
   const [state, setState] = useState<DictationState>('idle');
   const rec = useRef<{ mr: MediaRecorder; stream: MediaStream; chunks: Blob[]; downAt: number; cancelled: boolean; timer: ReturnType<typeof setTimeout> } | null>(null);
   const starting = useRef(false);
   const toggleMode = useRef(false);
-  const cb = useRef({ onText, onError, language });
-  cb.current = { onText, onError, language };
+  const cb = useRef({ onText, onError, language, botId });
+  cb.current = { onText, onError, language, botId };
 
   const finish = useCallback((cancel = false) => {
     const r = rec.current;
@@ -51,7 +51,7 @@ export function useDictation(onText: (text: string) => void, onError: (msg: stri
         if (r.cancelled || !r.chunks.length || Date.now() - r.downAt < 250) { setState('idle'); return; }
         setState('transcribing');
         try {
-          const text = await voiceApi.transcribe(new Blob(r.chunks, { type: mr.mimeType || mime || 'audio/webm' }), cb.current.language);
+          const text = await voiceApi.transcribe(new Blob(r.chunks, { type: mr.mimeType || mime || 'audio/webm' }), cb.current.language, cb.current.botId);
           if (text) cb.current.onText(text);
         } catch (e) {
           cb.current.onError((e as Error).message || 'Transcription failed');
