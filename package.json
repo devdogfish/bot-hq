@@ -7,7 +7,7 @@
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",
-    "test": "npm run build -w server && node --test tests/agent-health.mjs tests/hermes-approvals.mjs tests/owner-email-*.mjs tests/owner-secrets-flow.mjs tests/personal-assistant-flow.mjs tests/personal-gmail-transport.mjs tests/reset-queue.mjs tests/screen-bench.mjs",
+    "test": "npm run build -w server && node --test tests/agent-health.mjs tests/hermes-approvals.mjs tests/model-choice.mjs tests/owner-email-*.mjs tests/owner-secrets-flow.mjs tests/personal-assistant-flow.mjs tests/personal-gmail-transport.mjs tests/reset-queue.mjs tests/screen-bench.mjs",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
   },
   "engines": { "node": ">=22.12" }

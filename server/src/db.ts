@@ -158,6 +158,9 @@ addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
 // 'managed' = a gateway we start), and the managed gateway's port.
 addColumn('bots', 'model', 'TEXT');
 addColumn('bots', 'provider', 'TEXT');
+// Model the Owner is trying in direct chat; production turns (routines, handoffs, rooms) keep model/provider.
+addColumn('bots', 'chat_model', 'TEXT');
+addColumn('bots', 'chat_provider', 'TEXT');
 addColumn('bots', 'engine', 'TEXT');
 addColumn('bots', 'engine_port', 'INTEGER');
 addColumn('bots', 'handback_at', 'INTEGER');

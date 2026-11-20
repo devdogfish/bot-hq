@@ -4,6 +4,7 @@ import { useStore } from '../store';
 import { voiceApi, type VoiceOptions } from '../voice/api';
 import { endCall, isCallActive, previewVoice, startCall, useVoice } from '../voice/call';
 import { Icon } from './Icon';
+import { MiniSelect } from './MiniSelect';
 
 const FALLBACK: VoiceOptions = {
   voices: ['ara', 'eve', 'leo', 'luna', 'rex', 'sal'].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) })),
@@ -12,26 +13,6 @@ const FALLBACK: VoiceOptions = {
 };
 
 const speedLabel = (s: number) => `${Number(s.toFixed(2))}x`;
-
-function NativeSelect<T extends string | number>({ label, value, options, onChange }: { label: string; value: T; options: { value: T; label: string }[]; onChange: (v: T) => void }) {
-  const current = options.find((o) => o.value === value)?.label ?? String(value);
-  return (
-    <span className="mini-select mini-select--native">
-      <span>{current}</span>
-      <Icon name="chev_down" size={10} opacity={0.66} />
-      <select
-        aria-label={label}
-        value={String(value)}
-        onChange={(e) => {
-          const o = options.find((x) => String(x.value) === e.target.value);
-          if (o) onChange(o.value);
-        }}
-      >
-        {options.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.label}</option>)}
-      </select>
-    </span>
-  );
-}
 
 /** "Voice chat" section of the details panel: voice, speed, language (saved per bot), preview, start a call. */
 export function VoiceSettings({ bot }: { bot: Bot }) {
@@ -74,16 +55,16 @@ export function VoiceSettings({ bot }: { bot: Bot }) {
         <span>Voice</span>
         <span className="voice-setting__right">
           <button type="button" className="voice-preview" onClick={preview} disabled={previewing} title={`Hear ${bot.name}'s voice`}>{previewing ? 'Playing…' : 'Preview'}</button>
-          <NativeSelect label="Voice" value={bot.voice} options={voices.map((v) => ({ value: v.id, label: v.name }))} onChange={(voice) => save({ voice })} />
+          <MiniSelect label="Voice" value={bot.voice} options={voices.map((v) => ({ value: v.id, label: v.name }))} onChange={(voice) => save({ voice })} />
         </span>
       </div>
       <div className="panel-row panel-row--setting">
         <span>Speed</span>
-        <NativeSelect label="Speed" value={bot.voiceSpeed} options={speeds.map((s) => ({ value: s, label: speedLabel(s) }))} onChange={(voiceSpeed) => save({ voiceSpeed })} />
+        <MiniSelect label="Speed" value={bot.voiceSpeed} options={speeds.map((s) => ({ value: s, label: speedLabel(s) }))} onChange={(voiceSpeed) => save({ voiceSpeed })} />
       </div>
       <div className="panel-row panel-row--setting">
         <span>Language</span>
-        <NativeSelect label="Language" value={bot.voiceLanguage} options={opts.languages.map((l) => ({ value: l.code, label: l.name }))} onChange={(voiceLanguage) => save({ voiceLanguage })} />
+        <MiniSelect label="Language" value={bot.voiceLanguage} options={opts.languages.map((l) => ({ value: l.code, label: l.name }))} onChange={(voiceLanguage) => save({ voiceLanguage })} />
       </div>
       <button type="button" className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`} onClick={() => (inCall ? endCall() : startCall(bot.id))}>
         <Icon name="voice_a" size={14} opacity={inCall ? 1 : 0.56} /> {inCall ? 'End voice chat' : 'Start voice chat'}

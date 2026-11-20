@@ -237,6 +237,10 @@
 .composer__btn:hover:not(:disabled) { background: var(--color-bg-secondary-hover); }
 .composer__draft { width: auto; padding: 0 8px; border-radius: 14px; font-size: 12px; white-space: nowrap; }
 .composer__draft:disabled { opacity: 0.5; }
+.composer-model { display: inline-flex; min-width: 0; }
+.composer__model { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; color: var(--color-text-secondary); }
+.composer__model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer__model.is-override { color: var(--color-ink); }
 .composer__input {
   flex: 1 1 0; min-width: 0; border: 0; outline: none; resize: none; background: transparent;
   padding: 12px 0; margin: 0; font-size: 14px; line-height: 20px; letter-spacing: 0.14px; color: var(--color-ink);

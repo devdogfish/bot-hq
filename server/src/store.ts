@@ -36,6 +36,8 @@ export function toBot(r: any): Bot {
     voiceLanguage: r.voice_language ?? 'auto',
     model: r.model ?? null,
     provider: r.provider ?? null,
+    chatModel: r.chat_model ?? null,
+    chatProvider: r.chat_provider ?? null,
     generation: r.generation,
     unread: r.unread,
     lastPreview: lastPreview ? lastPreview.slice(0, 140) : null,

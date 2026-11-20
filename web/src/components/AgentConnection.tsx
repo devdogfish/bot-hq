@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { configApi, type AgentSettings } from '../lib/configApi';
+import { Icon } from './Icon';
+
+const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 
 export function AgentConnection({ botId, onSaved }: { botId: string; onSaved: () => void }) {
   const [agent, setAgent] = useState<AgentSettings | null>(null);
@@ -59,8 +62,12 @@ export function AgentConnection({ botId, onSaved }: { botId: string; onSaved: ()
   }
 
   return (
-    <details className="panel-card">
-      <summary className="panel-row">Agent connection</summary>
+    <details className="engine__disclosure">
+      <summary className="panel-row panel-row--link engine__summary">
+        <span className="engine__summary-title">Agent connection</span>
+        {agent?.hermesUrl && <span className="engine__summary-meta">{hostOf(agent.hermesUrl)}</span>}
+        <Icon name="chev_right" size={10} opacity={0.56} className="engine__summary-chev" />
+      </summary>
       {agent ? (
         <form onSubmit={save}>
           <fieldset className="panel-empty agent-connection" disabled={busy} aria-busy={busy}>

@@ -1,37 +1,41 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Bot, EngineInfo, EngineProvider } from '@shared/types';
-import { configApi } from '../lib/configApi';
+import { useCallback, useEffect, useState } from 'react';
+import type { Bot, EngineInfo } from '@shared/types';
+import { configApi, type EnginePatch } from '../lib/configApi';
+import { rememberProviders, saveEngineModels } from '../lib/engineModels';
 import { useStore } from '../store';
 import { AgentConnection } from './AgentConnection';
 import { Icon } from './Icon';
+import { ModelPicker, type ModelRef, type TriggerRender } from './ModelPicker';
 import { OwnerSecretShares } from './OwnerSecretShares';
 
-const KIND: Record<EngineProvider['kind'], string> = { subscription: 'Subscription', api_key: 'API key' };
 const STATUS: Record<EngineInfo['status'], string> = { ready: 'ready', starting: 'starting', stopped: 'stopped', error: 'error' };
 
-/** Connected providers first; otherwise the server's order. */
-function sortProviders(list: EngineProvider[]): EngineProvider[] {
-  return [...list].sort((a, b) => Number(b.connected) - Number(a.connected));
+/** The `mini-select` look, as a real button that opens the model menu. */
+function pickerButton(text: string, title?: string): TriggerRender {
+  return ({ toggle, ref, open: _open, ...aria }) => (
+    <button ref={ref} type="button" className="mini-select mini-select--button engine__select" title={title} onClick={toggle} {...aria}>
+      <span>{text}</span>
+      <Icon name="chev_down" size={10} opacity={0.66} />
+    </button>
+  );
 }
 
 /**
- * Agent connection, provider, model and gateway status in the details panel. Every call fails soft: if the engine endpoints are missing or
- * down, the section says so and the rest of the panel is unaffected.
+ * Engine section of the details panel: the Agent's production model, the model used in direct chat, gateway status, and
+ * (collapsed) the connection and shared items. Every call fails soft: if the engine endpoints are missing or down, the
+ * section says so and the rest of the panel is unaffected.
  */
 export function EngineSettings({ bot }: { bot: Bot }) {
   const [engine, setEngine] = useState<EngineInfo | null>(null);
   const [phase, setPhase] = useState<'loading' | 'ok' | 'unavailable'>('loading');
-  const [provider, setProvider] = useState('');
-  const [model, setModel] = useState('');
-  const [busy, setBusy] = useState<'save' | 'restart' | 'screen' | null>(null);
+  const [busy, setBusy] = useState<'restart' | 'screen' | null>(null);
   const [note, setNote] = useState<string | null>(null);
-  const dirty = useRef(false);
   const botId = bot.id;
 
-  const apply = useCallback((e: EngineInfo, keepDraft = false) => {
+  const apply = useCallback((e: EngineInfo) => {
     setEngine(e); setPhase('ok');
-    if (!keepDraft || !dirty.current) { dirty.current = false; setProvider(e.provider ?? ''); setModel(e.model ?? ''); }
-    // Keep the bot's model label in step without waiting for the server's `bot` event.
+    rememberProviders(e.botId, e.providers ?? []);
+    // Keep the bot's model label in step (including the agent's default) without waiting for the server's `bot` event.
     useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === e.botId && (b.model !== e.model || b.provider !== e.provider) ? { ...b, model: e.model, provider: e.provider } : b)) }));
   }, []);
 
@@ -40,12 +44,12 @@ export function EngineSettings({ bot }: { bot: Bot }) {
     let alive = true;
     if (!quiet) setPhase('loading');
     configApi.engine(botId)
-      .then((r) => { if (alive && r?.engine) apply(r.engine, quiet); else if (alive && !quiet) setPhase('unavailable'); })
+      .then((r) => { if (alive && r?.engine) apply(r.engine); else if (alive && !quiet) setPhase('unavailable'); })
       .catch(() => { if (alive && !quiet) setPhase('unavailable'); });
     return () => { alive = false; };
   }, [botId, apply]);
 
-  useEffect(() => { dirty.current = false; setEngine(null); setNote(null); return load(); }, [load]);
+  useEffect(() => { setEngine(null); setNote(null); return load(); }, [load]);
 
   // The agent takes a moment to come up after a change or a restart.
   const starting = engine?.status === 'starting';
@@ -55,53 +59,15 @@ export function EngineSettings({ bot }: { bot: Bot }) {
     return () => clearInterval(t);
   }, [starting, load]);
 
-  const connection = <AgentConnection key={botId} botId={botId} onSaved={() => load(true)} />;
-  if (phase !== 'ok' || !engine) {
-    return (
-      <>
-        {connection}
-        <OwnerSecretShares key={botId} botId={botId} />
-      <div className="panel-card">
-        <div className="panel-empty engine__empty">
-          {phase === 'loading' ? 'Checking…' : (
-            <>
-              <span>Engine unavailable</span>
-              <button type="button" className="link-btn link-btn--small" onClick={() => load()}>Try again</button>
-            </>
-          )}
-        </div>
-      </div>
-      </>
-    );
-  }
-
-  const providers = sortProviders(engine.providers ?? []);
-  const selected = providers.find((p) => p.id === provider) ?? null;
-  const suggestions = selected?.models ?? [];
-  const wantProvider = provider && provider !== (engine.provider ?? '') ? provider : undefined;
-  const wantModel = model.trim() && model.trim() !== (engine.model ?? '') ? model.trim() : undefined;
-  const changed = !!wantProvider || !!wantModel;
-  const listId = `engine-models-${botId}`;
-
-  const pickProvider = (id: string) => {
-    dirty.current = true; setNote(null); setProvider(id);
-    const next = providers.find((p) => p.id === id);
-    // A model from another provider will not work here, so start from this provider's first suggestion.
-    if (next?.models.length && !next.models.includes(model.trim())) setModel(next.models[0]);
-  };
-
-  const save = async () => {
-    if (!changed || busy) return;
-    setBusy('save'); setNote(null);
-    try { const r = await configApi.setEngine(botId, { ...(wantProvider ? { provider: wantProvider } : {}), ...(wantModel ? { model: wantModel } : {}) }); dirty.current = false; apply(r.engine); }
-    catch (e) { setNote(`Couldn’t save: ${(e as Error).message || 'the engine did not answer'}`); }
-    finally { setBusy(null); }
+  const save = (patch: EnginePatch) => {
+    setNote(null);
+    saveEngineModels(botId, patch).then(apply).catch((e: Error) => setNote(`Couldn’t save: ${e.message || 'the engine did not answer'}`));
   };
 
   const restart = async () => {
     if (busy) return;
     setBusy('restart'); setNote(null);
-    try { const r = await configApi.restartEngine(botId); apply(r.engine, true); }
+    try { const r = await configApi.restartEngine(botId); apply(r.engine); }
     catch (e) { setNote(`Couldn’t restart: ${(e as Error).message || 'the engine did not answer'}`); }
     finally { setBusy(null); }
   };
@@ -109,46 +75,61 @@ export function EngineSettings({ bot }: { bot: Bot }) {
   const useThisScreen = async () => {
     if (busy) return;
     setBusy('screen'); setNote(null);
-    try { const r = await configApi.stopOwnScreen(botId); apply(r.engine, true); }
+    try { const r = await configApi.stopOwnScreen(botId); apply(r.engine); }
     catch (e) { setNote(`Couldn’t switch screens: ${(e as Error).message || 'the engine did not answer'}`); }
     finally { setBusy(null); }
   };
 
+  const more = (
+    <div className="panel-card engine__more">
+      <AgentConnection key={`c-${botId}`} botId={botId} onSaved={() => load(true)} />
+      <OwnerSecretShares key={`s-${botId}`} botId={botId} />
+    </div>
+  );
+
+  if (phase !== 'ok' || !engine) {
+    return (
+      <>
+        <div className="panel-card">
+          <div className="panel-empty engine__empty">
+            {phase === 'loading' ? 'Checking…' : (
+              <>
+                <span>Engine unavailable</span>
+                <button type="button" className="link-btn link-btn--small" onClick={() => load()}>Try again</button>
+              </>
+            )}
+          </div>
+        </div>
+        {more}
+      </>
+    );
+  }
+
+  const providers = engine.providers ?? [];
+  const providerName = (id: string | null) => providers.find((p) => p.id === id)?.name ?? id ?? undefined;
+  // The bot's own choice, else what the agent runs by default.
+  const production: ModelRef = bot.model ? { provider: bot.provider, model: bot.model } : { provider: engine.provider, model: engine.model };
+  const chat: ModelRef = { provider: bot.chatProvider, model: bot.chatModel };
+
   return (
     <>
-      {connection}
-      <OwnerSecretShares key={botId} botId={botId} />
       <div className="panel-card engine">
         <div className="panel-row panel-row--setting">
-          <span>Provider</span>
-          <span className="mini-select mini-select--native engine__select">
-            <span>{selected?.name ?? (provider || 'Default')}</span>
-            <Icon name="chev_down" size={10} opacity={0.66} />
-            <select aria-label="Provider" value={provider} onChange={(e) => pickProvider(e.target.value)}>
-              {!selected && <option value={provider}>{provider || 'Default'}</option>}
-              {providers.map((p) => <option key={p.id} value={p.id}>{p.name} · {KIND[p.kind]} · {p.connected ? 'Connected' : 'Not connected'}</option>)}
-            </select>
-          </span>
-        </div>
-        {selected && (
-          <div className={`engine__conn${selected.connected ? ' is-on' : ''}`}>
-            <i aria-hidden />
-            <span>{selected.connected ? 'Connected' : 'Not connected'} · {KIND[selected.kind]}</span>
-          </div>
-        )}
-        <div className="panel-row panel-row--setting">
-          <label htmlFor={`${listId}-input`}>Model</label>
-          <input
-            id={`${listId}-input`} className="engine__model" list={listId} value={model} spellCheck={false} autoComplete="off"
-            placeholder={suggestions[0] ?? 'Model id'}
-            onChange={(e) => { dirty.current = true; setNote(null); setModel(e.target.value); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          <span>Production model</span>
+          <ModelPicker
+            label="Production model" providers={providers} value={production}
+            onPick={(m) => save({ provider: m.provider, model: m.model })}
+            trigger={pickerButton(production.model ?? 'Agent default', providerName(production.provider))}
           />
-          <datalist id={listId}>{suggestions.map((m) => <option key={m} value={m} />)}</datalist>
         </div>
-        <div className="engine__actions">
-          <button type="button" className="btn btn--sm btn--bot" onClick={save} disabled={!changed || busy === 'save'}>{busy === 'save' ? 'Saving…' : 'Save'}</button>
-          {changed && <button type="button" className="link-btn link-btn--small" onClick={() => { dirty.current = false; setNote(null); setProvider(engine.provider ?? ''); setModel(engine.model ?? ''); }}>Undo</button>}
+        <div className="panel-row panel-row--setting">
+          <span>Chat model</span>
+          <ModelPicker
+            label="Chat model" providers={providers} value={chat} production={production} defaultLabel="Same as production"
+            onPick={(m) => save({ chatProvider: m.provider, chatModel: m.model })}
+            actions={chat.model ? [{ label: 'Set as production model', onSelect: () => save({ provider: chat.provider, model: chat.model, chatProvider: null, chatModel: null }) }] : []}
+            trigger={pickerButton(chat.model ?? 'Same as production', chat.model ? providerName(chat.provider) : undefined)}
+          />
         </div>
         {engine.ownScreen && (
           <div className="engine__notice">
@@ -168,6 +149,7 @@ export function EngineSettings({ bot }: { bot: Bot }) {
         </div>
         {engine.status === 'error' && engine.error && <div className="engine__error">{engine.error}</div>}
       </div>
+      {more}
     </>
   );
 }

@@ -30,9 +30,12 @@ export interface Bot {
   voice: string;
   voiceSpeed: number;
   voiceLanguage: string;
-  /** Hermes engine: model id and provider for this bot; null = the engine's default. */
+  /** Hermes engine: production model id and provider for this bot; null = the engine's default. */
   model: string | null;
   provider: string | null;
+  /** Model the Owner picked for direct chat; null = chat uses the production model. */
+  chatModel: string | null;
+  chatProvider: string | null;
   generation: number;
   unread: number;
   lastPreview: string | null;
@@ -224,6 +227,9 @@ export interface EngineInfo {
   error: string | null;
   model: string | null;
   provider: string | null;
+  /** Direct-chat override; null = chat uses the production model above. */
+  chatModel: string | null;
+  chatProvider: string | null;
   version: string | null;
   providers: EngineProvider[];
   /** Hermes is running a private screen of its own for this agent, so its computer work is not on the screen the app shows. */
