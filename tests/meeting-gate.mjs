@@ -93,6 +93,13 @@ const turns = [
     { prior: [say('Priya', 'Hey Atlas.', 1_000)] }],
   ['another speaker continues after someone named the Agent', say('Sam', 'Thanks for joining.', 4_000), 'silent',
     { prior: [say('Priya', 'Hey Atlas.', 1_000)] }],
+  ['one-to-one: plain sentence without the name', say('Priya', 'What is your name?'), 'respond', { oneToOne: true }],
+  ['one-to-one: small talk', say('Priya', 'Hello, say something.'), 'respond', { oneToOne: true }],
+  ['one-to-one: still silent when asked to mute earlier', say('Priya', 'Okay.'), 'silent', { oneToOne: true, ...muted }],
+  ['one-to-one: mute still mutes', say('Priya', 'Atlas, mute yourself.'), { action: 'mute' }, { oneToOne: true }],
+  ['group call: plain sentence stays silent', say('Priya', 'Hello, say something.'), 'silent'],
+  ['one-to-one: host can still send the Agent away', { ...say('Owner', 'Can you leave the call?'), host: true }, { action: 'leave' }, { oneToOne: true }],
+  ['one-to-one: a guest cannot send the Agent away', say('Priya', 'Leave the call.'), 'respond', { oneToOne: true }],
 ];
 
 for (const [label, latest, expected, { prior = [], ...overrides } = {}] of turns) {

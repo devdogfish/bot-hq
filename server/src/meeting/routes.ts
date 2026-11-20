@@ -39,7 +39,12 @@ const turn = z.object({
   /** True only when the meeting platform reports the speaker as the signed-in host (Jitsi moderator). */
   host: z.boolean().optional(),
 });
-const gateRequest = callRequest.extend({ transcript: z.array(turn).max(24), last_agent_turn_at: z.number().nonnegative().nullable() });
+const gateRequest = callRequest.extend({
+  transcript: z.array(turn).max(24),
+  last_agent_turn_at: z.number().nonnegative().nullable(),
+  /** People in the call besides this Agent, when the platform reports it. */
+  others: z.number().int().nonnegative().max(1000).optional(),
+});
 const toolRequest = callRequest.extend({
   name: z.string().min(1).max(64),
   arguments: z.record(z.string(), z.unknown()),
@@ -157,7 +162,7 @@ export function meetingAliases(name: string): string[] {
 meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
   const request = gateRequest.safeParse(c.get('body'));
   if (!request.success) return c.json({ error: 'Invalid gate request' }, 400);
-  const { call_id, transcript, last_agent_turn_at } = request.data;
+  const { call_id, transcript, last_agent_turn_at, others } = request.data;
   const bot = c.get('bot');
   const call = meetingCall(bot, call_id);
   if (!call) return c.json({ error: 'Call not found' }, 404);
@@ -174,6 +179,7 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
     lastAgentTurnAt: last_agent_turn_at,
     mutedByRequest: call.mutedByRequest,
     ownerNames: env.meetingOwnerNames,
+    oneToOne: others === 1,
   });
   if (typeof decision === 'object') {
     if (decision.action !== 'leave') call.mutedByRequest = decision.action === 'mute';
