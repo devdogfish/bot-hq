@@ -7,6 +7,7 @@ import { screenSize } from '../lib/computer';
 import { configApi } from '../lib/configApi';
 import { useSelectedBot, useStore } from '../store';
 import { Icon } from './Icon';
+import { isMacPlatform, pasteChord, readCmdAsCtrl, releaseHeld, translateKeyDown, translateKeyUp, writeCmdAsCtrl, type KeyStroke } from './computer-keys';
 
 export type ScreenMode = 'watch' | 'control';
 type Conn = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -66,6 +67,9 @@ type NoVnc = RFBType & {
   };
   _screenSize(): { w: number; h: number };
   _FBU: { width: number; height: number };
+  _keyboard: { _keyDownList: Record<string, number> } | null;
+  sendKey(keysym: number, code: string, down?: boolean): void;
+  clipboardPasteFrom(text: string): void;
   _handleDataRect(): boolean;
   _framebufferUpdate(): boolean;
   _resize(width: number, height: number): void;
@@ -80,6 +84,9 @@ class ScreenStream {
   private conn: Conn = 'idle';
   private placement: Placement | null = null;
   private listener: StreamListener | null = null;
+  private pasteTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Text the Agent copied while the Owner drives; control streams only. */
+  onClipboard: ((text: string) => void) | null = null;
 
   constructor(
     private readonly entry: ScreenEntry,
@@ -143,6 +150,35 @@ class ScreenStream {
 
   focus() {
     this.rfb?.focus();
+  }
+
+  /** Codes noVNC holds down on the remote end. */
+  held(): ReadonlySet<string> {
+    return new Set(Object.keys(this.rfb?._keyboard?._keyDownList ?? {}));
+  }
+
+  sendKeys(keys: readonly KeyStroke[]) {
+    const rfb = this.rfb;
+    if (!rfb) return;
+    for (const [keysym, code, down] of keys) rfb.sendKey(keysym, code, down);
+  }
+
+  releaseKeys() {
+    const rfb = this.rfb;
+    const held = rfb?._keyboard?._keyDownList;
+    if (rfb && held) releaseHeld(held, (keysym, code, down) => rfb.sendKey(keysym, code, down));
+  }
+
+  /** Give the Agent the Owner's text, then paste it there with Ctrl+V. */
+  paste(text: string | null) {
+    const rfb = this.rfb;
+    if (!rfb) return;
+    clearTimeout(this.pasteTimer);
+    if (text) rfb.clipboardPasteFrom(text);
+    // Extended clipboard is Notify → Request → Provide; give the server a moment before Ctrl+V.
+    this.pasteTimer = setTimeout(() => {
+      if (this.rfb === rfb) this.sendKeys(pasteChord(this.held()));
+    }, text ? 120 : 0);
   }
 
   reconnect() {
@@ -233,6 +269,11 @@ class ScreenStream {
         this.conn = (event as CustomEvent<{ clean: boolean }>).detail?.clean ? 'disconnected' : 'error';
         this.publish();
       });
+      rfb.addEventListener('clipboard', (event) => {
+        if (this.rfb !== rfb || this.mode !== 'control') return;
+        const text = (event as CustomEvent<{ text: string }>).detail?.text;
+        if (text) this.onClipboard?.(text);
+      });
       rfb.addEventListener('securityfailure', () => {
         if (this.rfb !== rfb) return;
         this.conn = 'error';
@@ -247,6 +288,9 @@ class ScreenStream {
   }
 
   stop() {
+    // Leave nothing held on the Agent's desktop when control ends.
+    this.releaseKeys();
+    clearTimeout(this.pasteTimer);
     this.capture();
     this.generation++;
     const rfb = this.rfb;
@@ -384,6 +428,11 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   const [pan, setPan] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const [mac] = useState(() => isMacPlatform(navigator as Navigator & { userAgentData?: { platform?: string } }));
+  const [cmdAsCtrl, setCmdAsCtrl] = useState(readCmdAsCtrl);
+  const [locked, setLocked] = useState(false);
+  /** Text the Agent copied that the browser wouldn't let us put on the Owner's clipboard. */
+  const [agentCopy, setAgentCopy] = useState<string | null>(null);
 
   const screen = computer?.screens.find((s) => s.botId === bot.id);
   const { width, height } = frame.size ?? screenSize(computer, bot.id, bot.isPrimary);
@@ -461,10 +510,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     const stream = entry[mode];
     const update: StreamListener = setFrame;
     activeStream.current = stream;
+    if (mode === 'control') stream.onClipboard = (text) => copyFromAgent.current(text);
     stream.attach(placement.current, update);
     stream.start(true);
     return () => {
       activeStream.current = null;
+      stream.onClipboard = null;
       stream.detach(update);
       if (mode === 'control') {
         stream.stop();
@@ -505,6 +556,101 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   useEffect(() => {
     if (mode === 'control' && conn === 'connected') activeStream.current?.focus();
   }, [mode, conn]);
+
+  // Mac shortcuts while driving: Cmd acts as Ctrl on the Agent, and Cmd+V pastes the Owner's text there.
+  const cmdAsCtrlRef = useRef(cmdAsCtrl);
+  cmdAsCtrlRef.current = cmdAsCtrl;
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!driving || !frame) return;
+    let pasteFallback: ReturnType<typeof setTimeout> | undefined;
+    // Only keys aimed at this screen; the rest of the page keeps its own shortcuts.
+    const ours = (e: Event) => e.target instanceof Node && frame.contains(e.target);
+    const options = () => ({ mac, cmdAsCtrl: cmdAsCtrlRef.current, held: activeStream.current?.held() });
+    const down = (e: KeyboardEvent) => {
+      if (!ours(e)) return;
+      const action = translateKeyDown(e, options());
+      if (action.kind === 'pass') return;
+      // Capture phase on window runs before noVNC's canvas listener.
+      e.stopPropagation();
+      if (action.kind === 'browser') return;
+      if (action.kind === 'paste') {
+        // Leave the default so the browser fires paste. Without one, paste the Agent's own clipboard.
+        clearTimeout(pasteFallback);
+        pasteFallback = setTimeout(() => activeStream.current?.paste(null), 300);
+        return;
+      }
+      e.preventDefault();
+      if (action.kind === 'send') activeStream.current?.sendKeys(action.keys);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (!ours(e) || translateKeyUp(e, options()).kind !== 'drop') return;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    const paste = (e: ClipboardEvent) => {
+      if (!ours(e)) return;
+      clearTimeout(pasteFallback);
+      e.preventDefault();
+      e.stopPropagation();
+      activeStream.current?.paste(e.clipboardData?.getData('text/plain') || null);
+    };
+    // No stuck keys on the Agent when the Owner switches apps or tabs mid-chord.
+    const release = () => activeStream.current?.releaseKeys();
+    const hidden = () => { if (!tabIsVisible()) release(); };
+    window.addEventListener('keydown', down, true);
+    window.addEventListener('keyup', up, true);
+    window.addEventListener('paste', paste, true);
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      clearTimeout(pasteFallback);
+      window.removeEventListener('keydown', down, true);
+      window.removeEventListener('keyup', up, true);
+      window.removeEventListener('paste', paste, true);
+      window.removeEventListener('blur', release);
+      document.removeEventListener('visibilitychange', hidden);
+    };
+  }, [driving, mac]);
+
+  // Full screen + control: ask the browser for keys it otherwise keeps (Cmd+T, Cmd+W, Esc…).
+  useEffect(() => {
+    const keyboard = (navigator as Navigator & { keyboard?: { lock?(codes?: string[]): Promise<void>; unlock?(): void } }).keyboard;
+    if (!driving || !fullscreen || !keyboard?.lock) return;
+    let active = true;
+    keyboard.lock().then(() => { if (active) setLocked(true); }, () => {});
+    return () => {
+      active = false;
+      keyboard.unlock?.();
+      setLocked(false);
+      activeStream.current?.releaseKeys();
+    };
+  }, [driving, fullscreen]);
+
+  const copyFromAgent = useRef<(text: string) => void>(() => {});
+  copyFromAgent.current = (text) => {
+    const copied = () => { setAgentCopy(null); setNote(`Copied from ${bot.name}’s computer`); };
+    if (!navigator.clipboard?.writeText) { setAgentCopy(text); return; }
+    // A remote copy usually lands after the key press's activation has expired; then offer a button.
+    navigator.clipboard.writeText(text).then(copied, () => setAgentCopy(text));
+  };
+  const copyAgentText = () => {
+    if (!agentCopy) return;
+    const text = agentCopy;
+    (navigator.clipboard?.writeText(text) ?? Promise.reject(new Error('no clipboard'))).then(
+      () => { setAgentCopy(null); setNote(`Copied from ${bot.name}’s computer`); },
+      () => setNote('Your browser blocked the copy.'),
+    );
+    activeStream.current?.focus();
+  };
+  useEffect(() => { if (!driving) setAgentCopy(null); }, [driving]);
+
+  const toggleCmdAsCtrl = () => {
+    const next = !cmdAsCtrl;
+    setCmdAsCtrl(next);
+    writeCmdAsCtrl(next);
+    activeStream.current?.focus();
+  };
 
   useEffect(() => { onModeChange?.(mode); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -550,6 +696,11 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const canTakeControl = phase === 'live';
   const hasControls = driving || large;
   const panning = large && clipped && (!driving || pan);
+  let keyHint: string | null = null;
+  if (driving && phase === 'live') {
+    if (locked) keyHint = 'Hold Esc to leave full screen';
+    else if (!fullscreen && canFullscreen) keyHint = `Full screen sends ${mac ? '⌘T, ⌘W' : 'Ctrl+T, Ctrl+W'} to ${bot.name}`;
+  }
   const style = {
     ...botVars(bot.avatarColor),
     '--screen-width': `${width / dpr}px`,
@@ -635,12 +786,20 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
             <span className="screen__chin-text" role="status">
               {driving && phase === 'live' && <i className="screen__ping" aria-hidden />}
               <span>{phase === 'live' ? driving ? hint || 'You have control' : 'Watching' : ''}</span>
+              {keyHint && <span className="screen__chin-hint">{keyHint}</span>}
             </span>
             <span className="screen__chin-actions">
               {driving && clipped && (
                 <button type="button" className="screen__pan" aria-pressed={pan} onClick={() => setPan(!pan)}>
                   Pan screen
                 </button>
+              )}
+              {driving && agentCopy && (
+                <button type="button" className="screen__pan" onClick={copyAgentText}>Copy to my clipboard</button>
+              )}
+              {driving && mac && (
+                <button type="button" className="screen__pan" aria-pressed={cmdAsCtrl} onClick={toggleCmdAsCtrl}
+                  title={`Cmd acts as Ctrl on ${bot.name}’s computer`}>⌘ as Ctrl</button>
               )}
               {canFullscreen && (
                 <button type="button" className="screen__chin-icon" onClick={toggleFullscreen} aria-label={fullscreen ? 'Leave full screen' : 'Full screen'} title={fullscreen ? 'Leave full screen' : 'Full screen'}>
