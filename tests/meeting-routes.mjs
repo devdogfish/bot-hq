@@ -296,3 +296,17 @@ test('end stores attributed transcript and updates the chat with a summary', { t
   await meetingPost('gate', gate(call_id, transcript), bearer('stacy'), 404);
   assert.equal(listRows('stacy').filter(({ body }) => body.call?.id === call_id && body.call.phase === 'ended').length, 1);
 });
+
+test('gate treats an Agent first name as addressing a full-named Agent', async () => {
+  db.exec("UPDATE bots SET name = 'Stacy Ross' WHERE id = 'stacy'");
+  try {
+    const { call_id } = await meetingPost('session', meeting);
+    const ask = (speaker, text) => meetingPost('gate', gate(call_id, [say(speaker, text)]));
+    assert.deepEqual(await ask('Priya', 'Stacy, can you give your update?'), { decision: 'respond' });
+    assert.deepEqual(await ask('Priya', 'Stacy, mute yourself please.'), { decision: 'silent', action: 'mute' });
+    assert.deepEqual(await ask('Priya', 'Ross is out today.'), { decision: 'silent' });
+    await meetingPost('end', { call_id, transcript: [] });
+  } finally {
+    db.exec("UPDATE bots SET name = 'Stacy' WHERE id = 'stacy'");
+  }
+});

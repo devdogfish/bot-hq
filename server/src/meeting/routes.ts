@@ -127,6 +127,11 @@ meetingApi.post('/session', ...meetingRequest(16 * 1024, 6), async (c) => {
   }, 200, { 'Cache-Control': 'no-store' });
 });
 
+export function meetingAliases(name: string): string[] {
+  const first = name.normalize('NFKC').trim().split(/\s+/u)[0] ?? '';
+  return first && first.toLowerCase() !== name.normalize('NFKC').trim().toLowerCase() ? [first] : [];
+}
+
 meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
   const request = gateRequest.safeParse(c.get('body'));
   if (!request.success) return c.json({ error: 'Invalid gate request' }, 400);
@@ -139,7 +144,8 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
   call.lastActivityAt = Date.now();
   const decision = decideTurn({
     agentName: bot.name,
-    aliases: [],
+    // People address "Stacy Ross" as "Stacy" in meetings.
+    aliases: meetingAliases(bot.name),
     transcript,
     lastAgentTurnAt: last_agent_turn_at,
     mutedByRequest: call.mutedByRequest,
