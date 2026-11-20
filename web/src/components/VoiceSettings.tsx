@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useState } from 'react';
 import type { Bot, VoiceOption } from '@shared/types';
 import { useStore } from '../store';
 import { voiceApi, type VoiceOptions } from '../voice/api';
 import { endCall, isCallActive, previewVoice, startCall, useVoice } from '../voice/call';
 import { Icon } from './Icon';
-import { Menu } from './Menu';
 import { MiniSelect } from './MiniSelect';
 
 type ProviderId = 'xai' | 'elevenlabs';
@@ -19,10 +18,10 @@ const optionsApi: {
   providerOptions?: () => Promise<SettingsOptions>;
 } = voiceApi;
 
-const KNOWN_PROVIDERS = [
-  { id: 'xai', name: 'xAI' },
-  { id: 'elevenlabs', name: 'ElevenLabs' },
-] as const;
+const KNOWN_PROVIDERS: ProviderId[] = ['xai', 'elevenlabs'];
+/** An API without providers only speaks xAI. */
+const XAI_ONLY = [{ id: 'xai', name: 'xAI', available: true }] as const;
+const KEY_HINT: Record<ProviderId, string> = { xai: 'Add XAI_API_KEY', elevenlabs: 'Add ELEVENLABS_API_KEY' };
 const FALLBACK: SettingsOptions = {
   voices: ['ara', 'eve', 'leo', 'luna', 'rex', 'sal'].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) })),
   languages: [{ code: 'auto', name: 'Auto-detect' }, { code: 'en', name: 'English' }],
@@ -34,46 +33,13 @@ const speedLabel = (s: number) => `${Number(s.toFixed(2))}x`;
 /** "Voice chat" section of the details panel: voice, speed, language (saved per bot), preview, start a call. */
 export function VoiceSettings({ bot }: { bot: VoiceBot }) {
   const [opts, setOpts] = useState<SettingsOptions>(FALLBACK);
-  const [providerMenu, setProviderMenu] = useState(false);
-  const providerPicker = useRef<HTMLSpanElement>(null);
-  const providerTrigger = useRef<HTMLButtonElement>(null);
   const [changingVoice, setChangingVoice] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
 
   useEffect(() => { (optionsApi.providerOptions ?? optionsApi.options)().then(setOpts).catch(() => {}); }, []);
-  useEffect(() => { setError(null); setProviderMenu(false); }, [bot.id]);
-
-  const enabledProviderItems = () => Array.from(
-    providerPicker.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:enabled') ?? [],
-  );
-
-  useEffect(() => {
-    if (!providerMenu) return;
-    const items = enabledProviderItems();
-    (items.find((item) => item.getAttribute('aria-checked') === 'true') ?? items[0])?.focus();
-  }, [providerMenu]);
-
-  const onProviderKey = (e: KeyboardEvent<HTMLSpanElement>) => {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
-    if (changingVoice || (!providerMenu && e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
-    e.preventDefault();
-    if (!providerMenu) {
-      setProviderMenu(true);
-      return;
-    }
-    const items = enabledProviderItems();
-    if (!items.length) return;
-    const current = items.findIndex((item) => item === document.activeElement);
-    if (e.key === 'Home' || e.key === 'End') {
-      items[e.key === 'Home' ? 0 : items.length - 1].focus();
-    } else {
-      const direction = e.key === 'ArrowDown' ? 1 : -1;
-      const next = current < 0 ? (direction === 1 ? 0 : items.length - 1) : (current + direction + items.length) % items.length;
-      items[next].focus();
-    }
-  };
+  useEffect(() => setError(null), [bot.id]);
 
   const updateBot = (patch: Partial<Pick<VoiceBot, 'voice' | 'voiceSpeed' | 'voiceLanguage' | 'voiceProvider'>>) => {
     useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === bot.id ? { ...b, ...patch } : b)) }));
@@ -115,9 +81,15 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
     finally { setPreviewing(false); }
   };
 
-  const providers = KNOWN_PROVIDERS.map((fallback) => opts.providers?.find((p) => p.id === fallback.id)
-    ?? { ...fallback, available: opts.providers == null && fallback.id === 'xai' });
-  const provider = providers.find((p) => p.id === bot.voiceProvider) ?? providers[0];
+  // The server's providers in a fixed order; unknown ids are ignored.
+  const listed = opts.providers ? KNOWN_PROVIDERS.flatMap((id) => opts.providers?.filter((p) => p.id === id) ?? []) : [...XAI_ONLY];
+  const providers = listed.length ? listed : [...XAI_ONLY];
+  const provider = providers.find((p) => p.id === (bot.voiceProvider ?? 'xai')) ?? providers[0];
+  const pickProvider = (id: ProviderId) => {
+    const choices = providerVoices(id);
+    const voice = (id === 'xai' ? choices.find((v) => v.id === 'luna') : undefined) ?? choices[0];
+    void save({ voice: voice?.id }, id);
+  };
   const providerVoices = (id: ProviderId) => Array.isArray(opts.voices) ? (id === 'xai' ? opts.voices : []) : opts.voices[id] ?? [];
   const catalog = providerVoices(provider.id);
   const voices = catalog.some((v) => v.id === bot.voice) ? catalog : [{ id: bot.voice, name: bot.voice }, ...catalog];
@@ -127,38 +99,8 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
     <div className="panel-card">
       <div className="panel-row panel-row--setting">
         <span>Provider</span>
-        <span ref={providerPicker} className="model-picker voice-provider" onKeyDown={onProviderKey}
-          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setProviderMenu(false); }}>
-          <button ref={providerTrigger} type="button" className="mini-select mini-select--button" aria-label={`Provider: ${provider.name}`}
-            aria-haspopup="menu" aria-expanded={providerMenu} disabled={changingVoice}
-            onMouseDown={(e) => { if (providerMenu) e.stopPropagation(); }} onClick={() => setProviderMenu(!providerMenu)}>
-            <span>{provider.name}</span>
-            <Icon name="chev_down" size={10} opacity={0.66} />
-          </button>
-          {providerMenu && (
-            <Menu align="right" onClose={() => {
-              if (providerPicker.current?.contains(document.activeElement)) providerTrigger.current?.focus();
-              setProviderMenu(false);
-            }} items={[]}>
-              {providers.map((p) => (
-                <button key={p.id} type="button" role="menuitemradio" tabIndex={-1} aria-checked={p.id === provider.id}
-                  className="menu__item model-menu__item" disabled={!p.available}
-                  onClick={() => {
-                    providerTrigger.current?.focus();
-                    setProviderMenu(false);
-                    if (p.id === provider.id) return;
-                    const choices = providerVoices(p.id);
-                    const voice = (p.id === 'xai' ? choices.find((v) => v.id === 'luna') : undefined) ?? choices[0];
-                    void save({ voice: voice?.id }, p.id);
-                  }}>
-                  <span className="model-menu__check">{p.id === provider.id && <Icon name="check" size={12} />}</span>
-                  <span className="model-menu__label">{p.name}</span>
-                  {!p.available && <span className="menu__hint">{p.id === 'elevenlabs' ? 'Add ELEVENLABS_API_KEY' : 'Add XAI_API_KEY'}</span>}
-                </button>
-              ))}
-            </Menu>
-          )}
-        </span>
+        <MiniSelect label="Provider" value={provider.id} disabled={changingVoice} onChange={pickProvider}
+          options={providers.map((p) => ({ value: p.id, label: p.name, disabled: !p.available, hint: p.available ? undefined : KEY_HINT[p.id] }))} />
       </div>
       <div className="panel-row panel-row--setting">
         <span>Voice</span>
