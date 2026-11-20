@@ -11,6 +11,7 @@ function req(name: string): string {
 const hermesHome = process.env.HERMES_HOME_PRIMARY ?? process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
 
 const dataDir = process.env.HQ_DATA_DIR ?? fileURLToPath(new URL('../../data', import.meta.url));
+const jitsiOrigins = (process.env.HQ_JITSI_ORIGINS ?? '').split(',').map((o) => o.trim().replace(/\/+$/, '')).filter(Boolean);
 const meetingOwnerNames = (process.env.HQ_MEETING_OWNER_NAMES ?? '').split(',').map((name) => name.trim()).filter(Boolean);
 
 export const env = {
@@ -21,6 +22,8 @@ export const env = {
   elevenlabsKey: process.env.ELEVENLABS_API_KEY ?? '',
   elevenlabsAgentId: process.env.ELEVENLABS_AGENT_ID ?? '',
   xaiModel: process.env.XAI_MODEL ?? 'grok-4.7',
+  /** Jitsi origins whose "Add people" dialog may list and invite Agents (comma-separated, e.g. https://meet.example.com). Empty disables it. */
+  jitsiOrigins,
   meetingOwnerNames: meetingOwnerNames.length ? meetingOwnerNames : ['Owner'],
   sessionSecret: req('SESSION_SECRET'),
   devLogin: process.env.DEV_LOGIN === '1',
