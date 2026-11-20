@@ -63,12 +63,9 @@ tailnet grants and backup checks.
    HQ_GMAIL_PUSH_CREDENTIALS=/absolute/path/to/pubsub-service-account.json
    ```
 
-4. Wire #585 at the marked import in `server/src/index.ts` and configure the
-   Tyler Personal event routine with the exact name `Gmail new mail`. Event
-   ingress must accept `refs: { messageId }`, persist and deduplicate accepted
-   events by `event_id`, and allow this routine through Tyler Personal's turn
-   gate. Restart Bot HQ and send a test message. Check for a single routine
-   event with the sender, subject and Gmail message ID.
+4. Enable Tyler Personal's event routine with the schedule
+   `event:Gmail new mail`. Restart Bot HQ and send a test message. Check for a
+   single routine event with the sender, subject and Gmail message ID.
 
 Run one streaming worker for this subscription and keep its Bot HQ SQLite data
 directory across restarts. The first watch starts at the current mailbox

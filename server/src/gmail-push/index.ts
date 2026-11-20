@@ -4,11 +4,6 @@ import { gmailPushClient } from './gmail.js';
 import { gmailPushStore } from './store.js';
 import { startGmailPushWorker, type EnqueueEvent } from './worker.js';
 
-export const enqueueEventStub: EnqueueEvent = () => {
-  console.error('[gmail-push] Event ingress unavailable. Wire #585 before enabling Gmail delivery.');
-  throw new Error('Event ingress unavailable');
-};
-
 export function gmailPushConfig() {
   const projectId = process.env.HQ_GMAIL_PUSH_GCP_PROJECT;
   const topic = process.env.HQ_GMAIL_PUSH_TOPIC;

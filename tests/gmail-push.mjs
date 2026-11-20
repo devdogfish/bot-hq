@@ -60,9 +60,9 @@ function fixture(t) {
     recent: [],
     metadataStatus: new Map(),
     enqueue: async event => {
-      if (events.has(event.event_id)) return 'duplicate';
+      if (events.has(event.event_id)) return { status: 'duplicate' };
       events.set(event.event_id, event);
-      return 'accepted';
+      return { status: 'accepted' };
     },
     async start() {
       db = new Database(filename);
@@ -281,11 +281,14 @@ test('keeps the cursor behind mail when the routine is unavailable', options, as
   const { subscription, store } = await fake.start();
   fake.changes.set(id(0), [{ historyId: id(1), ids: ['waiting'] }]);
   const accept = fake.enqueue;
-  fake.enqueue = async () => 'unavailable';
+  fake.enqueue = async () => ({ status: 'unavailable' });
   assert.equal(await subscription.publish(id(1)), 'nack');
   assert.equal(store.cursor(), id(0));
   assert.equal(fake.events.size, 0);
-  fake.enqueue = accept;
+  fake.enqueue = async event => {
+    await accept(event);
+    return { status: 'batched' };
+  };
   assert.equal(await subscription.publish(id(1)), 'ack');
   assert.equal(store.cursor(), id(1));
   assert.deepEqual([...fake.events.keys()], ['waiting']);

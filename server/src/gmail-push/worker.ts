@@ -1,11 +1,12 @@
 import { isHistoryId, METADATA_BATCH_SIZE, RESYNC_WINDOW_MS, type GmailPushClient } from './gmail.js';
+import type { EnqueueEventResult } from '../events.js';
 import type { gmailPushStore } from './store.js';
 
 const WATCH_RENEWAL_MS = 24 * 60 * 60 * 1000;
 const RETRY_MS = 60_000;
 const ROUTINE = 'Gmail new mail';
 
-type EnqueueResult = 'accepted' | 'duplicate' | 'not_found' | 'unavailable';
+type EnqueueResult = EnqueueEventResult | { status: 'batched' };
 
 export type EnqueueEvent = (botId: string, routineName: string, event: {
   event_id: string;
@@ -79,7 +80,9 @@ export function startGmailPushWorker({ gmail, subscription, store, enqueueEvent,
           const result = await enqueueEvent(botId, ROUTINE, {
             event_id: id, summary: `${from} — ${subject}`, refs: { messageId: id },
           });
-          if (result !== 'accepted' && result !== 'duplicate') throw new Error('Gmail routine could not accept the event');
+          if (result.status !== 'accepted' && result.status !== 'duplicate' && result.status !== 'batched') {
+            throw new Error('Gmail routine could not accept the event');
+          }
           delivered.push(id);
         }
       } finally {
