@@ -3,6 +3,8 @@ interface TranscriptTurn {
   text: string;
   /** Epoch milliseconds. */
   at: number;
+  /** The platform reports this speaker as the signed-in host. */
+  host?: boolean;
 }
 
 interface TurnInput {
@@ -102,7 +104,7 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
   if (addressed === undefined && !followsAgent && previous && !previousIsAgent
     && addressedTo(clean(previous.text), [speaker]) !== undefined) return 'silent';
 
-  const owner = ownerLabels.includes(speaker);
+  const owner = latest.host === true || ownerLabels.includes(speaker);
   const body = addressed ?? cueText(text);
   const mute = MUTE.test(body);
   const unmute = UNMUTE.test(body);

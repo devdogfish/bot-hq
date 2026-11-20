@@ -49,7 +49,7 @@ after(() => { globalThis.fetch = realFetch; });
 const { db } = await import('../server/src/db.ts');
 const { mcpToken } = await import('../server/src/engine.ts');
 const { appendRow, clearConversation, listRows } = await import('../server/src/store.ts');
-const { isBotBusy, resolveApproval } = await import('../server/src/agent/loop.ts');
+const { isBotBusy } = await import('../server/src/agent/loop.ts');
 const { closeInterruptedMeetings } = await import('../server/src/voice/index.ts');
 const { initRooms } = await import('../server/src/agent/rooms.ts');
 const { initSubagents } = await import('../server/src/agent/subagents.ts');
@@ -210,22 +210,28 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   const { callId } = await voiceSession.json();
   await meetingPost('tool', { ...tool, call_id: callId }, bearer('stacy'), 404);
 
+  // A guest, even one named like the Owner, cannot hand the Agent work.
+  await meetingPost('gate', gate(call_id, [say('Owner', 'Stacy, check the rollout.')]));
+  const refused = await meetingPost('tool', tool);
+  assert.match(refused.output, /only the meeting host/);
+  await meetingPost('gate', gate(call_id, [{ ...say('Priya', 'Stacy, check the rollout.'), host: false }]));
+  assert.match((await meetingPost('tool', tool)).output, /only the meeting host/);
+  assert.ok(!listRows('stacy').some(({ body }) => body.text === tool.arguments.request));
+
+  await meetingPost('gate', gate(call_id, [{ ...say('Host', 'Stacy, check the rollout.'), host: true }]));
   const start = requests.length;
   const handedOff = await meetingPost('tool', { ...tool, bot_id: 'alex' });
   assert.match(handedOff.output, /Handed off/);
-  const approval = () => listRows('stacy').find(({ body }) => body.card === 'approval' && body.tool === 'Meeting request');
-  await waitFor(approval);
-  assert.equal(approval().body.detail, tool.arguments.request);
-  assert.equal(requests.length, start);
-  assert.equal(await resolveApproval('other', approval().body.approvalId, 'once'), 'not found');
-  await resolveApproval('owner', approval().body.approvalId, 'once');
+  // Meeting requests run straight away, like chat requests; no approval card.
+  await waitFor(() => requests.slice(start).some(({ url }) => url === 'https://hermes.meeting.test/v1/responses'));
   await waitFor(() => !isBotBusy('stacy'));
+  assert.ok(!listRows('stacy').some(({ body }) => body.card === 'approval'));
   const row = listRows('stacy').find((row) => row.seq === handedOff.taskSeq);
   assert.equal(row.body.text, tool.arguments.request);
   assert.equal(row.body.from.id, call_id);
   const runs = requests.slice(start).filter(({ url }) => url === 'https://hermes.meeting.test/v1/responses');
   assert.equal(runs.length, 1);
-  assert.match(runs[0].payload.input, /\[Meeting: The Owner approved.*\]\nCheck the rollout\./);
+  assert.match(runs[0].payload.input, /\[Meeting: Asked for in a live meeting with the Owner\..*\]\nCheck the rollout\./);
   assert.match(runs[0].payload.conversation, /^hq-stacy-/);
   assert.ok(!listRows('alex').some((row) => row.body.text === tool.arguments.request));
   await meetingPost('end', { call_id, transcript: [] });

@@ -172,7 +172,7 @@ export function enqueueBotMessage(fromBotId: string, toBotId: string, text: stri
 function triggerText(t: Trigger): string {
   switch (t.type) {
     case 'user': return t.text;
-    case 'meeting': return `[Meeting: The Owner approved this participant's request for this turn. Use the usual permissions and approvals. Post the outcome in Bot HQ chat.]\n${t.text}`;
+    case 'meeting': return `[Meeting: Asked for in a live meeting with the Owner. Do it now with your usual permissions and approvals. Post the outcome in Bot HQ chat.]\n${t.text}`;
     case 'routine': return `[Routine "${t.name}" is running now. Do this:]\n${t.prompt}`;
     case 'bot': return `[Message from ${t.fromName}, another Bot on the team. Reply to them with send_to_bot if they asked you something.]\n${t.text}`;
     case 'secure-input': return '';
@@ -685,14 +685,9 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   if (routine && runRevision !== undefined && !isRoutineRunCurrent(routine.routineId, runRevision)) return;
   const userId: string = bot.user_id;
   const personal = isPersonalAssistant(botId);
-  if (trigger.type === 'meeting') {
-    if (personal) return;
-    const decision = await requestApproval({ userId, botId }, trigger.text, async () => {}, null, {
-      title: `Allow ${bot.name} to handle this meeting request?`, tool: 'Meeting request',
-    });
-    if (decision !== 'allow' || isBotResetting(botId) || activePauseRevision(botId) !== pauseRevision ||
-        getBotRow(botId)?.generation !== bot.generation) return;
-  }
+  // Meetings are with the Owner, so a meeting request runs like a chat request.
+  // Consequential actions inside the turn still go through their own approvals.
+  if (trigger.type === 'meeting' && personal) return;
   const personalEvent = personal && routine?.eventSchedule?.startsWith('event:');
   const draftOnly = trigger.type === 'user' && trigger.draftOnly === true;
   const secureNotices = !personal && !draftOnly ? secureInputNotices(botId, bot.generation) : [];
