@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 const keys = await import('../web/src/components/computer-keys.ts');
-const { XK, translateKeyDown, translateKeyUp, keysymFor, chord, pasteChord, releaseHeld, isMacPlatform, readCmdAsCtrl, writeCmdAsCtrl, CMD_AS_CTRL_KEY } = keys;
+const { XK, translateKeyDown, translateKeyUp, keysymFor, chord, pasteChord, forwardNativePaste, releaseHeld, releaseKeysForCmd, isMacPlatform, readCmdAsCtrl, writeCmdAsCtrl, CMD_AS_CTRL_KEY, MAC_KEYBOARD_LOCK_CODES } = keys;
 
 const mac = { mac: true, cmdAsCtrl: true };
 const key = (code, mods = {}) => ({ code, metaKey: false, shiftKey: false, altKey: false, repeat: false, ...mods });
@@ -38,6 +38,35 @@ test('Cmd+V hands off to the native paste event', () => {
   assert.deepEqual(pasteChord(), ctrlChord('KeyV', 'v'));
   // Cmd+Shift+V is a plain chord (paste without formatting in many apps).
   assert.equal(translateKeyDown(cmd('KeyV', { shiftKey: true }), mac).kind, 'send');
+  assert.equal(translateKeyDown(key('KeyV', { ctrlKey: true }), { mac: false, cmdAsCtrl: true }).kind, 'pass');
+});
+
+test('fullscreen Mac lock leaves native Paste available and captures Esc and tab shortcuts', () => {
+  for (const code of ['KeyV', 'KeyQ', 'Tab']) assert.ok(!MAC_KEYBOARD_LOCK_CODES.includes(code), code);
+  for (const code of ['Escape', 'KeyT', 'KeyW', 'KeyL', 'KeyR', 'KeyN']) {
+    assert.ok(MAC_KEYBOARD_LOCK_CODES.includes(code), code);
+  }
+});
+
+test('each trusted native paste is forwarded once without coalescing two pastes', () => {
+  const actions = [];
+  const pasteEvent = (text, isTrusted = true) => ({
+    isTrusted,
+    clipboardData: { getData: (format) => {
+      assert.equal(format, 'text/plain');
+      return text;
+    } },
+    preventDefault: () => actions.push('preventDefault'),
+    stopPropagation: () => actions.push('stopPropagation'),
+  });
+  const paste = (text) => actions.push(text);
+  forwardNativePaste(pasteEvent('first'), paste);
+  forwardNativePaste(pasteEvent('second'), paste);
+  forwardNativePaste(pasteEvent('synthetic', false), paste);
+  assert.deepEqual(actions, [
+    'preventDefault', 'stopPropagation', 'first',
+    'preventDefault', 'stopPropagation', 'second',
+  ]);
 });
 
 test('Shift combos add Shift and the shifted keysym', () => {
@@ -101,6 +130,17 @@ test('releaseHeld lifts every held key once and empties the list', () => {
   assert.deepEqual(sent.sort(), [[0xffe1, 'ShiftLeft', false], [XK.Control_L, 'ControlLeft', false], [sym('a'), 'KeyA', false]].sort());
   assert.deepEqual(held, {});
   releaseHeld(held, () => assert.fail('nothing left to release'));
+});
+
+test('Cmd transitions release keys that can miss keyup and preserve physically held modifiers', () => {
+  const held = { KeyA: sym('a'), ShiftRight: 0xffe2, ControlLeft: XK.Control_L };
+  const sent = [];
+  const send = (...stroke) => sent.push(stroke);
+  releaseKeysForCmd(held, { shiftKey: true, ctrlKey: true, altKey: false }, send);
+  assert.deepEqual(held, { ShiftRight: 0xffe2, ControlLeft: XK.Control_L });
+  releaseKeysForCmd(held, { shiftKey: false, ctrlKey: true, altKey: false }, send);
+  assert.deepEqual(held, { ControlLeft: XK.Control_L });
+  assert.deepEqual(sent, [[sym('a'), 'KeyA', false], [0xffe2, 'ShiftRight', false]]);
 });
 
 test('platform detection and the remembered toggle', () => {

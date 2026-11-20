@@ -61,6 +61,14 @@ const OS_OWNED = new Set(['KeyQ', 'Tab', 'Space', 'KeyH', 'KeyM', 'Backquote']);
 /** Held-down repeats of these would open or close tabs/windows in a burst. */
 const NO_REPEAT = new Set(['KeyT', 'KeyW', 'KeyN', 'KeyR']);
 
+// Keep the browser's native paste shortcut available in fullscreen.
+export const MAC_KEYBOARD_LOCK_CODES = [
+  ...Object.keys(SPECIAL),
+  ...Object.keys(PRINTABLE),
+  ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+  ...Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ', (letter) => `Key${letter}`),
+].filter((code) => code !== 'KeyV' && !OS_OWNED.has(code));
+
 /** X keysym for a physical key code, or 0 when there is none. */
 export function keysymFor(code: string, shift: boolean): number {
   const letter = /^Key([A-Z])$/.exec(code);
@@ -94,6 +102,16 @@ export function pasteChord(held?: ReadonlySet<string>): KeyStroke[] {
   return chord('KeyV', keysymFor('KeyV', false), {}, held);
 }
 
+export function forwardNativePaste(
+  event: Pick<ClipboardEvent, 'isTrusted' | 'clipboardData' | 'preventDefault' | 'stopPropagation'>,
+  paste: (text: string) => void,
+) {
+  if (!event.isTrusted) return;
+  event.preventDefault();
+  event.stopPropagation();
+  paste(event.clipboardData?.getData('text/plain') ?? '');
+}
+
 export function translateKeyDown(e: KeyInput, { mac, cmdAsCtrl, held }: KeyOptions): KeyAction {
   if (!mac || !cmdAsCtrl) return { kind: 'pass' };
   if (e.code === 'MetaLeft' || e.code === 'MetaRight') return { kind: 'drop' };
@@ -114,12 +132,31 @@ export function translateKeyUp(e: Pick<KeyInput, 'code'>, { mac, cmdAsCtrl }: Ke
 }
 
 /** Release every key noVNC holds on the remote end, so nothing sticks after blur or hand back. */
-export function releaseHeld(held: Record<string, number>, send: (keysym: number, code: string, down: boolean) => void) {
+export function releaseHeld(
+  held: Record<string, number>,
+  send: (keysym: number, code: string, down: boolean) => void,
+  shouldRelease: (code: string) => boolean = () => true,
+) {
   for (const code of Object.keys(held)) {
+    if (!shouldRelease(code)) continue;
     const keysym = held[code];
     delete held[code];
     send(keysym, code, false);
   }
+}
+
+/** A regular key held going into Cmd can lose its keyup. Keep only modifiers still pressed. */
+export function releaseKeysForCmd(
+  held: Record<string, number>,
+  event: Pick<KeyboardEvent, 'shiftKey' | 'ctrlKey' | 'altKey'>,
+  send: (keysym: number, code: string, down: boolean) => void,
+) {
+  releaseHeld(held, send, (code) => {
+    if (code === 'ShiftLeft' || code === 'ShiftRight') return !event.shiftKey;
+    if (code === 'ControlLeft' || code === 'ControlRight') return !event.ctrlKey;
+    if (code === 'AltLeft' || code === 'AltRight') return !event.altKey;
+    return true;
+  });
 }
 
 export function isMacPlatform(nav: { platform?: string; userAgentData?: { platform?: string } } | undefined): boolean {
