@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
@@ -30,12 +31,20 @@ import {
  *    row a call belongs to, and approvals the user has to answer before a call goes ahead.
  */
 
+type RoutineTrigger = { type: 'routine'; routineId: string; name: string; prompt: string; runRevision?: number };
+
 export type Trigger =
   | { type: 'user'; text: string; chatRow?: { generation: number; seq: number }; draftOnly?: boolean }
-  | { type: 'routine'; routineId: string; name: string; prompt: string; runRevision?: number }
+  | RoutineTrigger
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'secure-input' }
   | { type: 'system'; text: string };
+
+type DeferredRoutine = {
+  type: 'event-routine';
+  readyAt: number;
+  take: (active: boolean) => RoutineTrigger | undefined;
+};
 
 // ---------- per-bot serial queue ----------
 
@@ -63,7 +72,7 @@ function trackQueue(botId: string, queue: BotQueue, tail: Promise<void>) {
 }
 
 /** Reserve a turn synchronously; accepted work starts after the caller records its row. */
-export function enqueue(botId: string, trigger: Trigger) {
+export function enqueue(botId: string, trigger: Trigger | DeferredRoutine) {
   if (isBotResetting(botId)) return false;
   if (isPersonalAssistant(botId) && (trigger.type !== 'user' || trigger.draftOnly)) return false;
   const pauseRevision = activePauseRevision(botId);
@@ -77,7 +86,16 @@ export function enqueue(botId: string, trigger: Trigger) {
     expireApprovals(botId);
   }
   const revision = queue.revision;
-  const next = queue.tail.then(() => {
+  const next = queue.tail.then(async () => {
+    if (trigger.type === 'event-routine') {
+      const remaining = trigger.readyAt - now();
+      if (remaining > 0 && queue.revision === revision && activePauseRevision(botId) === pauseRevision) {
+        await delay(remaining);
+      }
+      const routine = trigger.take(queue.revision === revision && activePauseRevision(botId) === pauseRevision);
+      if (routine) return runTurn(botId, routine, pauseRevision);
+      return;
+    }
     if (queue.revision === revision) return runTurn(botId, trigger, pauseRevision);
   }).catch((e) => console.error('[agent] turn failed', botId, e));
   trackQueue(botId, queue, next);

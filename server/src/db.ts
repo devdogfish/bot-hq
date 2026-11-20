@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS routines (
   last_run_at INTEGER,
   created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS routines_event_schedule ON routines(bot_id, schedule, created_at, id)
+  WHERE enabled=1;
+CREATE TABLE IF NOT EXISTS seen_events (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL,
+  PRIMARY KEY (bot_id, event_id)
+);
 CREATE TABLE IF NOT EXISTS jobs_monitor (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
   uidvalidity INTEGER,
@@ -199,6 +206,5 @@ addColumn('bots', 'parent_bot_id', 'TEXT REFERENCES bots(id) ON DELETE SET NULL'
 addColumn('bots', 'archived_at', 'INTEGER');
 addColumn('routines', 'consecutive_failures', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('routines', 'run_revision', 'INTEGER NOT NULL DEFAULT 0');
-db.prepare("UPDATE routines SET enabled=0 WHERE schedule LIKE 'event:%' AND enabled=1").run();
 
 export const now = () => Date.now();

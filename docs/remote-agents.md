@@ -122,9 +122,59 @@ desktop activity on both runs.
   Hermes launcher. `HERMES_BIN`, `HERMES_HOME_PRIMARY`, `ENGINES_DIR`,
   `HERMES_URL` and `HERMES_KEY` configure it. Existing bot IDs and
   transcripts persist. Register each Agent's new screen in the app.
-- Composio is disabled, including its Google sign-in path and app-triggered
-  routines. Owner one-time sign-in, scheduled routines and xAI voice remain.
+- Composio is disabled, including its Google sign-in path.
   Set `XAI_API_KEY` to enable voice and X research.
+
+## Event routines
+
+Provision an enabled routine on the target Bot with `schedule = 'event:<name>'`
+and a prompt describing what the Agent should do. Use one routine per event
+name on each Bot. The URL uses the schedule suffix, which can differ from the
+routine's display name. For example, `event:gmail_push` receives deliveries at
+`POST /hooks/<botId>/gmail_push`.
+
+Send JSON with `Authorization: Bearer <token>` and `Content-Type: application/json`.
+On the HQ host, derive the token as the hex HMAC-SHA256 of `hook:<botId>` keyed
+by `SESSION_SECRET`. Give the service only its Bot's hook token.
+
+```sh
+printf 'hook:%s' "$BOT_ID" | openssl dgst -sha256 -hmac "$SESSION_SECRET" -r | cut -d' ' -f1
+```
+
+```json
+{
+  "event_id": "gmail:history:12345",
+  "summary": "New inbox activity",
+  "refs": ["history:12345"]
+}
+```
+
+Use stable, source-prefixed IDs and reuse the ID when retrying. `event_id` and
+`summary` are nonempty strings. `refs` is an array of reference strings and can
+be empty. The complete request body is limited to 16 KiB.
+
+| Status | Meaning |
+| --- | --- |
+| 202 | Event accepted, `{"status":"accepted"}` |
+| 200 | ID already accepted for this Bot, `{"status":"duplicate"}` |
+| 400 | Invalid JSON or fields |
+| 401 | Missing or invalid Bot bearer |
+| 404 | No enabled event routine for this Bot and schedule suffix |
+| 409 | Bot is unavailable for routine work. This delivery can be retried. |
+| 413 | Request body exceeds 16 KiB |
+
+In-process services can call `enqueueEvent(botId, routineName, { event_id, summary, refs })`
+with the same schedule suffix and fields. It returns `accepted`, `duplicate`,
+`not_found`, or `unavailable`.
+
+HQ stores accepted IDs in SQLite per Bot across all its routines. The first
+event opens a 100 ms collection window. Events for the same routine continue
+to join that batch while it waits in the Bot's queue. At the start of the turn,
+HQ sends the routine prompt followed by the batch's summaries and references.
+Events arriving during the turn form the next batch. Acknowledgements cover
+enqueue only. Pending turns live in memory and can be discarded on restart,
+pause, or queue reset. HQ also discards the batch if its routine is disabled
+or deleted when the turn starts. Accepted IDs remain recorded in SQLite.
 
 ## Draft-only gateway
 
