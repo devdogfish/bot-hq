@@ -61,6 +61,17 @@ const OS_OWNED = new Set(['KeyQ', 'Tab', 'Space', 'KeyH', 'KeyM', 'Backquote']);
 /** Held-down repeats of these would open or close tabs/windows in a burst. */
 const NO_REPEAT = new Set(['KeyT', 'KeyW', 'KeyN', 'KeyR']);
 
+/**
+ * Keys to lock in full screen on a Mac. A full lock also takes Cmd+V from the Edit menu, so the
+ * paste event never fires; Cmd+V and the shortcuts we leave to macOS stay unlocked.
+ */
+export const MAC_KEYBOARD_LOCK_CODES: readonly string[] = [
+  ...Object.keys(SPECIAL),
+  ...Object.keys(PRINTABLE),
+  ...Array.from({ length: 12 }, (_, i) => `F${i + 1}`),
+  ...Array.from('ABCDEFGHIJKLMNOPQRSTUVWXYZ', (letter) => `Key${letter}`),
+].filter((code) => code !== 'KeyV' && !OS_OWNED.has(code));
+
 /** X keysym for a physical key code, or 0 when there is none. */
 export function keysymFor(code: string, shift: boolean): number {
   const letter = /^Key([A-Z])$/.exec(code);
@@ -113,9 +124,18 @@ export function translateKeyUp(e: Pick<KeyInput, 'code'>, { mac, cmdAsCtrl }: Ke
   return e.code === 'MetaLeft' || e.code === 'MetaRight' ? { kind: 'drop' } : { kind: 'pass' };
 }
 
-/** Release every key noVNC holds on the remote end, so nothing sticks after blur or hand back. */
-export function releaseHeld(held: Record<string, number>, send: (keysym: number, code: string, down: boolean) => void) {
+/**
+ * Release keys noVNC holds on the remote end, so nothing sticks after blur or hand back.
+ * With `exceptModifiers`, Shift/Ctrl/Alt stay down: macOS sends no keyup for other keys while Cmd
+ * is held, but modifier keyups still arrive.
+ */
+export function releaseHeld(
+  held: Record<string, number>,
+  send: (keysym: number, code: string, down: boolean) => void,
+  { exceptModifiers = false } = {},
+) {
   for (const code of Object.keys(held)) {
+    if (exceptModifiers && MODIFIERS.has(code)) continue;
     const keysym = held[code];
     delete held[code];
     send(keysym, code, false);
