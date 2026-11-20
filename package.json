@@ -7,6 +7,7 @@
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",
+    "test": "node --test tests/screen-bench.mjs",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
   },
   "engines": { "node": ">=22.12" }
