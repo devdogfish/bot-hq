@@ -1,3 +1,4 @@
+import { isIPv4 } from 'node:net';
 import { z } from 'zod';
 import { db } from './db.js';
 
@@ -9,6 +10,14 @@ interface RemoteAgentRow {
   cdp_port: number | null;
   owner_secret_port: number;
   owner_secret_token: string | null;
+  owner_secret_revision: number;
+}
+
+function ownerSecretHost(hermesUrl: string | null) {
+  const host = hermesUrl && URL.parse(hermesUrl)?.hostname;
+  if (!host || !isIPv4(host) || !host.startsWith('100.')) return null;
+  const secondOctet = Number(host.split('.')[1]);
+  return secondOctet >= 64 && secondOctet <= 127 ? host : null;
 }
 
 function endpoint(protocols: string[], allowPath: boolean) {
@@ -53,31 +62,36 @@ export function saveRemoteAgent(botId: string, current: RemoteAgentRow, input: u
   const hermesKey = hermesUrl && (result.data.hermesKey || (hermesUrl === current.hermes_url && current.hermes_key));
   const vncPassword = websockifyUrl && (result.data.vncPassword || (websockifyUrl === current.websockify_url && current.vnc_password));
   const ownerSecretPort = result.data.ownerSecretPort ?? current.owner_secret_port;
-  const sameHermesHost = hermesUrl && current.hermes_url &&
-    new URL(hermesUrl).hostname === URL.parse(current.hermes_url)?.hostname;
-  const ownerSecretToken = hermesUrl && (result.data.ownerSecretToken ||
-    (sameHermesHost && current.owner_secret_token));
+  const host = ownerSecretHost(hermesUrl);
+  const sameOwnerEndpoint = host && host === ownerSecretHost(current.hermes_url) &&
+    ownerSecretPort === current.owner_secret_port;
+  const ownerSecretToken = (host && (result.data.ownerSecretToken ||
+    (sameOwnerEndpoint && current.owner_secret_token))) || null;
   if (hermesUrl && !hermesKey) return 'Enter the API key for this Hermes URL.';
-  if (result.data.ownerSecretToken && !hermesUrl) return 'Enter a Hermes URL to identify the owner secret host.';
+  if (result.data.ownerSecretToken && !host) return 'Use the Agent’s Tailscale IPv4 address in the Hermes URL to enable secure input.';
   if (websockifyUrl && !vncPassword) return 'Enter the password for this VNC screen.';
   if (cdpPort !== null && !websockifyUrl) return 'Enter a websockify URL to identify the Chrome host.';
   const changedScreen = websockifyUrl !== current.websockify_url || (vncPassword || null) !== current.vnc_password;
+  const changedOwnerConnection = hermesUrl !== current.hermes_url || (hermesKey || null) !== current.hermes_key ||
+    ownerSecretPort !== current.owner_secret_port || ownerSecretToken !== current.owner_secret_token;
   db.prepare(`UPDATE bots SET hermes_url=?, hermes_key=?, websockify_url=?, vnc_password=?, cdp_port=?,
-    owner_secret_port=?, owner_secret_token=?, screen_revision=screen_revision+? WHERE id=?`)
+    owner_secret_port=?, owner_secret_token=?, owner_secret_revision=owner_secret_revision+?,
+    screen_revision=screen_revision+? WHERE id=?`)
     .run(hermesUrl, hermesKey || null, websockifyUrl, vncPassword || null, cdpPort,
-      ownerSecretPort, ownerSecretToken || null, Number(changedScreen), botId);
+      ownerSecretPort, ownerSecretToken, Number(changedOwnerConnection), Number(changedScreen), botId);
   return null;
 }
 
-export function getOwnerSecretTarget(botId: string): { baseUrl: string; token: string } | null {
-  const row = db.prepare('SELECT hermes_url, owner_secret_port, owner_secret_token FROM bots WHERE id=?')
-    .get(botId) as Pick<RemoteAgentRow, 'hermes_url' | 'owner_secret_port' | 'owner_secret_token'> | undefined;
-  if (!row?.hermes_url || !row.owner_secret_token) return null;
-  const hermesUrl = URL.parse(row.hermes_url);
-  if (!hermesUrl?.hostname) return null;
+export function getOwnerSecretTarget(botId: string) {
+  const row = db.prepare('SELECT hermes_url, owner_secret_port, owner_secret_token, owner_secret_revision FROM bots WHERE id=?')
+    .get(botId) as Pick<RemoteAgentRow, 'hermes_url' | 'owner_secret_port' | 'owner_secret_token' | 'owner_secret_revision'> | undefined;
+  if (!row?.owner_secret_token) return null;
+  const host = ownerSecretHost(row.hermes_url);
+  if (!host) return null;
   return {
-    baseUrl: new URL(`http://${hermesUrl.hostname}:${row.owner_secret_port}`).origin,
+    baseUrl: new URL(`http://${host}:${row.owner_secret_port}`).origin,
     token: row.owner_secret_token,
+    revision: row.owner_secret_revision,
   };
 }
 

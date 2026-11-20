@@ -168,6 +168,8 @@ addColumn('bots', 'vnc_password', 'TEXT');
 addColumn('bots', 'cdp_port', 'INTEGER');
 addColumn('bots', 'owner_secret_port', 'INTEGER NOT NULL DEFAULT 8655');
 addColumn('bots', 'owner_secret_token', 'TEXT');
+addColumn('bots', 'owner_secret_revision', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('secure_input_requests', 'submitted_one_time', 'INTEGER');
 addColumn('bots', 'screen_revision', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'paused', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'pause_revision', 'INTEGER NOT NULL DEFAULT 0');

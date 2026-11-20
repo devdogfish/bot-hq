@@ -6,7 +6,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Hono } from 'hono';
 
 const appOrigin = 'https://hq.example.net';
-const gateway = 'http://127.0.0.1:29653';
+const agentHost = '100.90.0.10';
+const gateway = 'http://' + agentHost + ':29653';
 const agentToken = 'fixture-only-agent-token';
 const fields = {
   username: 'fixture-private-username',
@@ -31,6 +32,8 @@ const { mcpApi } = await import('../server/dist/mcp.js');
 const { db } = await import('../server/dist/db.js');
 const { mcpToken } = await import('../server/dist/engine.js');
 const { isBotBusy } = await import('../server/dist/agent/loop.js');
+const { hub } = await import('../server/dist/lib/hub.js');
+const { readSecureInputReceipt } = await import('../server/dist/secure-input.js');
 const { initSubagents } = await import('../server/dist/agent/subagents.js');
 const { initRooms } = await import('../server/dist/agent/rooms.js');
 initSubagents();
@@ -53,6 +56,7 @@ test('Owner secure input forwards values only to the assigned Agent and supports
   hq.route('/api', configApi);
   hq.route('/mcp', mcpApi);
   const runs = [];
+  const transcriptReads = [];
   const mcpReplies = [];
   const logs = [];
   for (const method of ['log', 'info', 'warn', 'error', 'debug']) {
@@ -63,6 +67,9 @@ test('Owner secure input forwards values only to the assigned Agent and supports
   const release = Promise.withResolvers();
   const encoder = new TextEncoder();
   let saved;
+  let responseRef = ref;
+  let responseExpiry = null;
+  let rejectSubmission = false;
   const agentErrors = [];
   const agentServer = createServer(async (request, response) => {
     try {
@@ -73,7 +80,11 @@ test('Owner secure input forwards values only to the assigned Agent and supports
         const chunks = [];
         for await (const chunk of request) chunks.push(chunk);
         const { fields: forwarded, ...metadata } = JSON.parse(Buffer.concat(chunks).toString());
-        assert.deepEqual(forwarded, fields);
+        assert.deepEqual(forwarded, metadata.kind === 'phone' ? { phone: '+15555550101' } : fields);
+        if (rejectSubmission) {
+          response.writeHead(400).end(JSON.stringify({ error: fields.password }));
+          return;
+        }
         const { request_id, ...listing } = metadata;
         const { kind, site } = listing;
         saved = { ...listing, ref, expires_at: null };
@@ -81,7 +92,7 @@ test('Owner secure input forwards values only to the assigned Agent and supports
         await release.promise;
         response.statusCode = 201;
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ ref, kind, site, expires_at: null }));
+        response.end(JSON.stringify({ ref: responseRef, kind, site, expires_at: responseExpiry }));
       } else if (method === 'GET' && path === '/v1/owner-secrets') {
         response.setHeader('content-type', 'application/json');
         response.end(JSON.stringify(saved ? [{ ...saved, fields }] : []));
@@ -104,29 +115,34 @@ test('Owner secure input forwards values only to the assigned Agent and supports
     assert.deepEqual(agentErrors, []);
   });
   const agentPort = agentServer.address().port;
-  const agent = 'http://127.0.0.1:' + agentPort;
+  const agent = 'http://' + agentHost + ':' + agentPort;
   const fetch = globalThis.fetch;
   t.mock.method(globalThis, 'fetch', async (input, options) => {
     const url = new URL(input);
     const method = options?.method ?? 'GET';
-    if (url.origin === agent) return fetch(input, options);
+    if (url.origin === agent) return fetch('http://127.0.0.1:' + agentPort + url.pathname, options);
     assert.equal(url.origin, gateway, 'unexpected network request');
     if (url.pathname === '/v1/models') return Response.json({ data: [{ id: 'tyler' }] });
     if (url.pathname === '/v1/runs' && method === 'POST') {
-      const run = { id: 'fixture-run-' + (runs.length + 1), input: JSON.parse(options.body).input };
+      const run = { id: 'fixture-run-' + (runs.length + 1), input: JSON.parse(options.body).input, toolRows: [] };
       runs.push(run);
       return Response.json({ run_id: run.id });
     }
-    const run = runs.find(({ id }) => url.pathname.startsWith('/v1/runs/' + id));
+    const run = runs.find(({ id }) => url.pathname === '/v1/runs/' + id || url.pathname.startsWith('/v1/runs/' + id + '/'));
     if (run && url.pathname.endsWith('/events')) {
       return new Response(new ReadableStream({
         start(controller) { run.stream = controller; },
       }));
     }
     if (run && url.pathname === '/v1/runs/' + run.id) {
-      return Response.json({ run_id: run.id, session_id: 'fixture-session' });
+      transcriptReads.push('run');
+      return Response.json({ run_id: run.id, session_id: run.id + '-session' });
     }
-    if (url.pathname === '/api/sessions/fixture-session/messages') return Response.json({ data: [] });
+    const sessionRun = runs.find(({ id }) => url.pathname === '/api/sessions/' + id + '-session/messages');
+    if (sessionRun) {
+      transcriptReads.push('messages');
+      return Response.json({ data: sessionRun.toolRows });
+    }
     assert.fail('Unexpected Hermes endpoint ' + method + ' ' + url.pathname);
   });
 
@@ -149,12 +165,20 @@ test('Owner secure input forwards values only to the assigned Agent and supports
   }
 
   const { body: { bots: [bot] } } = await request('/bots');
+  const events = [];
+  const { user_id: userId } = db.prepare('SELECT user_id FROM bots WHERE id=?').get(bot.id);
+  t.after(hub.subscribe(userId, (event) => events.push(event)));
   const botPath = '/bots/' + bot.id;
   const configPath = '/config/bots/' + bot.id + '/owner-secrets';
-  const agentSettings = await request(botPath + '/agent', 'PUT', {
+  const settings = {
     hermesUrl: gateway, hermesKey: 'fixture-hermes-key', websockifyUrl: '', cdpPort: null,
     ownerSecretPort: agentPort, ownerSecretToken: agentToken,
-  });
+  };
+  for (const host of ['127.0.0.1', '100.128.0.1', 'agent.example.net']) {
+    const outsideTailnet = await request(botPath + '/agent', 'PUT', { ...settings, hermesUrl: 'http://' + host });
+    assert.equal(outsideTailnet.status, 400);
+  }
+  const agentSettings = await request(botPath + '/agent', 'PUT', settings);
   assert.equal(agentSettings.status, 200);
   assert.equal(agentSettings.body.agent.ownerSecretPort, agentPort);
   assert.equal(agentSettings.body.agent.ownerSecretTokenSet, true);
@@ -191,31 +215,72 @@ test('Owner secure input forwards values only to the assigned Agent and supports
     const { body: { rows } } = await request(botPath + '/rows');
     return rows.map(({ body }) => body).find(({ requestId }) => requestId === id);
   }
-  async function openCard(index) {
+  async function openCard(index, cardMetadata = metadata) {
     assert.equal((await request(botPath + '/messages', 'POST', { text: 'Open secure input.' })).status, 200);
-    await stream(index);
+    const controller = await stream(index);
+    const emit = (kind, data) => controller.enqueue(encoder.encode(`event: ${kind}\ndata: ${JSON.stringify(data)}\n\n`));
+    const tool = 'mcp__hq__request_secure_input';
+    function complete(receipt, callId, { durable = false, source = tool } = {}) {
+      const event = { tool: source, tool_call_id: callId };
+      emit('tool.started', { ...event, preview: '' });
+      emit('tool.completed', { ...event, preview: durable ? '' : receipt.content[0].text });
+      if (durable) runs[index].toolRows.push({
+        role: 'tool', tool_name: source, tool_call_id: callId,
+        content: JSON.stringify({ result: receipt.content[0].text }),
+      });
+    }
     assert.equal((await callSecureInput({ ...metadata, site: metadata.site + '/login' })).isError, true);
-    const reply = await callSecureInput({ ...metadata, site: 'https://Accounts.example.net:443/' });
+    assert.equal((await callSecureInput({ ...metadata, site: 'https://accounts.example.net.' })).isError, true);
+    const reply = await callSecureInput({ ...cardMetadata, site: 'https://Accounts.example.net:443/' });
     assert.ok(!reply.isError, JSON.stringify(reply));
     const receipt = JSON.parse(reply.content[0].text);
     assert.equal(typeof receipt.request_id, 'string');
     assert.deepEqual(receipt, { request_id: receipt.request_id, status: 'pending' });
+    assert.equal(await readCard(receipt.request_id), undefined, 'an MCP bearer alone must not publish a card');
+    complete(reply, 'secure-' + index, { durable: index === 0 });
+    let secondId;
+    let unrelatedId;
+    if (index === 0) {
+      const second = await callSecureInput(metadata);
+      secondId = JSON.parse(second.content[0].text).request_id;
+      complete(second, 'secure-second', { durable: true });
+      const unrelated = await callSecureInput(metadata);
+      unrelatedId = JSON.parse(unrelated.content[0].text).request_id;
+      complete(unrelated, 'secure-unrelated', { source: 'mcp__other__request_secure_input' });
+    }
+    const readsBefore = transcriptReads.length;
+    const finishStarted = performance.now();
+    await finish(index);
+    const finishMs = Math.round(performance.now() - finishStarted);
+    if (index === 0) {
+      assert.deepEqual(transcriptReads, ['run', 'messages'], 'verify multiple receipts in one session page');
+      t.diagnostic(`Two deferred receipts: ${transcriptReads.length - readsBefore} mock gateway reads, ${finishMs} ms to settle`);
+      assert.equal((await readCard(secondId))?.status, 'pending');
+      assert.equal(await readCard(unrelatedId), undefined);
+    } else {
+      assert.equal(transcriptReads.length, readsBefore, 'inline receipts need no transcript requests');
+      if (index === 2) t.diagnostic(`Inline receipt: 0 additional mock gateway reads, ${finishMs} ms to settle`);
+    }
     const card = await readCard(receipt.request_id);
     assert.ok(card);
     assert.equal(card.type, 'card');
     assert.equal(card.card, 'secure-input');
     assert.equal(card.status, 'pending');
-    assert.equal(card.oneTime, metadata.one_time);
-    for (const key of ['kind', 'site', 'label', 'reason']) assert.equal(card[key], metadata[key]);
-    await finish(index);
+    assert.equal(card.oneTime, cardMetadata.one_time);
+    for (const key of ['kind', 'site', 'label', 'reason']) assert.equal(card[key], cardMetadata[key]);
     return receipt.request_id;
   }
 
   const id = await openCard(0);
+  const { body: { rows: currentRows } } = await request(botPath + '/rows');
+  const { seq } = currentRows.find(({ body }) => body.requestId === id);
+  assert.equal((await request(botPath + '/cards/' + seq + '/dismiss', 'POST')).status, 400);
   const submission = { decision: 'submit', fields };
   const decisionPath = '/secure-input/' + id;
   const { cookie: _, ...anonymous } = headers;
   assert.equal((await request(decisionPath, 'POST', submission, anonymous)).status, 401);
+  const { origin: _origin, ...noOrigin } = headers;
+  assert.equal((await request(decisionPath, 'POST', submission, noOrigin)).status, 403);
   assert.equal((await request(decisionPath, 'POST', submission, { ...headers, origin: 'https://other.example.net' })).status, 403);
   assert.ok([403, 404].includes((await request(decisionPath, 'POST', submission, { ...headers, cookie: otherCookie })).status));
   assert.equal((await request(decisionPath, 'POST', { ...submission, fields: { ...fields, password: 'x'.repeat(65536) } })).status, 413);
@@ -225,6 +290,9 @@ test('Owner secure input forwards values only to the assigned Agent and supports
   assert.equal(await Promise.race([receipt.promise, delay(4000, 'timed out', { ref: false })]), id);
   assert.equal((await request(decisionPath, 'POST', submission)).status, 409);
   assert.equal((await request(decisionPath, 'POST', { decision: 'decline' })).status, 409);
+  assert.equal((await request(botPath + '/agent', 'PUT', settings)).status, 409);
+  assert.equal((await request(botPath + '/fresh', 'POST')).status, 409);
+  assert.equal((await request(botPath, 'DELETE')).status, 409);
   assert.equal((await readCard(id)).status, 'pending');
   release.resolve();
   assert.deepEqual(await submitting, {
@@ -272,9 +340,55 @@ test('Owner secure input forwards values only to the assigned Agent and supports
     { method: 'GET', path: '/v1/owner-secrets' },
   ]);
 
+  const stale = await openCard(4);
+  const changedPort = await request(botPath + '/agent', 'PUT', {
+    ...settings, ownerSecretPort: agentPort === 65535 ? 65534 : agentPort + 1, ownerSecretToken: '',
+  });
+  assert.equal(changedPort.status, 200);
+  assert.equal(changedPort.body.agent.ownerSecretTokenSet, false);
+  assert.equal((await request(botPath + '/agent', 'PUT', settings)).status, 200);
+  assert.equal((await request('/secure-input/' + stale, 'POST', submission)).status, 409);
+  assert.equal(agentRequests.length, 4);
+
+  const phone = '+15555550101';
+  const phoneId = await openCard(5, { ...metadata, kind: 'phone', one_time: true });
+  const phonePath = '/secure-input/' + phoneId;
+  const phoneDecision = { decision: 'submit', fields: { phone }, one_time: true };
+  responseRef = fields.password;
+  assert.equal((await request(phonePath, 'POST', phoneDecision)).status, 502);
+  assert.equal((await readCard(phoneId)).status, 'pending');
+  assert.equal((await request(phonePath, 'POST', { decision: 'decline' })).status, 409);
+  assert.equal((await request(phonePath, 'POST', { ...phoneDecision, one_time: false })).status, 409);
+  assert.equal(agentRequests.length, 5);
+  responseRef = ref;
+  assert.equal((await request(phonePath, 'POST', phoneDecision)).status, 200);
+  await finish(6);
+  assert.equal(agentRequests.length, 6);
+
+  const refused = await openCard(7);
+  rejectSubmission = true;
+  const rejection = await request('/secure-input/' + refused, 'POST', submission);
+  assert.equal(rejection.status, 422);
+  assert.ok(!JSON.stringify(rejection).includes(fields.password));
+  assert.equal((await request('/secure-input/' + refused, 'POST', { decision: 'decline' })).status, 200);
+  await finish(8);
+
+  const expiredId = await openCard(9, { ...metadata, kind: 'phone', one_time: true });
+  rejectSubmission = false;
+  responseExpiry = new Date(Date.now() - 30_000).toISOString();
+  assert.equal((await request('/secure-input/' + expiredId, 'POST', phoneDecision)).status, 410);
+  assert.equal((await readCard(expiredId)).status, 'pending');
+  assert.equal(runs.length, 10, 'an expired receipt must not trigger a ready notice');
+
   const { body: chat } = await request(botPath + '/rows');
   const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type='table'").all();
   const snapshot = tables.map(({ name }) => db.prepare('SELECT * FROM "' + name.replaceAll('"', '""') + '"').all());
-  const observed = JSON.stringify({ chat, snapshot, logs, listing, mcpReplies, prompts: runs.map(({ input }) => input) });
-  for (const value of Object.values(fields)) assert.ok(!observed.includes(value), 'private input leaked to chat, storage, logs, listing or Hermes');
+  const observed = JSON.stringify({ chat, events, snapshot, logs, listing, mcpReplies, prompts: runs.map(({ input }) => input) });
+  for (const value of [...Object.values(fields), phone]) assert.ok(!observed.includes(value), 'private input leaked to chat, storage, logs, listing or Hermes');
+});
+
+test('a UUID-shaped private value is never accepted as a vault receipt', async () => {
+  const card = { kind: 'text', site: 'https://accounts.example.net' };
+  const response = Response.json({ ...card, ref }, { status: 201 });
+  assert.equal(await readSecureInputReceipt(response, card, [ref]), null);
 });

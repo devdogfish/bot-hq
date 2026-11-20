@@ -26,16 +26,18 @@ back** tells the Agent to inspect the screen again on its next turn.
 ## Owner secure input
 
 In **Engine → Agent connection**, enter the owner-secret port (default 8655)
-and the per-Agent `OWNER_SECRET_TOKEN` from the Agent's vault. Bot HQ uses the
-registered Hermes hostname and reaches the vault service over HTTP inside
-Tailscale. Grant only `tag:bot-hq` access to that Agent's owner-secret port.
-The token is write-only in the UI. Leaving it blank keeps the saved token for
-the same hostname. Use the Owner's browser origin as `APP_URL`.
+and the per-Agent `OWNER_SECRET_TOKEN` from the Agent's vault. The registered
+Hermes URL must use the Agent's Tailscale IPv4 address. Bot HQ reaches the vault
+service over HTTP inside Tailscale. Grant only `tag:bot-hq` access to that Agent's
+owner-secret port. The token is write-only in the UI. Leaving it blank keeps
+the saved token for the same address and port. Changes to the Agent connection
+invalidate pending shares. Use the Owner's HTTPS browser origin as `APP_URL`.
 
 When a task needs the Owner's own data, the Agent calls
 `hq.request_secure_input` during a Bot HQ turn with `kind`, the exact HTTPS
 origin as `site`, `label`, `reason`, and `one_time`. The tool returns a
-`pending` receipt and displays a **Secure input** card in the Owner's chat.
+`pending` receipt. Bot HQ displays a **Secure input** card in the Owner's chat
+after confirming the receipt against the current Hermes run.
 The Owner can share or decline it. The Agent should wait for the next-turn
 notice with the same request ID and `ready` plus an opaque `ref`, or
 `declined`. For logins, use `quantself_website_account` `fill` with
@@ -52,9 +54,15 @@ The browser submits values to the authenticated, same-origin
 `POST /api/secure-input/:request_id`. Bot HQ forwards them to
 `POST /v1/owner-secrets` using the Agent token and retains only request
 metadata and resolution. Values stay out of Bot HQ's logs, SQLite, chat,
-and Agent notifications. A retry after an unconfirmed response uses the
-same request ID so the Agent can return the existing reference. Use the form
-for secrets and keep them out of chat.
+and Agent notifications. If the result is unconfirmed, retry with the same
+values and sharing settings. Bot HQ reuses the request ID so the Agent can
+return the existing reference. Revoke a stored value under **Shared with this
+Agent** if you no longer want the Agent to use it. Use the form for secrets
+and keep them out of chat.
+
+The Agent's visible Chromium session must isolate filled values from Hermes
+browser and screen tools before real Owner secrets are used. A status-only
+fill result leaves the filled field readable through shared browser controls.
 
 ## Benchmark the screen
 

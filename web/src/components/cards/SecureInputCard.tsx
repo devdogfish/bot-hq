@@ -38,13 +38,13 @@ export function SecureInputCard({ body }: { body: SecureInputBody }) {
       form.reset();
     } catch (error) {
       const status = error instanceof ApiError ? error.status : null;
-      if (status === 404) {
+      if (status === 404 || status === 410) {
         form.reset();
         setOutcome('unavailable');
       } else if (status === 400 || status === 413) {
         setError('Check the requested fields and try again.');
-      } else if (status === 409) {
-        setError('Try again shortly. If the problem persists, ask the Agent for a new request.');
+      } else if (error instanceof ApiError && (status === 409 || status === 422 || status === 502)) {
+        setError(error.message);
       } else {
         setError('Couldn’t resolve this request. Try again.');
       }
@@ -68,7 +68,8 @@ export function SecureInputCard({ body }: { body: SecureInputBody }) {
       </div>
       {body.reason && <div className="card__body">{body.reason}</div>}
       {pending ? (
-        <form autoComplete="off" onSubmit={submit} aria-busy={!!busy}>
+        <form method="post" action={`/api/secure-input/${encodeURIComponent(body.requestId)}`}
+          autoComplete="off" onSubmit={submit} aria-busy={!!busy}>
           <fieldset className="secure-input-card__fields" disabled={!!busy}>
             {body.kind === 'login' ? (
               <>
@@ -98,6 +99,11 @@ export function SecureInputCard({ body }: { body: SecureInputBody }) {
               </label>
             )}
           </fieldset>
+          {body.kind !== 'phone' && (
+            <div className="card__body">
+              {body.oneTime ? 'Expires after one fill or ten minutes.' : 'Stored in the Agent’s vault until you revoke it.'}
+            </div>
+          )}
           <div className="card__actions">
             <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={(event) => {
               const { form } = event.currentTarget;

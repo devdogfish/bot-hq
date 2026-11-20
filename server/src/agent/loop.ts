@@ -4,7 +4,7 @@ import { hub } from '../lib/hub.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, ApprovalChoice, MessageBody, ToolCallBody } from '../types.js';
 import { draftEngineFor, engineFor } from '../engine.js';
-import { HermesRun, isApprovalChoice, type ApprovalPrompt } from './hermes-run.js';
+import { HermesRun, isApprovalChoice, SECURE_INPUT_TRANSCRIPT_TOOL, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
 import { activityFor, appToolName } from './tools.js';
 import { classifyOwnerEmailRequest, OWNER_EMAIL_TOOL, ownerEmailContent, ownerEmailProposalId } from './owner-email-policy.js';
@@ -12,7 +12,10 @@ import { dispatchEmail, dispatchOwnerEmail, ownerEmailRole } from './owner-email
 import { ownerEmailEnvelope, type OwnerEmailPacket, type OwnerEmailRole } from './owner-email-transport.js';
 import { callPersonalTool, isPersonalAssistant, newPersonalReadState, personalAssistantPaired,
   personalGmail, PERSONAL_REPLY_TOOL, PERSONAL_DELETE_TOOL } from './personal-assistant.js';
-import { markSecureInputNotified, SECURE_INPUT_TOOL, secureInputNotices } from '../secure-input.js';
+import {
+  markSecureInputNotified, prepareSecureInput, publishSecureInput, SECURE_INPUT_TOOL, secureInputNotices,
+  secureInputReceiptId,
+} from '../secure-input.js';
 
 /**
  * A turn: one message handed to the bot's Hermes engine and streamed back into the conversation.
@@ -86,7 +89,7 @@ export function interrupt(botId: string) {
   if (turn) {
     turn.ownerEmail = undefined;
     turn.personal = undefined;
-    turn.secureInputTurnId = undefined;
+    turn.secureInput = undefined;
   }
   expireApprovals(botId);
   const run = remoteRuns.get(botId);
@@ -162,6 +165,8 @@ interface OwnerEmailRequest {
   stagingClosed: boolean;
 }
 
+type SecureInputProposal = Exclude<ReturnType<typeof prepareSecureInput>, { error: string }>;
+
 interface Turn {
   botId: string;
   userId: string;
@@ -172,7 +177,7 @@ interface Turn {
   tools: ToolRef[];
   /** What an app tool said about its own call; beats what we would guess from the raw output. */
   outcomes: Map<number, Outcome>;
-  secureInputTurnId?: string;
+  secureInput?: { id: string; proposals: Map<string, SecureInputProposal>; closed: boolean };
   ownerEmail?: OwnerEmailRequest;
   personal?: ReturnType<typeof newPersonalReadState> & {
     generation: number;
@@ -184,7 +189,29 @@ interface Turn {
 const turns = new Map<string, Turn>();
 
 export const turnDepth = (botId: string) => turns.get(botId)?.depth ?? 0;
-export const secureInputTurnId = (botId: string) => turns.get(botId)?.secureInputTurnId;
+
+/** The MCP bearer identifies the Agent. Its authenticated run receipt identifies the turn. */
+export function stageSecureInput(botId: string, args: unknown) {
+  const context = turns.get(botId)?.secureInput;
+  if (!context || context.closed) return { error: 'Secure input requires an active Bot HQ turn.' };
+  if (context.proposals.size >= 8) return { error: 'Too many secure input requests in this turn.' };
+  const proposal = prepareSecureInput(botId, args);
+  if ('error' in proposal) return proposal;
+  const requestId = proposal.card.requestId;
+  context.proposals.set(requestId, proposal);
+  return { request_id: requestId, status: 'pending' } as const;
+}
+
+function confirmSecureInput(turn: Turn, output: unknown) {
+  const context = turn.secureInput;
+  const receiptId = secureInputReceiptId(output);
+  if (!context || !receiptId) return false;
+  const proposal = context.proposals.get(receiptId);
+  if (!proposal) return false;
+  context.proposals.delete(receiptId);
+  publishSecureInput(turn.botId, context.id, proposal);
+  return true;
+}
 
 export function markSilent(botId: string) {
   const t = turns.get(botId);
@@ -623,7 +650,6 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);
   const turn: Turn = { botId, userId, depth: trigger.type === 'bot' ? trigger.depth : 0, silent: false, tools: [], outcomes: new Map() };
-  if (!draftOnly && !personal) turn.secureInputTurnId = newId('turn');
   if (!draftOnly && trigger.type === 'user' && trigger.chatRow && trigger.chatRow.generation === bot.generation) {
     if (personal) turn.personal = {
       ...newPersonalReadState(trigger.text), generation: bot.generation, ownerSeq: trigger.chatRow.seq, pauseRevision,
@@ -690,6 +716,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   let completedDeletion: { ref: ToolRef; output: unknown } | undefined;
   let completedEmail: { ref: ToolRef; output: unknown; error: boolean } | undefined;
   const approvals = new Map<string, Promise<void>>();
+  const secureInputReceipts: ToolRef[] = [];
 
   try {
     const engine = draftEngine ?? await engineFor(botId);
@@ -734,6 +761,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (engine.kind === 'remote') {
       remote = new HermesRun(engine);
       remoteRuns.set(botId, remote);
+      if (!draftOnly && !personal) turn.secureInput = { id: newId('turn'), proposals: new Map(), closed: false };
       res = await remote.start(payload, conversation);
     } else {
       res = await fetch(`${engine.url}/v1/responses`, {
@@ -826,7 +854,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
             }
             const act = activityFor(String(item.name ?? ''));
             let args: any;
-            if (!ours || name !== SECURE_INPUT_TOOL) {
+            if (name.toLowerCase() !== SECURE_INPUT_TOOL) {
               try { args = typeof item.arguments === 'string' ? JSON.parse(item.arguments) : item.arguments; } catch { args = undefined; }
             }
             const row = appendRow(botId, 'tool-call', { type: 'tool-call', callId: String(item.call_id ?? item.id ?? ''), name, label: act.label, status: 'running', args } satisfies ToolCallBody);
@@ -933,7 +961,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
           throw new Error(d?.response?.error?.message ?? d?.error?.message ?? d?.message ?? 'the agent run failed');
       }
 
-      if (terminal) turn.secureInputTurnId = undefined;
+      if (terminal && turn.secureInput) turn.secureInput.closed = true;
       // A tool result arrives as an item of its own (announced twice: added and done).
       const item = d?.item;
       if (item?.type === 'function_call_output' && item.call_id && !outputsSeen.has(item.call_id)) {
@@ -954,6 +982,13 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
               turn.personal.stagingClosed = true;
               completedEmail = { ref, output: item.output, error: false };
             } else patchToolRow(botId, ref.seq, { status: 'denied', summary: 'Draft only' });
+          } else if (ref.name.toLowerCase() === SECURE_INPUT_TOOL) {
+            const completed = appToolName(String(item.name ?? ''));
+            if (remote && !terminal && ref.ours && completed.ours && completed.name === SECURE_INPUT_TOOL &&
+                turn.secureInput?.proposals.size && !item.error) {
+              if (confirmSecureInput(turn, item.output)) patchToolRow(botId, ref.seq, { status: 'done' });
+              else secureInputReceipts.push(ref);
+            } else patchToolRow(botId, ref.seq, { status: 'denied', summary: 'Request not confirmed' });
           } else if (ref.ours && ref.name === OWNER_EMAIL_TOOL) {
             const completed = appToolName(String(item.name ?? ''));
             if (remote && !terminal && !completedEmail && turn.ownerEmail?.proposals.size && !item.error
@@ -978,6 +1013,15 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     }
     if (remote && !terminal) throw new Error('Hermes closed the stream without a final run status.');
     if (draftOnly) say(draftOutput?.trim() || draftText);
+    if (remote && secureInputReceipts.length) {
+      const results = cleanCompletion && turn.secureInput?.proposals.size
+        ? await remote.toolResults(secureInputReceipts.map(({ callId }) => callId), SECURE_INPUT_TRANSCRIPT_TOOL)
+        : undefined;
+      for (const { callId, seq } of secureInputReceipts) {
+        const confirmed = confirmSecureInput(turn, results?.get(callId));
+        patchToolRow(botId, seq, confirmed ? { status: 'done' } : { status: 'denied', summary: 'Request not confirmed' });
+      }
+    }
     if (remote && cleanCompletion && completedDeletion) {
       remoteRuns.delete(botId);
       const { ref, output } = completedDeletion;
@@ -1008,7 +1052,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   } finally {
     turn.ownerEmail = undefined;
     turn.personal = undefined;
-    turn.secureInputTurnId = undefined;
+    turn.secureInput = undefined;
     if (remote) {
       if (!draftOnly) expireApprovals(botId);
       if (!terminal) remote.stop();

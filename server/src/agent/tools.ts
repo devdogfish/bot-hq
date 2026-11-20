@@ -90,7 +90,7 @@ async function xSearch(a: any): Promise<string> {
 export const TOOLS: ToolDef[] = [
   {
     name: SECURE_INPUT_TOOL,
-    description: "Ask for the Owner's own login, phone number, verification code, or other private value through a secure card. Supply only the request details. Wait for ready or declined. Use the returned ref to fill the requested site, using fill for login and fill_secret for other kinds. Never ask the Owner to paste values in chat.",
+    description: "Ask for the Owner's own login, phone number, verification code, or other private value through a secure card. Supply only the request details. After the pending receipt, end this turn and wait for the next-turn ready or declined notice. Use the returned ref to fill the requested site, using fill for login and fill_secret for other kinds. Never ask the Owner to paste values in chat.",
     parameters: obj({
       kind: { type: 'string', enum: SECURE_INPUT_KINDS },
       site: { type: 'string', description: 'The exact HTTPS origin, without a path or query.' },

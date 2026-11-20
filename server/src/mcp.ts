@@ -2,13 +2,13 @@ import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { activePauseRevision, getBotRow } from './store.js';
 import { mcpToken, primaryBotId } from './engine.js';
-import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, personalTool, secureInputTurnId, stageOwnerEmail, turnDepth } from './agent/loop.js';
+import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, personalTool, stageOwnerEmail, stageSecureInput, turnDepth } from './agent/loop.js';
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
 import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
 import { ownerEmailRole } from './agent/owner-email.js';
 import { isPersonalAssistant, personalAssistantPaired, personalToolList, PERSONAL_TOOLS } from './agent/personal-assistant.js';
 import { JOBS_MONITOR_TOOL, jobsMonitorCommand } from './jobs-monitor.js';
-import { SECURE_INPUT_TOOL, stageSecureInput } from './secure-input.js';
+import { SECURE_INPUT_TOOL } from './secure-input.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -61,9 +61,7 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   const name = [...toolMap.keys()].find((k) => k.toLowerCase() === rawName.toLowerCase()) ?? rawName;
   if (name === OWNER_EMAIL_TOOL) return text(JSON.stringify(stageOwnerEmail(botId, args)));
   if (name === SECURE_INPUT_TOOL) {
-    const turnId = secureInputTurnId(botId);
-    if (!turnId) return text('Secure input requires an active Bot HQ turn.', true);
-    const result = stageSecureInput(botId, turnId, args);
+    const result = stageSecureInput(botId, args);
     return 'error' in result ? text(result.error, true) : text(JSON.stringify(result));
   }
   const rowSeq = await claimToolRow(botId, name);

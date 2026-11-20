@@ -1,8 +1,10 @@
 import { createHmac } from 'node:crypto';
+import { isIPv4 } from 'node:net';
 import { z } from 'zod';
 import { db } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
+import { readMcpResult } from './lib/mcp-result.js';
 import { getOwnerSecretTarget } from './remote-agent.js';
 import { appendRow, updateRow } from './store.js';
 import type { SecureInputCard, SecureInputResult } from './types.js';
@@ -13,20 +15,25 @@ export const SECURE_INPUT_BODY_LIMIT = 64 * 1024;
 
 const httpsOrigin = z.string().max(2048).transform((value, ctx) => {
   const url = URL.parse(value);
-  if (url && url.port !== '0' && /^https:\/\/[^/?#@\\\s]+\/?$/i.test(value)) return url.origin;
+  if (url && url.port !== '0' && /^https:\/\/[^/?#@\\\s\x00-\x1f\x7f]+\/?$/i.test(value)) {
+    const host = url.hostname;
+    const dnsName = host.length <= 253 && host.split('.').every((part) =>
+      /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(part));
+    if (isIPv4(host) || host.startsWith('[') || dnsName) return url.origin;
+  }
   ctx.addIssue({ code: 'custom', message: 'Use an exact HTTPS origin.' });
   return z.NEVER;
 });
 
 const kind = z.enum(SECURE_INPUT_KINDS);
-const label = z.string().trim().min(1).max(160).regex(/^[^\p{C}\p{Zl}\p{Zp}]+$/u);
+const label = z.string().trim().min(1).max(160).regex(/^(?:[^\p{C}\p{Z}]| )+$/u);
 const requestArgs = z.strictObject({
   kind, site: httpsOrigin, label,
   reason: z.string().trim().min(1).max(1000),
   one_time: z.boolean(),
 });
 
-const value = z.string().min(1).max(SECURE_INPUT_BODY_LIMIT);
+const value = z.string().min(1).max(SECURE_INPUT_BODY_LIMIT).regex(/^[^\x00\p{Cs}]+$/u);
 const fieldSchemas = {
   login: z.strictObject({ username: value, password: value, totp: value.optional() }),
   phone: z.strictObject({ phone: z.string().regex(/^\+[1-9]\d{1,14}$/) }),
@@ -39,11 +46,12 @@ export const secureInputDecision = z.discriminatedUnion('decision', [
   z.strictObject({ decision: z.literal('submit'), fields: z.unknown(), one_time: z.boolean().optional() }),
 ]);
 
-export const ownerSecretRef = z.string().min(1).max(256).regex(/^[A-Za-z0-9_-][A-Za-z0-9_.:-]*$/);
-const readySchema = z.object({ ref: ownerSecretRef, kind, site: httpsOrigin });
+export const ownerSecretRef = z.string().length(36).regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+const expiry = z.iso.datetime({ offset: true }).nullable();
+const readySchema = z.object({ ref: ownerSecretRef, kind, site: httpsOrigin, expires_at: expiry.optional() });
 export const ownerSecretList = z.array(z.object({
   ref: ownerSecretRef, kind, site: httpsOrigin, label, one_time: z.boolean(),
-  expires_at: z.iso.datetime({ offset: true }).nullable(),
+  expires_at: expiry,
 }));
 
 interface RequestRow {
@@ -54,33 +62,48 @@ interface RequestRow {
   connection_id: string;
   status: SecureInputCard['status'];
   ref: string | null;
+  submitted_one_time: number | null;
 }
 
 type Target = NonNullable<ReturnType<typeof getOwnerSecretTarget>>;
 
 function connectionId(target: Target) {
-  return createHmac('sha256', env.sessionSecret).update(target.baseUrl).update('\0').update(target.token).digest('hex');
+  return createHmac('sha256', env.sessionSecret)
+    .update(JSON.stringify([target.baseUrl, target.token, target.revision])).digest('hex');
 }
 
-export function stageSecureInput(botId: string, turnId: string, args: unknown):
-  { error: string } | { request_id: string; status: 'pending' } {
+// Keep connection settings and conversation resets stable during a vault write.
+export const secureInputWrites = new Map<string, string>();
+export const isSharingSecureInput = (botId: string) => [...secureInputWrites.values()].includes(botId);
+
+export function prepareSecureInput(botId: string, args: unknown):
+  { error: string } | { card: SecureInputCard; connection: string } {
   const parsed = requestArgs.safeParse(args);
   if (!parsed.success) return { error: 'Use a supported kind, an exact HTTPS origin, a label, a reason, and one_time.' };
   const target = getOwnerSecretTarget(botId);
   if (!target) return { error: 'Set up the owner-secret port and token in Agent connection.' };
   const { kind, site, label, reason, one_time } = parsed.data;
   if (kind === 'login' && one_time) return { error: 'Login sharing is persistent.' };
-  const requestId = newId('sec');
   const card: SecureInputCard = {
-    type: 'card', card: 'secure-input', requestId, kind, site, label, reason,
+    type: 'card', card: 'secure-input', requestId: newId('sec'), kind, site, label, reason,
     oneTime: kind === 'phone' || kind === 'code' || one_time, status: 'pending',
   };
+  return { card, connection: connectionId(target) };
+}
+
+export function publishSecureInput(botId: string, turnId: string, proposal: { card: SecureInputCard; connection: string }) {
+  const { card, connection } = proposal;
   db.transaction(() => {
     const row = appendRow(botId, 'card', card);
     db.prepare(`INSERT INTO secure_input_requests(request_id,bot_id,generation,row_seq,turn_id,connection_id)
-      VALUES (?,?,?,?,?,?)`).run(requestId, botId, row.generation, row.seq, turnId, connectionId(target));
+      VALUES (?,?,?,?,?,?)`).run(card.requestId, botId, row.generation, row.seq, turnId, connection);
   })();
-  return { request_id: requestId, status: 'pending' };
+}
+
+export function secureInputReceiptId(output: unknown) {
+  const value = readMcpResult(output);
+  if (value?.status === 'pending' && typeof value.request_id === 'string' &&
+      /^sec_[\w-]{12}$/.test(value.request_id)) return value.request_id;
 }
 
 export function getSecureInput(userId: string, requestId: string) {
@@ -100,9 +123,14 @@ export function currentSecureInputTarget(request: RequestRow) {
   return target && connectionId(target) === request.connection_id ? target : null;
 }
 
+export function setSecureInputAttempt(requestId: string, oneTime: boolean | null) {
+  db.prepare("UPDATE secure_input_requests SET submitted_one_time=? WHERE request_id=? AND status='pending'")
+    .run(oneTime === null ? null : Number(oneTime), requestId);
+}
+
 export function finishSecureInput(request: RequestRow, card: SecureInputCard, result: SecureInputResult, oneTime = card.oneTime) {
   db.transaction(() => {
-    db.prepare('UPDATE secure_input_requests SET status=?, ref=? WHERE request_id=?')
+    db.prepare('UPDATE secure_input_requests SET status=?, ref=?, submitted_one_time=NULL WHERE request_id=?')
       .run(result.status, result.status === 'ready' ? result.ref : null, request.request_id);
     // A reset can complete while the Agent is storing the value. The new chat starts at seq 1.
     const active = db.prepare('SELECT 1 FROM bots WHERE id=? AND generation=?').get(request.bot_id, request.generation);
@@ -150,15 +178,17 @@ export function serializeSecureInput(card: SecureInputCard, fields: unknown, req
     request_id: card.requestId, kind: card.kind, site: card.site, label: card.label,
     one_time: oneTime, fields: parsed.data,
   });
-  return Buffer.byteLength(body) <= SECURE_INPUT_BODY_LIMIT ? { body, oneTime } : null;
+  return Buffer.byteLength(body) <= SECURE_INPUT_BODY_LIMIT
+    ? { body, oneTime, values: Object.values(parsed.data) } : null;
 }
 
-export async function readSecureInputRef(response: Response, card: SecureInputCard) {
+export async function readSecureInputReceipt(response: Response, card: SecureInputCard, privateValues: (string | undefined)[]) {
   if (response.status !== 201) {
     await response.body?.cancel();
     return null;
   }
   const parsed = readySchema.safeParse(await response.json());
-  if (!parsed.success || parsed.data.kind !== card.kind || parsed.data.site !== card.site) return null;
-  return parsed.data.ref;
+  if (!parsed.success || parsed.data.kind !== card.kind || parsed.data.site !== card.site ||
+      privateValues.includes(parsed.data.ref)) return null;
+  return parsed.data;
 }

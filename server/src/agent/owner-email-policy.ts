@@ -1,3 +1,5 @@
+import { readMcpResult } from '../lib/mcp-result.js';
+
 export const OWNER_EMAIL_TOOL = 'send_owner_email';
 
 const RECIPIENT_COUNT = 3;
@@ -88,19 +90,7 @@ export function ownerEmailContent(args: unknown): { subject: string; body: strin
 
 // Hermes supplies either the tool text directly or its single text content item.
 export function ownerEmailProposalId(output: unknown): string | null {
-  if (typeof output === 'string' && output.length > 500) return null;
-  try {
-    let value: any = typeof output === 'string' ? JSON.parse(output) : output;
-    if (typeof value?.result === 'string') value = JSON.parse(value.result);
-    const items = Array.isArray(value) ? value : value?.content;
-    if (items !== undefined) {
-      if (!Array.isArray(items) || items.length !== 1 || items[0]?.type !== 'text'
-          || typeof items[0].text !== 'string' || value?.isError === true) return null;
-      value = JSON.parse(items[0].text);
-    }
-    return value?.status === 'staged' && typeof value.proposalId === 'string'
-      && /^mailprop_[\w-]{12}$/.test(value.proposalId) ? value.proposalId : null;
-  } catch {
-    return null;
-  }
+  const value = readMcpResult(output);
+  return value?.status === 'staged' && typeof value.proposalId === 'string'
+    && /^mailprop_[\w-]{12}$/.test(value.proposalId) ? value.proposalId : null;
 }
