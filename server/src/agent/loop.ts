@@ -3,7 +3,7 @@ import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, ApprovalChoice, MessageBody, ToolCallBody } from '../types.js';
-import { engineFor } from '../engine.js';
+import { draftEngineFor, engineFor } from '../engine.js';
 import { HermesRun, isApprovalChoice, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
 import { activityFor, appToolName } from './tools.js';
@@ -25,7 +25,7 @@ import { callPersonalTool, isPersonalAssistant, newPersonalReadState, personalAs
  */
 
 export type Trigger =
-  | { type: 'user'; text: string; chatRow?: { generation: number; seq: number } }
+  | { type: 'user'; text: string; chatRow?: { generation: number; seq: number }; draftOnly?: boolean }
   | { type: 'routine'; routineId: string; name: string; prompt: string }
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'system'; text: string };
@@ -58,12 +58,12 @@ function trackQueue(botId: string, queue: BotQueue, tail: Promise<void>) {
 /** Reserve a turn synchronously; accepted work starts after the caller records its row. */
 export function enqueue(botId: string, trigger: Trigger) {
   if (isBotResetting(botId)) return false;
-  if (isPersonalAssistant(botId) && trigger.type !== 'user') return false;
+  if (isPersonalAssistant(botId) && (trigger.type !== 'user' || trigger.draftOnly)) return false;
   const pauseRevision = activePauseRevision(botId);
   if (pauseRevision === undefined) return false;
   const queue = queueFor(botId);
-  // A new message from the user supersedes an unanswered approval.
-  if (trigger.type === 'user') {
+  // A normal user message supersedes an unanswered approval.
+  if (trigger.type === 'user' && !trigger.draftOnly) {
     const turn = turns.get(botId);
     if (turn?.ownerEmail?.review) turn.ownerEmail = undefined;
     if (turn?.personal) turn.personal = undefined;
@@ -598,6 +598,12 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   if (!bot || bot.kind === 'room' || bot.paused || bot.pause_revision !== pauseRevision) return;
   const userId: string = bot.user_id;
   const personal = isPersonalAssistant(botId);
+  const draftOnly = trigger.type === 'user' && trigger.draftOnly === true;
+  const draftEngine = draftOnly && trigger.chatRow?.generation === bot.generation ? draftEngineFor(bot) : undefined;
+  if (draftOnly && !draftEngine) {
+    appendRow(botId, 'notice', { type: 'notice', text: 'Draft only is unavailable for this bot.', tone: 'error' });
+    return;
+  }
   if (personal && (trigger.type !== 'user' || !trigger.chatRow || !personalAssistantPaired(botId) || !personalGmail())) {
     appendRow(botId, 'notice', { type: 'notice', text: 'Personal Assistant is unavailable.', tone: 'error' });
     return;
@@ -605,7 +611,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const ctrl = new AbortController();
   aborts.set(botId, ctrl);
   const turn: Turn = { botId, userId, depth: trigger.type === 'bot' ? trigger.depth : 0, silent: false, tools: [], outcomes: new Map() };
-  if (trigger.type === 'user' && trigger.chatRow && trigger.chatRow.generation === bot.generation) {
+  if (!draftOnly && trigger.type === 'user' && trigger.chatRow && trigger.chatRow.generation === bot.generation) {
     if (personal) turn.personal = {
       ...newPersonalReadState(trigger.text), generation: bot.generation, ownerSeq: trigger.chatRow.seq, pauseRevision,
     };
@@ -620,7 +626,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       };
     }
   }
-  turns.set(botId, turn);
+  if (!draftOnly) turns.set(botId, turn);
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null, startedAt: now(), caption: null, steps: 0 });
 
   // The assistant message being written right now.
@@ -628,8 +634,10 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   let text = '';
   let lastFlush = 0;
   let wroteText = false;
+  let draftText = '';
+  let draftOutput: string | undefined;
   const flush = (streaming: boolean) => {
-    const b: MessageBody = { type: 'message', role: 'assistant', text, streaming };
+    const b: MessageBody = { type: 'message', role: 'assistant', text, streaming, ...(draftOnly ? { draftOnly } : {}) };
     if (msgSeq === null) msgSeq = appendRow(botId, 'message', b).seq;
     else updateRow(botId, msgSeq, b);
     lastFlush = Date.now();
@@ -646,7 +654,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const say = (t: string) => {
     if (turn.silent || !t.trim()) return;
     closeMessage();
-    appendRow(botId, 'message', { type: 'message', role: 'assistant', text: t.trim(), streaming: false });
+    appendRow(botId, 'message', { type: 'message', role: 'assistant', text: t.trim(), streaming: false, ...(draftOnly ? { draftOnly } : {}) });
     db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
     wroteText = true;
   };
@@ -671,7 +679,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const approvals = new Map<string, Promise<void>>();
 
   try {
-    const engine = await engineFor(botId);
+    const engine = draftEngine ?? await engineFor(botId);
     if (ctrl.signal.aborted) throw new Error('interrupted');
 
     let input = triggerText(trigger);
@@ -679,12 +687,21 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       const note = `[Bot HQ generated this email request reference for the current direct chat. Use request_id "${turn.ownerEmail.id}" with send_owner_email only when the Owner requests an email to them. A staged result is a proposal. Bot HQ will show the actual outcome in chat.]`;
       input = [note, input].join('\n\n');
     }
-    if (bot.handback_at && !personal) {
+    if (bot.handback_at && !personal && !draftOnly) {
       input = `[Note: the user took control of your screen for a while and has just handed it back. Look at the screen before you rely on what was there.]\n\n${input}`;
       db.prepare('UPDATE bots SET handback_at=NULL WHERE id=?').run(botId);
     }
 
-    const payload = {
+    const payload = draftOnly ? {
+      model: 'hermes-agent',
+      input,
+      instructions: [
+        'You are drafting in Bot HQ. Use only the current message and the identity below. Return text for the user to review. Do not claim to have taken any action.',
+        `Bot name: ${bot.name}`,
+        `Role: ${bot.label}`,
+        `Description: ${bot.description}`,
+      ].join('\n'),
+    } : {
       model: bot.model || 'hermes-agent',
       ...(bot.provider ? { provider: bot.provider } : {}),
       input,
@@ -695,7 +712,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     };
     if (ctrl.signal.aborted) throw new Error('interrupted');
     // A fresh chat increments the generation. Keep the gateway's conversation stable until then.
-    const conversation = `hq-${botId}-g${bot.generation}`;
+    const conversation = draftOnly ? newId('hq-draft') : `hq-${botId}-g${bot.generation}`;
     let res: Response;
     if (engine.kind === 'remote') {
       remote = new HermesRun(engine);
@@ -711,6 +728,40 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (!res.ok || !res.body) throw new Error(await failureText(res));
 
     for await (const raw of sseEvents(res.body)) {
+      if (draftOnly) {
+        const d = raw.data;
+        const capabilityEvent = /(?:^|[._-])(?:tools?|approvals?|function_call)(?:[._-]|$)/i;
+        if ([raw.type, d?.type, d?.item?.type].some((kind) => typeof kind === 'string' && capabilityEvent.test(kind))) {
+          throw new Error('The draft gateway attempted to use a tool or request approval.');
+        }
+        // A draft becomes visible only after the gateway confirms successful completion.
+        switch (raw.type) {
+          case 'message.delta':
+          case 'response.output_text.delta':
+            if (typeof d?.delta === 'string') {
+              if (!draftText) setLive(botId, { activity: { kind: 'working', since: now() } });
+              draftText += d.delta;
+            }
+            break;
+          case 'run.completed':
+            terminal = true;
+            if (typeof d.output === 'string') draftOutput = d.output;
+            break;
+          case 'run.cancelled':
+            terminal = true;
+            cancelled = true;
+            throw new Error('interrupted');
+          case 'run.incomplete':
+          case 'run.failed':
+          case 'run.interrupted':
+            terminal = true;
+            throw new Error('Hermes did not complete the draft.');
+          case 'response.failed':
+          case 'error':
+            throw new Error('The draft gateway reported an error.');
+        }
+        continue;
+      }
       const ev = remote ? normalizeRunEvent(raw) : raw;
       const d = ev.data;
       switch (ev.type) {
@@ -900,7 +951,12 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         }
       }
     }
+    if (draftOnly && remote?.stopRequested) {
+      cancelled = true;
+      throw new Error('interrupted');
+    }
     if (remote && !terminal) throw new Error('Hermes closed the stream without a final run status.');
+    if (draftOnly) say(draftOutput?.trim() || draftText);
     if (remote && cleanCompletion && completedDeletion) {
       remoteRuns.delete(botId);
       const { ref, output } = completedDeletion;
@@ -922,16 +978,17 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     }
   } catch (e: any) {
     failed = true;
-    const stopped = ctrl.signal.aborted || cancelled;
+    const stopped = ctrl.signal.aborted || cancelled || (draftOnly && remote?.stopRequested);
     closeMessage();
-    const failure = personal ? 'The Personal Assistant turn failed.' : `Something went wrong: ${remote?.stopError ?? e?.message ?? e}`;
+    const failure = personal ? 'The Personal Assistant turn failed.' : draftOnly ? 'The draft-only turn failed.'
+      : `Something went wrong: ${remote?.stopError ?? e?.message ?? e}`;
     appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : failure, tone: stopped ? 'info' : 'error' });
     if (!stopped && !personal) console.error('[agent]', botId, e);
   } finally {
     turn.ownerEmail = undefined;
     turn.personal = undefined;
     if (remote) {
-      expireApprovals(botId);
+      if (!draftOnly) expireApprovals(botId);
       if (!terminal) remote.stop();
       await remote.close(terminal);
       await Promise.all(approvals.values());

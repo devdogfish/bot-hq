@@ -295,6 +295,10 @@ class ScreenEntry {
 
 const screenEntries = new Map<string, ScreenEntry>();
 
+function tabIsVisible() {
+  return document.visibilityState === 'visible';
+}
+
 function disposeScreen(entry: ScreenEntry) {
   entry.retain();
   entry.watch.stop();
@@ -337,13 +341,20 @@ function prewarmSelection(state: ReturnType<typeof useStore.getState>, previous?
   if (selectedScreen && screenEntries.get(selectedScreen.botId) === selectedScreen) selectedScreen.release();
   selectedScreen = next;
   next?.retain();
-  next?.watch.start(true);
+  if (tabIsVisible()) next?.watch.start(true);
 }
 const stopPrewarming = useStore.subscribe(prewarmSelection);
 prewarmSelection(useStore.getState());
 
+function syncWatchVisibility() {
+  if (tabIsVisible()) selectedScreen?.watch.start(true);
+  else for (const entry of screenEntries.values()) entry.watch.stop();
+}
+document.addEventListener('visibilitychange', syncWatchVisibility);
+
 import.meta.hot?.dispose(() => {
   stopPrewarming();
+  document.removeEventListener('visibilitychange', syncWatchVisibility);
   for (const entry of screenEntries.values()) disposeScreen(entry);
 });
 
@@ -361,6 +372,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const [mode, setMode] = useState<ScreenMode>(initialMode);
   const [frame, setFrame] = useState<StreamFrame>(EMPTY_FRAME);
   const [fullscreen, setFullscreen] = useState(false);
+  const [visible, setVisible] = useState(tabIsVisible);
   const [dpr, setDpr] = useState(() => window.devicePixelRatio || 1);
   const [pan, setPan] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -372,6 +384,12 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   const { conn, clipped, snapshot } = frame;
   const screenId = screen?.screenId;
   const screenRevision = screen?.revision;
+
+  useEffect(() => {
+    const update = () => setVisible(tabIsVisible());
+    document.addEventListener('visibilitychange', update);
+    return () => document.removeEventListener('visibilitychange', update);
+  }, []);
 
   useEffect(() => {
     const on = () => setFullscreen(!!frameRef.current && document.fullscreenElement === frameRef.current);
@@ -425,7 +443,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   }, [large, dpr, pan]);
 
   useLayoutEffect(() => {
-    if (!userId || screenId === undefined || paused || !placement.current) {
+    if (!userId || screenId === undefined || paused || !visible || !placement.current) {
       setFrame(EMPTY_FRAME);
       return;
     }
@@ -441,7 +459,7 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       stream.detach(update);
       if (mode === 'control') stream.stop();
     };
-  }, [userId, bot.id, screenId, screenRevision, mode, paused]);
+  }, [userId, bot.id, screenId, screenRevision, mode, paused, visible]);
 
   useLayoutEffect(() => {
     const host = snapshotRef.current;
@@ -515,10 +533,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     else frameRef.current?.requestFullscreen().catch(() => setNote('Full screen isn’t available here.'));
   };
   const canFullscreen = typeof document !== 'undefined' && document.fullscreenEnabled;
-  const expandable = variant === 'panel' && !fullscreen && phase === 'live';
+  const preview = variant === 'panel' && !fullscreen;
   const mascot = large ? 64 : 40;
-  const canTakeOver = phase === 'live' || phase === 'switching';
-  const hasControls = driving || canTakeOver || fullscreen;
+  const canTakeControl = phase === 'live';
+  const hasControls = driving || large;
   const panning = large && clipped && (!driving || pan);
   const style = {
     ...botVars(bot.avatarColor),
@@ -538,8 +556,9 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
             <div ref={streamRef} className="screen__stream" />
             <div ref={snapshotRef} className="screen__snapshot" aria-hidden />
           </div>
-          {/* noVNC swallows clicks on its canvas, so the way into the large view is a button laid over it. */}
-          {expandable && <button type="button" className="screen__expand" onClick={() => onExpand?.('watch')} aria-label={`Open ${bot.name}’s computer in the large view`} title="Open the large view" />}
+          {canTakeControl && !driving && !panning && (
+            <button type="button" className="screen__takeover" onClick={takeControl} aria-label={`Take control of ${bot.name}’s computer`} />
+          )}
 
           {phase === 'live' && !driving && (
             <span className="screen__badge" aria-hidden>
@@ -579,17 +598,32 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
             </div>
           )}
 
-          {note && <span className="screen__note" role="status">{note}</span>}
+          {note && !(preview && canTakeControl && !driving) && <span className="screen__note" role="status">{note}</span>}
+          {canTakeControl && !driving && preview && (
+            <div className={`screen__pill${note ? ' is-pinned' : ''}`} role="toolbar" aria-label="Screen controls">
+              {note && <span className="screen__pill-text" role="status">{note}</span>}
+              <div className="screen__seg" role="group" aria-label="Who is using the screen">
+                <button type="button" className="screen__seg-btn" onClick={() => onExpand?.('watch')}>Open</button>
+                <button type="button" className="screen__seg-btn" aria-pressed="false" onClick={takeControl}>Take control</button>
+              </div>
+              {canFullscreen && (
+                <>
+                  <span className="screen__pill-rule" aria-hidden />
+                  <button type="button" className="screen__pill-icon" onClick={toggleFullscreen} aria-label="Full screen" title="Full screen">
+                    <Icon name="expand" size={15} />
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {hasControls && (
-          <div className={`screen__chin${driving ? '' : ' screen__chin--watch'}`}>
-            {(driving || canTakeOver) && (
-              <span className="screen__chin-text" role="status">
-                <i className="screen__ping" aria-hidden />
-                <span>{driving ? hint || 'You’re driving' : 'Agent has control'}</span>
-              </span>
-            )}
+          <div className="screen__chin">
+            <span className="screen__chin-text" role="status">
+              {driving && phase === 'live' && <i className="screen__ping" aria-hidden />}
+              <span>{phase === 'live' ? driving ? hint || 'You have control' : 'Watching' : ''}</span>
+            </span>
             <span className="screen__chin-actions">
               {driving && clipped && (
                 <button type="button" className="screen__pan" aria-pressed={pan} onClick={() => setPan(!pan)}>
@@ -602,12 +636,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
                 </button>
               )}
               {driving ? (
-                <button type="button" className="screen__handback" onClick={handBack}>
-                  <BotAvatarFor bot={bot} size={18} />
-                  <span>Hand back to {bot.name}</span>
-                </button>
-              ) : canTakeOver && (
-                <button type="button" className="screen__takeover" onClick={takeControl} aria-label="Take control">Take over</button>
+                <button type="button" className="screen__handback" onClick={handBack}>Return control</button>
+              ) : (
+                <button type="button" className="screen__handback" onClick={takeControl} disabled={!canTakeControl}
+                  aria-label={panning ? `Take control of ${bot.name}’s computer` : undefined}>Take control</button>
               )}
             </span>
           </div>
@@ -617,21 +649,24 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   );
 }
 
-/** The large computer view: the bot's screen on a dimmed stage, opened from the chat menu or the details panel. */
+/** The full-size computer pane, opened from the chat menu or the details panel. */
 export function ComputerViewer() {
   const bot = useSelectedBot();
-  const computer = useStore((s) => s.computer);
   const initialMode = useStore((s) => s.viewerMode);
   const hint = useStore((s) => s.viewerHint);
   const set = useStore((s) => s.set);
   const [mode, setMode] = useState<ScreenMode>(initialMode);
   const botId = bot?.id;
+  const currentMode = useRef(mode);
+  currentMode.current = mode;
+  useEffect(() => () => {
+    if (currentMode.current === 'control' && botId) configApi.handback(botId).catch(() => {});
+  }, [botId]);
 
   const close = useCallback(() => {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-    if (mode === 'control' && botId) configApi.handback(botId).catch(() => {});
     set({ viewerOpen: false, viewerMode: 'watch', viewerHint: null });
-  }, [mode, botId, set]);
+  }, [set]);
 
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -651,19 +686,17 @@ export function ComputerViewer() {
   if (!bot) return null;
 
   return (
-    <div className="viewer" role="dialog" aria-modal="true" aria-label={`${bot.name}’s computer`} style={botVars(bot.avatarColor)}>
-      <div className="viewer__scrim" onClick={mode === 'watch' ? close : undefined} />
+    <aside className="viewer" aria-label={`${bot.name}’s computer`} style={botVars(bot.avatarColor)}>
       <div className="viewer__top">
         <div className="viewer__title">
           <BotAvatarFor bot={bot} size={24} />
           <span>{bot.name}’s computer</span>
-          <span className="viewer__status">{computer?.screens.some((screen) => screen.botId === bot.id) ? 'Screen configured' : 'No screen configured'}</span>
         </div>
-        <button type="button" className="viewer__close" onClick={close} aria-label="Close computer"><Icon name="close" color="#FFFFFF" /></button>
+        <button type="button" className="viewer__close" onClick={close} aria-label="Close computer"><Icon name="close" /></button>
       </div>
       <div className="viewer__stage">
         <ComputerScreen key={bot.id} bot={bot} variant="stage" initialMode={initialMode} hint={hint} onModeChange={onModeChange} />
       </div>
-    </div>
+    </aside>
   );
 }

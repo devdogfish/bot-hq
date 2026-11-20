@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS routines (
   last_run_at INTEGER,
   created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS jobs_monitor (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  uidvalidity INTEGER,
+  after_uid INTEGER NOT NULL DEFAULT 0,
+  checked_at INTEGER NOT NULL,
+  alert TEXT
+);
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,

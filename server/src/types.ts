@@ -21,6 +21,7 @@ export interface Bot {
   mode: 'personal' | 'teammate';
   isPrimary: boolean;
   paused: boolean;
+  draftOnlyAvailable?: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */
   kind?: 'agent' | 'room';
   pinned: boolean;
@@ -64,6 +65,7 @@ export interface MessageBody {
   role: 'user' | 'assistant';
   text: string;
   streaming?: boolean;
+  draftOnly?: boolean;
   /** Set when a message came from another bot, a routine or a voice call rather than the user typing. */
   from?: { kind: 'bot' | 'routine' | 'voice'; id: string; name: string };
   citations?: { url: string; title?: string }[];

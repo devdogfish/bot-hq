@@ -7,6 +7,7 @@ import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
 import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
 import { ownerEmailRole } from './agent/owner-email.js';
 import { isPersonalAssistant, personalAssistantPaired, personalToolList, PERSONAL_TOOLS } from './agent/personal-assistant.js';
+import { JOBS_MONITOR_TOOL, jobsMonitorCommand } from './jobs-monitor.js';
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -45,6 +46,7 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   const bot = botId ? getBotRow(botId) : null;
   if (!botId || !bot) return text('The team app has no bot for this agent yet. Ask the user to open the app once, then try again.', true);
   if (bot.paused) return text(PAUSED, true);
+  if (rawName === JOBS_MONITOR_TOOL) return text(JSON.stringify(jobsMonitorCommand(botId, args)));
   if (isPersonalAssistant(botId)) {
     try {
       const tool = PERSONAL_TOOLS.find((tool) => tool.name === rawName);

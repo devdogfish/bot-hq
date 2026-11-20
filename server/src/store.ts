@@ -1,3 +1,4 @@
+import { draftEngineFor } from './engine.js';
 import { db, now } from './db.js';
 import { hub } from './lib/hub.js';
 import type { Bot, LiveState, Row, RowBody, RowKind, Routine, Task } from './types.js';
@@ -26,6 +27,7 @@ export function toBot(r: any): Bot {
     mode: r.mode,
     isPrimary: !!r.is_primary,
     paused: !!r.paused,
+    draftOnlyAvailable: !!draftEngineFor(r),
     kind: r.kind === 'room' ? 'room' : 'agent',
     pinned: !!r.pinned,
     effort: r.effort,

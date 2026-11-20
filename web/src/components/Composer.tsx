@@ -38,14 +38,14 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     return () => window.removeEventListener('keydown', k);
   }, []);
 
-  const send = async () => {
+  const send = async (mode?: 'draft') => {
     const t = text.trim();
     if (!t || sending || blocked) return;
     setSending(true); setError(null);
     try {
-      await api.send(bot.id, t);
-      setText('');
-      drafts.delete(bot.id);
+      await api.send(bot.id, t, mode);
+      if (drafts.get(bot.id) === text) drafts.delete(bot.id);
+      setText((current) => current === text ? '' : current);
     } catch (e) {
       setError((e as Error).message || 'Message failed to send');
     } finally {
@@ -110,6 +110,17 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
           />
         </div>
         <div className="composer__right">
+          {bot.draftOnlyAvailable && (
+            <button
+              type="button"
+              className="composer__btn composer__draft"
+              onClick={() => send('draft')}
+              disabled={!hasText || sending || blocked}
+              title="Draft a text response without tools"
+            >
+              Draft only
+            </button>
+          )}
           <button
             type="button"
             className={`composer__btn${dictation.state === 'recording' ? ' is-recording' : dictation.state === 'transcribing' ? ' is-transcribing' : ''}`}
@@ -136,7 +147,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
             <button
               type="button"
               className="composer__cta"
-              onClick={hasText ? send : () => startCall(bot.id)}
+              onClick={hasText ? () => send() : () => startCall(bot.id)}
               disabled={hasText && (sending || blocked)}
               aria-label={hasText ? 'Send' : `Start voice chat with ${bot.name}`}
               title={hasText ? 'Send (Enter)' : 'Start voice chat'}

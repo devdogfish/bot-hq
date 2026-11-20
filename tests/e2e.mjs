@@ -89,24 +89,22 @@ await step('bot uses its own computer (shell on its screen)', async () => {
   await shot('04-computer-tool');
 });
 
-await step('computer viewer: watch, take control, hand back', async () => {
+await step('computer viewer: watch, click to take control, return control', async () => {
   const open = page.locator('.details__open').first();
   if (!(await open.isVisible())) await page.getByLabel('Show details').first().click();
   await open.click();
-  const viewer = page.getByRole('dialog', { name: /computer$/ });
-  await viewer.locator('canvas').first().waitFor({ timeout: 30000 });
-  await page.waitForTimeout(2500);
+  const viewer = page.getByRole('complementary', { name: /computer$/ });
+  const desktop = viewer.getByRole('button', { name: /^Take control of/ });
+  await desktop.waitFor({ timeout: 30000 });
+  if (!(await page.locator('.chat').isVisible())) throw new Error('Chat disappeared when opening the computer');
   await shot('05-viewer-watch');
-  // The controls sit in a pill that shows while the pointer is over the screen.
-  await viewer.locator('canvas').first().hover();
-  await viewer.getByRole('button', { name: 'Take control' }).click();
-  await viewer.getByRole('button', { name: /Hand back to/ }).waitFor({ timeout: 15000 });
-  await page.waitForTimeout(1500);
+  await desktop.click();
+  await viewer.getByText('You have control', { exact: true }).waitFor({ timeout: 15000 });
   await shot('06-viewer-control');
-  await viewer.getByRole('button', { name: /Hand back to/ }).click();
-  await viewer.locator('canvas').first().hover();
-  await viewer.getByRole('button', { name: 'Take control' }).waitFor({ timeout: 15000 });
+  await viewer.getByRole('button', { name: 'Return control' }).click();
+  await desktop.waitFor({ timeout: 15000 });
   await page.keyboard.press('Escape');
+  await viewer.waitFor({ state: 'hidden' });
 });
 
 await step('search palette opens the main bot', async () => {
