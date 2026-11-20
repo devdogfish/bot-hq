@@ -47,7 +47,7 @@ db.exec(`
 
 const app = new Hono().route('/hooks', hooksApi);
 const token = (botId) => createHmac('sha256', secret).update(`hook:${botId}`).digest('hex');
-const event = (id) => ({ event_id: `mail:${id}`, summary: `New inbox activity ${id}`, refs: [`history:${id}`] });
+const event = (id) => ({ event_id: `mail:${id}`, summary: `New inbox activity ${id}`, refs: { historyId: `history:${id}` } });
 function hookRequest(body, { routine = 'inbox', botId = 'bot', bearer = token(botId), headers = {} } = {}) {
   return [`/hooks/${botId}/${encodeURIComponent(routine)}`, {
     method: 'POST',
@@ -91,7 +91,12 @@ test('hook authenticates the Bot and matches only enabled event schedules', asyn
 
 test('hook enforces the byte limit on actual bytes before parsing JSON', async () => {
   assert.equal((await app.request(...hookRequest('{unfinished'))).status, 400);
-  assert.equal((await post({ ...event(0), refs: 'history:0' })).status, 400);
+  for (const refs of ['history:0', ['history:0'], null]) {
+    const invalid = { ...event(0), refs };
+    assert.equal((await post(invalid)).status, 400);
+    assert.deepEqual(enqueueEvent('bot', 'inbox', invalid), { status: 'invalid' });
+  }
+  assert.deepEqual(enqueueEvent('bot', 'inbox', { ...event(0), refs: { large: 'é'.repeat(8192) } }), { status: 'too_large' });
   assert.equal((await post({ ...event(0), event_id: '\ud800' })).status, 400);
   const exact = JSON.stringify({ ...event(0), summary: '' });
   const atLimit = JSON.stringify({ ...event(0), summary: 'x'.repeat(16 * 1024 - exact.length) });
@@ -158,9 +163,9 @@ test('five quick events start one turn and a duplicate never joins the batch', a
   assert.deepEqual(listRows('bot').map(({ body }) => body.event), ['routine-run']);
   assert.ok(db.prepare('SELECT last_run_at FROM routines WHERE id=?').get('rt').last_run_at > 0);
 
-  assert.equal(enqueueEvent('bot', 'other', event(1)), 'duplicate', 'IDs are scoped to the Bot');
-  assert.equal(enqueueEvent('bot', 'inbox', event(6)), 'accepted');
-  assert.equal(enqueueEvent('bot', 'inbox', event(7)), 'accepted');
+  assert.deepEqual(enqueueEvent('bot', 'other', event(1)), { status: 'duplicate' }, 'IDs are scoped to the Bot');
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event(6)), { status: 'accepted' });
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event(7)), { status: 'accepted' });
   assert.equal(runs.length, 1, 'an active turn holds the next batch in the queue');
   await finish('1');
   await finish('2');
@@ -189,19 +194,19 @@ test('paused Bots can retry and different Bots can accept the same ID', async ()
 });
 
 test('pause and reset invalidate pending batches and leave only accepted IDs', async () => {
-  assert.equal(enqueueEvent('bot', 'inbox', event('before-pause')), 'accepted');
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('before-pause')), { status: 'accepted' });
   setBotPaused('bot', true);
   setBotPaused('bot', false);
-  assert.equal(enqueueEvent('bot', 'inbox', event('before-reset')), 'accepted');
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('before-reset')), { status: 'accepted' });
   const maintenance = Promise.withResolvers();
   const reset = resetBotQueue('bot', () => maintenance.promise);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM event_batches').get().n, 0);
-  assert.equal(enqueueEvent('bot', 'inbox', event('busy-reset')), 'unavailable');
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('busy-reset')), { status: 'unavailable' });
   maintenance.resolve();
   await reset;
   await until(() => !isBotBusy('bot'));
-  assert.equal(enqueueEvent('bot', 'inbox', event('before-pause')), 'duplicate');
-  assert.equal(enqueueEvent('bot', 'inbox', event('before-reset')), 'duplicate');
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('before-pause')), { status: 'duplicate' });
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('before-reset')), { status: 'duplicate' });
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM pending_routine_events').get().n, 0);
   assert.equal(listRows('bot').filter(({ body }) => body.event === 'routine-run').length, 2);
 });
@@ -225,15 +230,15 @@ test('event schedules can be provisioned and edited through routine tools', asyn
 test('a full batch rejects new IDs without recording receipts', async () => {
   // Synchronous calls keep all deliveries in one batch, regardless of runner load.
   const completed = Array.from({ length: 64 }, (_, id) => enqueueEvent('bot', 'inbox', event(`batch-${id}`)));
-  assert.deepEqual(completed, Array(64).fill('accepted'));
-  assert.equal(enqueueEvent('bot', 'inbox', event('batch-64')), 'unavailable');
-  assert.equal(enqueueEvent('bot', 'inbox', event('batch-0')), 'duplicate');
+  assert.deepEqual(completed, Array(64).fill({ status: 'accepted' }));
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('batch-64')), { status: 'unavailable' });
+  assert.deepEqual(enqueueEvent('bot', 'inbox', event('batch-0')), { status: 'duplicate' });
   assert.equal(db.prepare('SELECT 1 FROM seen_events WHERE bot_id=? AND event_id=?').get('bot', 'mail:batch-64'), undefined);
   await resetBotQueue('bot', () => {});
 
   const large = (id) => ({ ...event(id), summary: 'é'.repeat(8000) });
-  for (const id of ['a', 'b', 'c', 'd']) assert.equal(enqueueEvent('bot', 'inbox', large(id)), 'accepted');
-  assert.equal(enqueueEvent('bot', 'inbox', large('e')), 'unavailable');
+  for (const id of ['a', 'b', 'c', 'd']) assert.deepEqual(enqueueEvent('bot', 'inbox', large(id)), { status: 'accepted' });
+  assert.deepEqual(enqueueEvent('bot', 'inbox', large('e')), { status: 'unavailable' });
   assert.equal(db.prepare('SELECT 1 FROM seen_events WHERE bot_id=? AND event_id=?').get('bot', 'mail:e'), undefined);
   await resetBotQueue('bot', () => {});
 });
@@ -276,11 +281,13 @@ test('private Gmail event runs in its own session without Owner chat tool access
   });
   const payload = { ...event('gmail'), refs: { messageId: '123' } };
   assert.equal((await post(payload, { botId: 'bot_personal', routine: 'Gmail new mail' })).status, 404);
-  assert.equal(enqueueEvent('bot_personal', 'other', payload), 'unavailable');
-  assert.equal(enqueueEvent('bot_personal', 'Gmail new mail', payload), 'accepted');
+  assert.deepEqual(enqueueEvent('bot_personal', 'Gmail new mail', payload), { status: 'accepted' });
+  assert.deepEqual(enqueueEvent('bot_personal', 'other', event('other-personal')), { status: 'accepted' });
   await until(() => !isBotBusy('bot_personal'));
-  assert.equal(runs.length, 1);
-  assert.match(runs[0].session, /^hq-gmail-event_/);
+  assert.equal(runs.length, 2);
+  assert.ok(runs.every(({ session }) => session.startsWith('hq-personal-event_')));
+  assert.notEqual(runs[0].session, runs[1].session);
+  assert.match(runs[1].input, /Other task/);
   assert.match(runs[0].input, /"messageId":"123"/);
   assert.match(runs[0].instructions, /untrusted data/);
   assert.equal(listRows('bot_personal')[0].body.event, 'routine-run');
@@ -323,17 +330,19 @@ test('two processes race for one ID and a fresh HQ recovers the accepted payload
     \`);
   `], { env: childEnv });
   const payload = { event_id: 'restart:1', summary: 'Persisted before exit', refs: { messageId: 'recovery' } };
-  const accept = () => exec(process.execPath, ['--input-type=module', '-e', `
+  const accept = (event = payload) => exec(process.execPath, ['--input-type=module', '-e', `
     const { writeSync } = await import('node:fs');
     const { enqueueEvent } = await import('./server/dist/events.js');
-    writeSync(1, enqueueEvent('restart', 'inbox', ${JSON.stringify(payload)}));
+    writeSync(1, JSON.stringify(enqueueEvent('restart', 'inbox', ${JSON.stringify(event)})));
     process.exit(0);
   `], { env: childEnv });
   const raced = await Promise.all([accept(), accept()]);
-  assert.deepEqual(raced.map(({ stdout }) => stdout).sort(), ['accepted', 'duplicate']);
+  assert.deepEqual(raced.map(({ stdout }) => JSON.parse(stdout).status).sort(), ['accepted', 'duplicate']);
+  const second = { event_id: 'restart:2', summary: 'Joined the persisted batch', refs: { cursor: { ids: [2, null], complete: true } } };
+  assert.deepEqual(JSON.parse((await accept(second)).stdout), { status: 'accepted' });
   const sqlite = new Database(childEnv.DB_PATH, { readonly: true });
   t.after(() => sqlite.close());
-  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM pending_routine_events').get().n, 1);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM pending_routine_events').get().n, 2);
 
   async function startHQ() {
     const hq = spawn(process.execPath, ['server/dist/index.js'], { env: childEnv, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -349,7 +358,7 @@ test('two processes race for one ID and a fresh HQ recovers the accepted payload
   }
   const first = await startHQ();
   await until(() => runs.length === 1);
-  assert.match(runs[0].input, /Persisted before exit/);
+  assert.deepEqual(JSON.parse(runs[0].input.slice(runs[0].input.indexOf('\n[') + 1)), [payload, second]);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM pending_routine_events').get().n, 0);
   await first.stop();
 
@@ -368,20 +377,20 @@ test('two processes race for one ID and a fresh HQ recovers the accepted payload
   const [largePath, largeInit] = hookRequest(oversized, { botId: 'restart' });
   assert.equal((await fetch(restarted.origin + largePath, largeInit)).status, 413);
   assert.equal(runs.length, 1);
-  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM seen_events').get().n, 1);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM seen_events').get().n, 2);
   assert.equal((first.logs() + restarted.logs()).includes(token('restart')), false);
 });
 
 test('archived Bots and rooms cannot accept events', () => {
   db.prepare('UPDATE bots SET archived_at=1 WHERE id=?').run('bot');
   try {
-    assert.equal(enqueueEvent('bot', 'inbox', event('archived')), 'unavailable');
+    assert.deepEqual(enqueueEvent('bot', 'inbox', event('archived')), { status: 'unavailable' });
   } finally {
     db.prepare('UPDATE bots SET archived_at=NULL WHERE id=?').run('bot');
   }
   db.prepare("UPDATE bots SET kind='room' WHERE id=?").run('bot');
   try {
-    assert.equal(enqueueEvent('bot', 'inbox', event('room')), 'unavailable');
+    assert.deepEqual(enqueueEvent('bot', 'inbox', event('room')), { status: 'unavailable' });
   } finally {
     db.prepare("UPDATE bots SET kind='agent' WHERE id=?").run('bot');
   }
@@ -401,18 +410,18 @@ test('event turns respect routine re-enable revisions and auto-pause after failu
     return new Response('event: run.failed\ndata: {"error":"fixture failure"}\n\n');
   });
   t.mock.method(console, 'error', () => {});
-  assert.equal(enqueueEvent('bot', 'other', event('old-revision')), 'accepted');
+  assert.deepEqual(enqueueEvent('bot', 'other', event('old-revision')), { status: 'accepted' });
   setRoutineEnabled('rt2', false);
   setRoutineEnabled('rt2', true);
   await until(() => !isBotBusy('bot'));
   assert.equal(submissions, 0);
   for (let n = 1; n <= 3; n++) {
-    assert.equal(enqueueEvent('bot', 'other', event(`failure-${n}`)), 'accepted');
+    assert.deepEqual(enqueueEvent('bot', 'other', event(`failure-${n}`)), { status: 'accepted' });
     await until(() => !isBotBusy('bot'));
     assert.equal(submissions, n);
   }
   assert.deepEqual(db.prepare('SELECT enabled, consecutive_failures FROM routines WHERE id=?').get('rt2'), {
     enabled: 0, consecutive_failures: 3,
   });
-  assert.equal(enqueueEvent('bot', 'other', event('failure-4')), 'not_found');
+  assert.deepEqual(enqueueEvent('bot', 'other', event('failure-4')), { status: 'not_found' });
 });

@@ -44,7 +44,12 @@ hooksApi.post('/:botId/:routine', async (c) => {
   if (!body.success) return invalid();
 
   const result = enqueueEvent(botId, c.req.param('routine'), body.data);
-  if (result === 'not_found') return c.json({ error: 'Event routine not found.' }, 404);
-  if (result === 'unavailable') return c.json({ error: 'Bot is not accepting event turns.' }, 409);
-  return c.json({ status: result }, result === 'accepted' ? 202 : 200);
+  switch (result.status) {
+    case 'accepted': return c.json(result, 202);
+    case 'duplicate': return c.json(result, 200);
+    case 'not_found': return c.json({ error: 'Event routine not found.' }, 404);
+    case 'unavailable': return c.json({ error: 'Bot is not accepting event turns.' }, 409);
+    case 'invalid': return invalid();
+    case 'too_large': return tooLarge();
+  }
 });

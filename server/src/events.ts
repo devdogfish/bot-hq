@@ -8,13 +8,23 @@ const maxBatchBytes = 64 * 1024;
 const maxBatchEvents = 64;
 const batchWindowMs = 100;
 
+type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+type JsonObject = { [key: string]: JsonValue };
+
 export const eventBody = z.object({
   event_id: z.string().min(1).regex(/^[^\uD800-\uDFFF]+$/u),
   summary: z.string().min(1),
-  refs: z.union([z.array(z.string()), z.record(z.string(), z.union([z.string(), z.number()]))]),
+  refs: z.custom<JsonObject>((value) => {
+    if (!value || typeof value !== 'object') return false;
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  }),
 });
 
 type RoutineEvent = z.infer<typeof eventBody>;
+export type EnqueueEventResult = {
+  status: 'accepted' | 'duplicate' | 'not_found' | 'unavailable' | 'invalid' | 'too_large';
+};
 
 interface Batch {
   id: number;
@@ -105,12 +115,19 @@ export function resumeEventRoutines() {
   for (const batch of batches) scheduleBatch(batch);
 }
 
-export function enqueueEvent(botId: string, routineName: string, { event_id, summary, refs }: RoutineEvent) {
-  const payload = JSON.stringify({ event_id, summary, refs });
+export function enqueueEvent(botId: string, routineName: string, event: RoutineEvent): EnqueueEventResult {
+  const parsed = eventBody.safeParse(event);
+  if (!parsed.success) return { status: 'invalid' };
+  let payload: string;
+  try {
+    payload = JSON.stringify(parsed.data);
+  } catch {
+    return { status: 'invalid' };
+  }
   const bytes = Buffer.byteLength(payload);
-  if (bytes > maxEventBytes || !eventBody.shape.event_id.safeParse(event_id).success) return 'unavailable' as const;
-  const result = reserve.immediate(botId, `event:${routineName}`, event_id, payload, bytes);
-  if (typeof result === 'string') return result;
+  if (bytes > maxEventBytes) return { status: 'too_large' };
+  const result = reserve.immediate(botId, `event:${routineName}`, parsed.data.event_id, payload, bytes);
+  if (typeof result === 'string') return { status: result };
   scheduleBatch(result);
-  return 'accepted' as const;
+  return { status: 'accepted' };
 }

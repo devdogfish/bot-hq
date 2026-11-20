@@ -156,8 +156,8 @@ console.log(createHmac("sha256", secret).update("hook:" + process.argv[1]).diges
 ```
 
 Use stable, source-prefixed IDs and reuse the ID when retrying. `event_id` and
-`summary` are nonempty strings. `refs` accepts a flat object with string or
-numeric values or an array of reference strings. The body limit is 16 KiB.
+`summary` are nonempty strings. `refs` is a JSON object, for example
+`{"messageId":"12345"}` or `{"uidvalidity":345,"uid":90}`. The body limit is 16 KiB.
 
 | Status | Meaning |
 | --- | --- |
@@ -170,10 +170,12 @@ numeric values or an array of reference strings. The body limit is 16 KiB.
 | 413 | Request body exceeds 16 KiB |
 
 In-process services can call `enqueueEvent(botId, routineName, { event_id, summary, refs })`
-with the same schedule suffix and fields. It returns `accepted`, `duplicate`,
-`not_found`, or `unavailable`. The private Personal Assistant receives only its
-`Gmail new mail` routine through this in-process path. Each notification turn
-uses its own conversation and has no Owner chat tool context.
+with the same schedule suffix and fields. It returns `{ status }`. The possible
+statuses are `accepted`, `duplicate`, `not_found`, `unavailable`, `invalid`, and
+`too_large`. An event added to an existing batch also returns `accepted`. The
+private Personal Assistant accepts enabled event routines through this
+in-process path. Each event turn uses its own conversation and has no Owner
+chat tool context.
 
 HQ stores accepted IDs in SQLite per Bot across all its routines. The first
 event opens a 100 ms collection window. Events for the same routine continue
