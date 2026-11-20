@@ -13,16 +13,30 @@ type Item =
   | { kind: 'divider'; key: string; ts: number }
   | { kind: 'group'; key: string; side: 'left' | 'right'; from?: MessageBody['from']; rows: Row[] }
   | { kind: 'steps'; key: string; rows: Row[]; /** Row timestamps just before and just after the run of steps. */ startTs: number | null; endTs: number | null }
+  | { kind: 'routine-failures'; key: string; name: string; error: string; count: number }
   | { kind: 'row'; key: string; row: Row };
 
 const DIVIDER_GAP = 60 * 60 * 1000;
 const GROUP_GAP = 5 * 60 * 1000;
 
-/** Turns rows into render items: date dividers, grouped bubbles, collapsed tool-call steps, cards, events. */
+function routineFailureAt(rows: Row[], index: number) {
+  const start = rows[index]?.body;
+  if (start?.type !== 'event' || start.event !== 'routine-run' || !start.ref) return;
+  const errorRow = rows[index + 1];
+  if (errorRow?.seq !== rows[index].seq + 1) return;
+  const error = errorRow.body;
+  if (error?.type !== 'notice' || error.tone !== 'error') return;
+  // Older run errors have no routine ID.
+  if (error.routineId === undefined ? !error.text.startsWith('Something went wrong: ') : error.routineId !== start.ref) return;
+  return { start, error };
+}
+
+/** Turns rows into render items, grouping neighboring messages, steps and repeated routine failures. */
 function buildItems(rows: Row[]): Item[] {
   const items: Item[] = [];
   let prevTs = 0;
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
     if (!prevTs || row.createdAt - prevTs > DIVIDER_GAP) items.push({ kind: 'divider', key: `d${row.seq}`, ts: row.createdAt });
     const before = prevTs;
     prevTs = row.createdAt;
@@ -34,6 +48,26 @@ function buildItems(rows: Row[]): Item[] {
       continue;
     }
     if (last?.kind === 'steps' && last.endTs === null) last.endTs = row.createdAt;
+    const failure = routineFailureAt(rows, i);
+    if (failure) {
+      let next = i + 2;
+      for (let pair = routineFailureAt(rows, next); pair; pair = routineFailureAt(rows, next)) {
+        if (rows[next].seq !== rows[next - 1].seq + 1) break;
+        if (pair.start.ref !== failure.start.ref || pair.start.text !== failure.start.text || pair.error.text !== failure.error.text) break;
+        next += 2;
+      }
+      const count = (next - i) / 2;
+      if (count > 1) {
+        items.push({
+          kind: 'routine-failures', key: `r${row.seq}`, count,
+          name: failure.start.text.replace(/^Running routine: /, ''),
+          error: failure.error.text.replace(/^Something went wrong: /, ''),
+        });
+        i = next - 1;
+        prevTs = rows[i].createdAt;
+        continue;
+      }
+    }
     if (b.type === 'message') {
       if (!b.text && !b.streaming) continue;
       const side = b.role === 'user' && (!b.from || b.from.kind === 'voice') ? 'right' : 'left';
@@ -255,6 +289,8 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
               return <Steps key={it.key} item={it} active={it.key === activeKey} open={it.key === openKey} extra={extraSteps} />;
             case 'row':
               return <SystemRow key={it.key} row={it.row} />;
+            case 'routine-failures':
+              return <div key={it.key} className="notice is-error">{it.name} failed ×{it.count} · {it.error}</div>;
             case 'group':
               return (
                 <div key={it.key} className={`group is-${it.side}`}>

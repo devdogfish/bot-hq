@@ -207,7 +207,7 @@ export type VoiceSessionConfig =
 
 export type VoiceSession = VoiceSessionConfig & { callId: string };
 
-export interface NoticeBody { type: 'notice'; text: string; tone?: 'info' | 'warn' | 'error' }
+export interface NoticeBody { type: 'notice'; text: string; tone?: 'info' | 'warn' | 'error'; routineId?: string }
 
 export type ActivityKind =
   | 'thinking' | 'working' | 'searching_web' | 'reading_web' | 'browsing_web' | 'on_its_computer'

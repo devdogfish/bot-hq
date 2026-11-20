@@ -4,7 +4,7 @@ import { hub } from '../lib/hub.js';
 import { writeLibraryFile } from '../library.js';
 import { env } from '../env.js';
 import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
-import { scheduleRoutine, unscheduleRoutine } from '../routines.js';
+import { scheduleRoutine, setRoutineEnabled, unscheduleRoutine } from '../routines.js';
 import { setCheckins } from '../proactive.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
@@ -200,7 +200,10 @@ export const TOOLS: ToolDef[] = [
       if (!cur) return { output: 'No such routine.' };
       const next = { ...cur, name: a.name ?? cur.name, prompt: a.prompt ?? cur.prompt, schedule: a.schedule ?? cur.schedule, timezone: a.timezone ?? cur.timezone, enabled: a.enabled === undefined ? cur.enabled : a.enabled ? 1 : 0 };
       try { new Cron(next.schedule, { paused: true, timezone: next.timezone }); } catch (e: any) { return { output: `Invalid schedule: ${e.message}` }; }
-      db.prepare('UPDATE routines SET name=?,prompt=?,schedule=?,timezone=?,enabled=? WHERE id=?').run(next.name, next.prompt, next.schedule, next.timezone, next.enabled, cur.id);
+      db.transaction(() => {
+        db.prepare('UPDATE routines SET name=?,prompt=?,schedule=?,timezone=? WHERE id=?').run(next.name, next.prompt, next.schedule, next.timezone, cur.id);
+        if (next.enabled !== cur.enabled) setRoutineEnabled(cur.id, !!next.enabled);
+      })();
       const r = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(cur.id));
       r.enabled ? scheduleRoutine(r) : unscheduleRoutine(r.id);
       appendRow(ctx.botId, 'event', { type: 'event', event: 'routine-updated', text: `Routine updated: ${r.name} · ${r.enabled ? r.description : 'Paused'}`, ref: r.id });
