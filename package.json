@@ -4,6 +4,7 @@
   "description": "Bot HQ: a team of remote Hermes Agents with local screens and xAI voice.",
   "workspaces": ["server", "web"],
   "scripts": {
+    "posttest": "node --test tests/gmail-push.mjs",
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",

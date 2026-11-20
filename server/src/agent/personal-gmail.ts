@@ -1,6 +1,7 @@
 import { compile } from 'html-to-text';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me/';
+const GMAIL_BATCH = 'https://gmail.googleapis.com/batch/gmail/v1';
 const TOKEN = 'https://oauth2.googleapis.com/token';
 const PAGE_SIZE = 8;
 const METADATA_CONCURRENCY = 4;
@@ -167,7 +168,7 @@ function readBodyText(payload: JsonObject): MessageBody {
   return { text: '', bodyStatus: 'unavailable' };
 }
 
-async function boundedJson(response: Response, max: number): Promise<JsonObject> {
+async function boundedText(response: Response, max: number): Promise<string> {
   if (!response.ok || !response.body || Number(response.headers.get('content-length')) > max) {
     await response.body?.cancel().catch(() => undefined);
     throw unavailable();
@@ -178,7 +179,7 @@ async function boundedJson(response: Response, max: number): Promise<JsonObject>
     let size = 0;
     for (;;) {
       const chunk = await reader.read();
-      if (chunk.done) return object(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      if (chunk.done) return Buffer.concat(chunks).toString('utf8');
       size += chunk.value.length;
       if (size > max) throw unavailable();
       chunks.push(chunk.value);
@@ -187,6 +188,10 @@ async function boundedJson(response: Response, max: number): Promise<JsonObject>
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
+}
+
+async function boundedJson(response: Response, max: number): Promise<JsonObject> {
+  return object(JSON.parse(await boundedText(response, max)));
 }
 
 function validSubject(subject: unknown): subject is string {
@@ -285,13 +290,40 @@ export class PersonalGmail {
     return this.#refreshing ??= this.#refresh().finally(() => { this.#refreshing = undefined; });
   }
 
-  #gmail(path: string, token: AccessToken, options: RequestInit = {}) {
-    return this.#request(GMAIL + path, {
+  #authorizedRequest(url: string, token: AccessToken, options: RequestInit) {
+    return this.#request(url, {
       ...options, headers: { authorization: 'Bearer ' + token.value, ...options.headers },
     }).then((response) => {
       if (response.status === 401 && this.#token === token) this.#token = undefined;
       return response;
     });
+  }
+
+  #gmail(path: string, token: AccessToken, options: RequestInit = {}) {
+    return this.#authorizedRequest(GMAIL + path, token, options);
+  }
+
+  async pushRequest(path: 'watch' | 'profile?fields=historyId' | `history?${string}` |
+    `messages?${string}`, maxBytes: number, topicName?: string) {
+    const response = await this.#gmail(path, await this.#getToken(), path === 'watch' ? {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'include' }),
+    } : {});
+    if (response.status === 404 && path.startsWith('history?')) {
+      await response.body?.cancel().catch(() => undefined);
+      return null;
+    }
+    return boundedJson(response, maxBytes);
+  }
+
+  async pushMetadataBatch(boundary: string, body: string, maxBytes: number) {
+    const response = await this.#authorizedRequest(GMAIL_BATCH, await this.#getToken(), {
+      method: 'POST',
+      headers: { 'content-type': `multipart/mixed; boundary=${boundary}` },
+      body,
+    });
+    return { contentType: response.headers.get('content-type'), body: await boundedText(response, maxBytes) };
   }
 
   async #fullMessage(id: string, token: AccessToken) {

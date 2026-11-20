@@ -42,6 +42,42 @@ one-time sign-in link. `scripts/pack.sh` builds an archive, and
 The [Atlas runbook](docs/atlas-deploy.md) covers the dedicated VM, release,
 tailnet grants and backup checks.
 
+## Gmail push for Tyler Personal
+
+1. In the Google Cloud project that issued the existing Owner Gmail OAuth
+   client, enable the Gmail and Cloud Pub/Sub APIs. Create a Pub/Sub topic and
+   grant **Pub/Sub Publisher** on that topic to
+   `gmail-api-push@system.gserviceaccount.com`. [Gmail push setup](https://developers.google.com/workspace/gmail/api/guides/push)
+2. Create a dedicated **Pull** subscription on that topic. Enable exponential
+   backoff for retries. Create a service account with **Pub/Sub Subscriber** on
+   the subscription. Save its JSON key outside the repository, readable only by
+   the Bot HQ service user. Bot HQ connects outbound with streaming pull.
+3. Keep the [existing Tyler Personal pairing and Owner Gmail grant](docs/atlas-deploy.md#tylers-private-personal-assistant).
+   Configure the following values in the Bot HQ service environment. Use short
+   topic and subscription names from the same project.
+
+   ```dotenv
+   HQ_GMAIL_PUSH_GCP_PROJECT=my-gmail-project
+   HQ_GMAIL_PUSH_TOPIC=gmail-inbox
+   HQ_GMAIL_PUSH_SUBSCRIPTION=bot-hq-gmail
+   HQ_GMAIL_PUSH_CREDENTIALS=/absolute/path/to/pubsub-service-account.json
+   ```
+
+4. Wire #585 at the marked import in `server/src/index.ts` and configure the
+   Tyler Personal event routine with the exact name `Gmail new mail`. Event
+   ingress must accept `refs: { messageId }`, persist and deduplicate accepted
+   events by `event_id`, and allow this routine through Tyler Personal's turn
+   gate. Restart Bot HQ and send a test message. Check for a single routine
+   event with the sender, subject and Gmail message ID.
+
+Run one streaming worker for this subscription and keep its Bot HQ SQLite data
+directory across restarts. The first watch starts at the current mailbox
+position. Daily renewal and restarts reconcile from the saved position. If
+Gmail has expired that position, the worker scans all Inbox pages for the last
+seven days and catches up changes made during the scan. It stores message IDs
+and the history position. The worker fetches sender and subject headers in
+[Gmail batches](https://developers.google.com/workspace/gmail/api/guides/batch).
+
 ## How it works
 
 ```mermaid
