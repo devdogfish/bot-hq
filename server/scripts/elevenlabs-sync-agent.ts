@@ -6,6 +6,32 @@ import { VOICE_TOOLS } from '../src/voice/tools.js';
 interface WorkspaceTool { id: string; tool_config: { type: string; name: string } }
 interface ToolPage { tools: WorkspaceTool[]; has_more: boolean; next_cursor?: string }
 
+const PRESET_LANGUAGES = new Set([
+  'en', 'zh', 'es', 'hi', 'pt', 'fr', 'de', 'ja', 'ar', 'ko', 'id', 'it', 'nl', 'tr', 'pl', 'ru', 'sv', 'tl', 'ms',
+  'ro', 'uk', 'el', 'cs', 'da', 'fi', 'bg', 'hr', 'sk', 'ta', 'vi', 'no', 'hu', 'pt-br', 'fil',
+]);
+
+// ElevenLabs rejects client-tool parameters without a description (HTTP 422,
+// "Must set one of: description, dynamic_variable, ..."). xAI accepts them, so
+// fill a readable default from the property name, recursively.
+export function describedSchema(schema: unknown, name = 'value'): unknown {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
+  const node = { ...(schema as Record<string, unknown>) };
+  if (node.properties && typeof node.properties === 'object') {
+    node.properties = Object.fromEntries(
+      Object.entries(node.properties as Record<string, unknown>).map(([key, value]) => {
+        const child = describedSchema(value, key) as Record<string, unknown>;
+        return [key, child && typeof child === 'object' && !child.description ? { ...child, description: key.replace(/_/g, ' ') } : child];
+      }),
+    );
+  }
+  if (node.items) {
+    const items = describedSchema(node.items, name) as Record<string, unknown>;
+    node.items = items && typeof items === 'object' && !items.description ? { ...items, description: `${name.replace(/_/g, ' ')} item` } : items;
+  }
+  return node;
+}
+
 export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Promise<string> {
   if (!apiKey) throw new Error('Set ELEVENLABS_API_KEY to sync the agent.');
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -33,7 +59,7 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
   const toolIds: string[] = [];
   for (const { name, description, parameters } of VOICE_TOOLS) {
     const toolId = attached.get(name);
-    const body = { tool_config: { type: 'client', name, description, parameters, expects_response: true } };
+    const body = { tool_config: { type: 'client', name, description, parameters: describedSchema(parameters), expects_response: true } };
     const tool = await request<WorkspaceTool>(toolId ? `tools/${encodeURIComponent(toolId)}` : 'tools', toolId ? 'PATCH' : 'POST', body);
     toolIds.push(tool.id);
   }
@@ -41,10 +67,13 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
   const languages = new Set(LANGUAGES.map(({ code }) => elevenlabsLanguage(code)));
   languages.delete(undefined);
   languages.delete('en');
+  // The agents API only accepts these preset languages (HTTP 422 otherwise, e.g. for 'bn').
+  for (const code of languages) if (!PRESET_LANGUAGES.has(code as string)) languages.delete(code);
   const config = {
     conversation_config: {
       asr: { user_input_audio_format: 'pcm_24000' },
-      tts: { voice_id: ELEVENLABS_DEFAULT_VOICE, model_id: 'eleven_flash_v2_5', agent_output_audio_format: 'pcm_24000' },
+      // English agents must use a v2 flash/turbo model; other languages need the multilingual v2.5 model.
+      tts: { voice_id: ELEVENLABS_DEFAULT_VOICE, model_id: 'eleven_flash_v2', agent_output_audio_format: 'pcm_24000' },
       conversation: {
         client_events: [
           'conversation_initiation_metadata', 'audio', 'interruption', 'client_tool_call', 'user_transcript',
@@ -61,7 +90,7 @@ export async function syncElevenLabsAgent(apiKey: string, agentId?: string): Pro
         },
       },
       language_presets: Object.fromEntries([...languages].map((code) => [
-        code, { overrides: code === 'bn' ? { tts: { model_id: 'eleven_v4_turbo' } } : {} },
+        code, { overrides: { tts: { model_id: 'eleven_flash_v2_5' } } },
       ])),
     },
     platform_settings: {
