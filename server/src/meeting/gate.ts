@@ -62,7 +62,12 @@ function addressedToOther(text: string, names: readonly string[]): boolean {
   const body = cueText(text);
   if (!QUESTION_START.test(body)) return false;
   const lower = body.toLowerCase();
-  return names.some((name) => lower.endsWith(` ${name}`) || lower.endsWith(` @${name}`));
+  return names.some((name) => {
+    if (lower.endsWith(` @${name}`)) return true;
+    const suffix = ` ${name}`;
+    // Without punctuation, require a cue that already has an object before the name.
+    return lower.endsWith(suffix) && /\b(?:that|this|it)$/u.test(lower.slice(0, -suffix.length));
+  });
 }
 
 export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mutedByRequest, ownerSpeaker = 'Owner' }: TurnInput): TurnDecision {

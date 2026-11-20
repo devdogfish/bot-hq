@@ -36,6 +36,7 @@ const turns = [
   ['greeting to a participant without prior speech', say('Priya', 'Hey, Jules, can you check that?'), 'silent', afterAgent],
   ['trailing vocative to a participant without prior speech', say('Priya', 'Can you check that, Jules?'), 'silent', afterAgent],
   ['unpunctuated trailing vocative with a known participant', say('Priya', 'Can you check that Jules?'), 'silent', { ...afterAgent, prior: [say('Jules', 'Hi.', 500), agentTurn] }],
+  ['named participant is the object of an Agent follow-up', say('Priya', 'Can you ask Jules?'), 'respond', { ...afterAgent, prior: [say('Jules', 'Hi.', 500), agentTurn] }],
   ['third-person question mentioning Agent', say('Priya', 'Does Atlas have the notes?'), 'silent', afterAgent],
   ['follow-up in a human side conversation', say('Jules', 'What did you mean about the date?', 3_000), 'silent', { ...afterAgent, prior: [agentTurn, say('Priya', 'Jules, let’s review the dates.')] }],
   ['direct Agent address redirects a human side conversation', say('Jules', 'Atlas, what is the deadline?', 3_000), 'respond', { ...afterAgent, prior: [agentTurn, say('Priya', 'Jules, let’s review the dates.')] }],
