@@ -7,7 +7,7 @@ import { screenSize } from '../lib/computer';
 import { configApi } from '../lib/configApi';
 import { useSelectedBot, useStore } from '../store';
 import { Icon } from './Icon';
-import { isMacPlatform, pasteChord, readCmdAsCtrl, releaseHeld, translateKeyDown, translateKeyUp, writeCmdAsCtrl, type KeyStroke } from './computer-keys';
+import { isMacPlatform, MAC_KEYBOARD_LOCK_CODES, pasteChord, readCmdAsCtrl, releaseHeld, translateKeyDown, translateKeyUp, writeCmdAsCtrl, type KeyStroke } from './computer-keys';
 
 export type ScreenMode = 'watch' | 'control';
 type Conn = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error';
@@ -84,7 +84,6 @@ class ScreenStream {
   private conn: Conn = 'idle';
   private placement: Placement | null = null;
   private listener: StreamListener | null = null;
-  private pasteTimer: ReturnType<typeof setTimeout> | undefined;
   /** Text the Agent copied while the Owner drives; control streams only. */
   onClipboard: ((text: string) => void) | null = null;
 
@@ -126,7 +125,11 @@ class ScreenStream {
     rfb.dragViewport = clipped && (watch || pan);
     // noVNC treats a drag below its movement threshold as a click.
     const viewOnly = watch || (clipped && pan);
-    if (rfb.viewOnly !== viewOnly) rfb.viewOnly = viewOnly;
+    if (rfb.viewOnly !== viewOnly) {
+      // noVNC's setter blocks sendKey before it ungrabs, so its own key release never reaches the Agent.
+      if (viewOnly) this.releaseKeys();
+      rfb.viewOnly = viewOnly;
+    }
     rfb.focusOnClick = !viewOnly;
   }
 
@@ -163,22 +166,19 @@ class ScreenStream {
     for (const [keysym, code, down] of keys) rfb.sendKey(keysym, code, down);
   }
 
-  releaseKeys() {
+  releaseKeys(options?: { exceptModifiers?: boolean }) {
     const rfb = this.rfb;
     const held = rfb?._keyboard?._keyDownList;
-    if (rfb && held) releaseHeld(held, (keysym, code, down) => rfb.sendKey(keysym, code, down));
+    if (rfb && held) releaseHeld(held, (keysym, code, down) => rfb.sendKey(keysym, code, down), options);
   }
 
   /** Give the Agent the Owner's text, then paste it there with Ctrl+V. */
   paste(text: string | null) {
     const rfb = this.rfb;
     if (!rfb) return;
-    clearTimeout(this.pasteTimer);
+    // Same socket, in order. Xvnc answers the app's selection request once noVNC provides the text.
     if (text) rfb.clipboardPasteFrom(text);
-    // Extended clipboard is Notify → Request → Provide; give the server a moment before Ctrl+V.
-    this.pasteTimer = setTimeout(() => {
-      if (this.rfb === rfb) this.sendKeys(pasteChord(this.held()));
-    }, text ? 120 : 0);
+    this.sendKeys(pasteChord(this.held()));
   }
 
   reconnect() {
@@ -290,7 +290,6 @@ class ScreenStream {
   stop() {
     // Leave nothing held on the Agent's desktop when control ends.
     this.releaseKeys();
-    clearTimeout(this.pasteTimer);
     this.capture();
     this.generation++;
     const rfb = this.rfb;
@@ -564,11 +563,14 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     const frame = frameRef.current;
     if (!driving || !frame) return;
     let pasteFallback: ReturnType<typeof setTimeout> | undefined;
+    let fellBackAt = -Infinity;
     // Only keys aimed at this screen; the rest of the page keeps its own shortcuts.
     const ours = (e: Event) => e.target instanceof Node && frame.contains(e.target);
     const options = () => ({ mac, cmdAsCtrl: cmdAsCtrlRef.current, held: activeStream.current?.held() });
     const down = (e: KeyboardEvent) => {
       if (!ours(e)) return;
+      // macOS sends no keyup for keys released while Cmd is down; lift them now so none stick.
+      if (e.metaKey && mac && cmdAsCtrlRef.current) activeStream.current?.releaseKeys({ exceptModifiers: true });
       const action = translateKeyDown(e, options());
       if (action.kind === 'pass') return;
       // Capture phase on window runs before noVNC's canvas listener.
@@ -577,7 +579,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       if (action.kind === 'paste') {
         // Leave the default so the browser fires paste. Without one, paste the Agent's own clipboard.
         clearTimeout(pasteFallback);
-        pasteFallback = setTimeout(() => activeStream.current?.paste(null), 300);
+        pasteFallback = setTimeout(() => {
+          fellBackAt = performance.now();
+          activeStream.current?.paste(null);
+        }, 300);
         return;
       }
       e.preventDefault();
@@ -593,39 +598,41 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       clearTimeout(pasteFallback);
       e.preventDefault();
       e.stopPropagation();
+      // A paste event that lands after the fallback already sent Ctrl+V would paste twice.
+      if (performance.now() - fellBackAt < 2000) { fellBackAt = -Infinity; return; }
       activeStream.current?.paste(e.clipboardData?.getData('text/plain') || null);
     };
-    // No stuck keys on the Agent when the Owner switches apps or tabs mid-chord.
-    const release = () => activeStream.current?.releaseKeys();
+    // No stuck keys on the Agent when the Owner switches apps or tabs, or clicks away, mid-chord.
+    const release = (e?: Event) => { if (!e || e.target === window || ours(e)) activeStream.current?.releaseKeys(); };
     const hidden = () => { if (!tabIsVisible()) release(); };
     window.addEventListener('keydown', down, true);
     window.addEventListener('keyup', up, true);
     window.addEventListener('paste', paste, true);
-    window.addEventListener('blur', release);
+    window.addEventListener('blur', release, true);
     document.addEventListener('visibilitychange', hidden);
     return () => {
       clearTimeout(pasteFallback);
       window.removeEventListener('keydown', down, true);
       window.removeEventListener('keyup', up, true);
       window.removeEventListener('paste', paste, true);
-      window.removeEventListener('blur', release);
+      window.removeEventListener('blur', release, true);
       document.removeEventListener('visibilitychange', hidden);
     };
   }, [driving, mac]);
 
   // Full screen + control: ask the browser for keys it otherwise keeps (Cmd+T, Cmd+W, Esc…).
+  const keyboard = (navigator as Navigator & { keyboard?: { lock?(codes?: string[]): Promise<void>; unlock?(): void } }).keyboard;
   useEffect(() => {
-    const keyboard = (navigator as Navigator & { keyboard?: { lock?(codes?: string[]): Promise<void>; unlock?(): void } }).keyboard;
     if (!driving || !fullscreen || !keyboard?.lock) return;
     let active = true;
-    keyboard.lock().then(() => { if (active) setLocked(true); }, () => {});
+    keyboard.lock(mac ? [...MAC_KEYBOARD_LOCK_CODES] : undefined).then(() => { if (active) setLocked(true); }, () => {});
     return () => {
       active = false;
       keyboard.unlock?.();
       setLocked(false);
       activeStream.current?.releaseKeys();
     };
-  }, [driving, fullscreen]);
+  }, [driving, fullscreen, keyboard, mac]);
 
   const copyFromAgent = useRef<(text: string) => void>(() => {});
   copyFromAgent.current = (text) => {
@@ -699,7 +706,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
   let keyHint: string | null = null;
   if (driving && phase === 'live') {
     if (locked) keyHint = 'Hold Esc to leave full screen';
-    else if (!fullscreen && canFullscreen) keyHint = `Full screen sends ${mac ? '⌘T, ⌘W' : 'Ctrl+T, Ctrl+W'} to ${bot.name}`;
+    // Only browsers with keyboard lock get those keys in full screen, and only while ⌘ acts as Ctrl.
+    else if (!fullscreen && canFullscreen && keyboard?.lock && (!mac || cmdAsCtrl)) keyHint = `Full screen sends ${mac ? '⌘T, ⌘W' : 'Ctrl+T, Ctrl+W'} to ${bot.name}`;
   }
   const style = {
     ...botVars(bot.avatarColor),

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 const keys = await import('../web/src/components/computer-keys.ts');
-const { XK, translateKeyDown, translateKeyUp, keysymFor, chord, pasteChord, releaseHeld, isMacPlatform, readCmdAsCtrl, writeCmdAsCtrl, CMD_AS_CTRL_KEY } = keys;
+const { XK, translateKeyDown, translateKeyUp, keysymFor, chord, pasteChord, releaseHeld, isMacPlatform, MAC_KEYBOARD_LOCK_CODES, readCmdAsCtrl, writeCmdAsCtrl, CMD_AS_CTRL_KEY } = keys;
 
 const mac = { mac: true, cmdAsCtrl: true };
 const key = (code, mods = {}) => ({ code, metaKey: false, shiftKey: false, altKey: false, repeat: false, ...mods });
@@ -101,6 +101,24 @@ test('releaseHeld lifts every held key once and empties the list', () => {
   assert.deepEqual(sent.sort(), [[0xffe1, 'ShiftLeft', false], [XK.Control_L, 'ControlLeft', false], [sym('a'), 'KeyA', false]].sort());
   assert.deepEqual(held, {});
   releaseHeld(held, () => assert.fail('nothing left to release'));
+});
+
+test('releaseHeld can keep modifiers down while Cmd is held', () => {
+  // macOS drops the keyup of a key released under Cmd; modifier keyups still arrive.
+  const held = { ShiftRight: 0xffe2, ControlLeft: XK.Control_L, KeyA: sym('a'), ArrowLeft: 0xff51 };
+  const sent = [];
+  releaseHeld(held, (keysym, code, down) => sent.push([keysym, code, down]), { exceptModifiers: true });
+  assert.deepEqual(sent, [[sym('a'), 'KeyA', false], [0xff51, 'ArrowLeft', false]]);
+  assert.deepEqual(held, { ShiftRight: 0xffe2, ControlLeft: XK.Control_L });
+});
+
+test('the Mac full-screen lock takes tab shortcuts and Esc but leaves Cmd+V and macOS keys alone', () => {
+  for (const code of ['Escape', 'KeyT', 'KeyW', 'KeyN', 'KeyL', 'KeyR', 'Digit1', 'ArrowLeft', 'F5']) {
+    assert.ok(MAC_KEYBOARD_LOCK_CODES.includes(code), code);
+  }
+  for (const code of ['KeyV', 'KeyQ', 'Tab', 'Space', 'KeyH', 'KeyM', 'Backquote', 'MetaLeft']) {
+    assert.ok(!MAC_KEYBOARD_LOCK_CODES.includes(code), code);
+  }
 });
 
 test('platform detection and the remembered toggle', () => {
