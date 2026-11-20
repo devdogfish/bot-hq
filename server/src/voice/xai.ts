@@ -1,7 +1,7 @@
 import { env } from '../env.js';
 import type { VoiceOption } from '../types.js';
 import type { VoiceProvider } from './provider.js';
-import { VOICE_TOOLS } from './tools.js';
+import { MEETING_TOOLS, VOICE_TOOLS } from './tools.js';
 
 export const XAI = 'https://api.x.ai/v1';
 const VOICE_MODEL = process.env.XAI_VOICE_MODEL ?? 'grok-voice-latest';
@@ -33,56 +33,63 @@ async function listVoices(): Promise<VoiceOption[]> {
   return voiceCache.voices;
 }
 
+export async function startXaiSession(
+  s: Omit<Parameters<VoiceProvider['startSession']>[0], 'userFirstName'>,
+  mode: 'voice' | 'meeting' = 'voice',
+) {
+  const r = await fetch(`${XAI}/realtime/client_secrets`, {
+    method: 'POST',
+    headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expires_after: { seconds: 300 } }),
+    signal: AbortSignal.timeout(15_000),
+  }).catch(() => null);
+  if (!r?.ok) {
+    console.warn('[voice] client secret mint failed', r?.status ?? 'network error');
+    return null;
+  }
+  const secret = await r.json().catch(() => null) as { value?: string; expires_at: number } | null;
+  if (typeof secret?.value !== 'string' || !secret.value) return null;
+
+  const tools = mode === 'meeting' ? MEETING_TOOLS : VOICE_TOOLS;
+
+  const instructions = s.instructions();
+  const session: Record<string, unknown> = {
+    voice: s.voice,
+    instructions,
+    turn_detection: mode === 'meeting' ? null : { type: 'server_vad' },
+    tools,
+    audio: {
+      input: {
+        format: { type: 'audio/pcm', rate: SAMPLE_RATE },
+        transcription: { model: 'grok-transcribe', ...(s.language !== 'auto' ? { language_hint: s.language } : {}) },
+      },
+      output: { format: { type: 'audio/pcm', rate: SAMPLE_RATE }, speed: s.speed },
+    },
+  };
+
+  return {
+    provider: 'xai' as const,
+    clientSecret: secret.value,
+    expiresAt: secret.expires_at,
+    model: VOICE_MODEL,
+    websocketUrl: `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
+    sampleRate: SAMPLE_RATE,
+    instructions,
+    voice: s.voice,
+    speed: s.speed,
+    language: s.language,
+    tools,
+    session,
+  };
+}
+
 export const xaiProvider: VoiceProvider = {
   id: 'xai',
   name: 'xAI',
   get available() { return !!env.xaiKey; },
   unavailableMessage: 'Set XAI_API_KEY to use voice.',
   listVoices,
-  async startSession(s) {
-    const r = await fetch(`${XAI}/realtime/client_secrets`, {
-      method: 'POST',
-      headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expires_after: { seconds: 300 } }),
-      signal: AbortSignal.timeout(15_000),
-    }).catch((e) => ({ ok: false, status: 0, text: async () => String(e?.message ?? e) }) as any);
-    if (!r.ok) {
-      const detail = await r.text().catch(() => '');
-      console.warn('[voice] client secret mint failed', r.status, detail.slice(0, 300));
-      return null;
-    }
-    const secret = (await r.json()) as { value: string; expires_at: number };
-
-    const instructions = s.instructions();
-    const session: Record<string, unknown> = {
-      voice: s.voice,
-      instructions,
-      turn_detection: { type: 'server_vad' },
-      tools: VOICE_TOOLS,
-      audio: {
-        input: {
-          format: { type: 'audio/pcm', rate: SAMPLE_RATE },
-          transcription: { model: 'grok-transcribe', ...(s.language !== 'auto' ? { language_hint: s.language } : {}) },
-        },
-        output: { format: { type: 'audio/pcm', rate: SAMPLE_RATE }, speed: s.speed },
-      },
-    };
-
-    return {
-      provider: 'xai',
-      clientSecret: secret.value,
-      expiresAt: secret.expires_at,
-      model: VOICE_MODEL,
-      websocketUrl: `wss://api.x.ai/v1/realtime?model=${encodeURIComponent(VOICE_MODEL)}`,
-      sampleRate: SAMPLE_RATE,
-      instructions,
-      voice: s.voice,
-      speed: s.speed,
-      language: s.language,
-      tools: VOICE_TOOLS,
-      session,
-    };
-  },
+  startSession: startXaiSession,
   async preview({ voice, language, text, speed, codec }) {
     const r = await fetch(`${XAI}/tts`, {
       method: 'POST',

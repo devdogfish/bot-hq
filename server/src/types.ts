@@ -165,7 +165,7 @@ export interface VoiceCallRecord {
   phase: 'started' | 'ended';
   durationMs?: number;
   summary?: string;
-  transcript?: { role: 'user' | 'assistant'; text: string }[];
+  transcript?: { role: 'user' | 'assistant'; text: string; speaker?: string; at?: number }[];
   tasks?: string[];
 }
 
