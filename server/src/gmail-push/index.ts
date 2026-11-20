@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { personalAssistantPaired, personalGmail } from '../agent/personal-assistant.js';
 import { db } from '../db.js';
 import { gmailPushClient } from './gmail.js';
@@ -21,10 +22,22 @@ export function gmailPushConfig() {
 }
 
 export async function startGmailPush(config: NonNullable<ReturnType<typeof gmailPushConfig>>, enqueueEvent: EnqueueEvent) {
-  const { PubSub } = await import('@google-cloud/pubsub');
   const { projectId, topicName, subscriptionName, keyFilename, botId, mailbox, gmail } = config;
+  // Keep filesystem errors and the credential path out of SDK diagnostics.
+  const key = await readFile(keyFilename, 'utf8').then(text => JSON.parse(text)).catch(() => null);
+  if (key?.type !== 'service_account' || typeof key.client_email !== 'string' || !key.client_email
+      || typeof key.private_key !== 'string' || !key.private_key) {
+    throw new Error('Gmail push service account key is unavailable or invalid');
+  }
+  const [{ PubSub }, { GoogleAuth, JWT }] = await Promise.all([
+    import('@google-cloud/pubsub'), import('google-auth-library'),
+  ]);
   const store = gmailPushStore(db, mailbox, botId);
-  const pubsub = new PubSub({ projectId, keyFilename });
+  const auth = new GoogleAuth({
+    projectId,
+    authClient: new JWT({ email: key.client_email, key: key.private_key, scopes: ['https://www.googleapis.com/auth/pubsub'] }),
+  });
+  const pubsub = new PubSub({ projectId, auth, enableTelemetryLogging: false });
   const subscription = pubsub.subscription(subscriptionName, {
     flowControl: { maxMessages: 32, allowExcessMessages: false },
     streamingOptions: { maxStreams: 1 },

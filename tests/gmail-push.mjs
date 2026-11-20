@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setImmediate } from 'node:timers/promises';
@@ -97,7 +97,7 @@ function fixture(t) {
             const id = subrequest.pathname.split('/').at(-1);
             calls.metadata.push(id);
             const status = fake.metadataStatus.get(id) ?? 200;
-            const body = JSON.stringify({ id, payload: { headers: [
+            const body = JSON.stringify({ id, payload: { body: { data: 'body-must-stay-out-of-events' }, headers: [
               { name: 'From', value: 'Sender <sender@example.test>' }, { name: 'Subject', value: 'Subject ' + id },
             ] } });
             return ['--fake-batch', 'Content-Type: application/http', '', 'HTTP/1.1 ' + status,
@@ -270,6 +270,7 @@ test('retries a failed metadata part without advancing the cursor', options, asy
   assert.equal(await subscription.publish(id(3)), 'nack');
   assert.equal(store.cursor(), id(0));
   assert.deepEqual(fake.attempts, []);
+  assert.deepEqual(fake.reports, ['Gmail delivery failed. Unacknowledged notifications will retry.']);
   fake.metadataStatus.delete('last');
   assert.equal(await subscription.publish(id(3)), 'ack');
   assert.equal(store.cursor(), id(3));
@@ -308,4 +309,41 @@ test('renews the watch daily and catches up from the saved cursor without a noti
   assert.deepEqual(fake.attempts, ['missed-notification']);
   assert.equal(await subscription.publish(id(1)), 'ack');
   assert.deepEqual(fake.calls.history, [[id(0), null]]);
+});
+
+test('credential and Gmail failures omit paths and raw provider errors', options, async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'bot-hq-gmail-key-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const report = t.mock.method(console, 'error', () => {});
+  const oldSecret = process.env.SESSION_SECRET;
+  const oldDbPath = process.env.DB_PATH;
+  process.env.SESSION_SECRET = 'gmail-push-test';
+  process.env.DB_PATH = ':memory:';
+  t.after(() => {
+    if (oldSecret === undefined) delete process.env.SESSION_SECRET;
+    else process.env.SESSION_SECRET = oldSecret;
+    if (oldDbPath === undefined) delete process.env.DB_PATH;
+    else process.env.DB_PATH = oldDbPath;
+  });
+  const { startGmailPush } = await import('../server/dist/gmail-push/index.js');
+  const keyFilename = join(directory, 'private-credential.json');
+  await assert.rejects(startGmailPush({ keyFilename }), {
+    message: 'Gmail push service account key is unavailable or invalid',
+  });
+  writeFileSync(keyFilename, JSON.stringify({
+    type: 'service_account', client_email: 'subscriber@example.test', private_key: 'fixture-key',
+  }));
+  const attempted = Promise.withResolvers();
+  const stop = await startGmailPush({
+    keyFilename, botId, mailbox, topicName, projectId: 'gmail-project', subscriptionName: 'inbox-pull',
+    gmail: { async pushRequest() {
+      attempted.resolve();
+      throw new Error('fake provider failure with a token');
+    } },
+  }, () => assert.fail('watch failures cannot enqueue'));
+  await attempted.promise;
+  await stop();
+  assert.deepEqual(report.mock.calls.map(call => call.arguments), [
+    ['[gmail-push]', 'Gmail watch failed. Retrying in one minute.'],
+  ]);
 });
