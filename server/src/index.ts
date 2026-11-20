@@ -21,6 +21,7 @@ import { secureInputApi } from './routes-secure-input.js';
 import { mcpApi } from './mcp.js';
 import { initEngines } from './engine.js';
 import { agentHealthRoutes } from './agent-health.js';
+import { startAgentGatewayMonitor } from './agent-gateway-monitor.js';
 
 if (!desSelfTest()) throw new Error('DES self-test failed');
 initSubagents();
@@ -49,9 +50,11 @@ if (fs.existsSync(webDist)) {
 
 const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => console.log(`[grokbot] server on http://localhost:${info.port}`));
 attachVncRelay(server as unknown as Server);
-// GROKBOT_NO_SCHEDULER=1 for extra dev/test servers sharing a database copy, so routines don't fire twice.
-if (process.env.GROKBOT_NO_SCHEDULER !== '1') {
+// GROKBOT_NO_SCHEDULER=1 for extra dev/test servers sharing a database copy.
+const schedulerEnabled = process.env.GROKBOT_NO_SCHEDULER !== '1';
+if (schedulerEnabled) {
   initRoutines(enqueue, isBotBusy);
   initProactive(enqueue);
 } else console.log('[grokbot] scheduler disabled (GROKBOT_NO_SCHEDULER=1)');
 initEngines();
+if (schedulerEnabled) startAgentGatewayMonitor();

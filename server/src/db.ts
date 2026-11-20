@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS rows (
   PRIMARY KEY (bot_id, generation, seq)
 );
 CREATE INDEX IF NOT EXISTS rows_rev ON rows(bot_id, updated_seq);
+CREATE TABLE IF NOT EXISTS agent_gateway_health (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  gateway_url TEXT NOT NULL,
+  consecutive_failures INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS llm_items (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,

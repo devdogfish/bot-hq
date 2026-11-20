@@ -36,3 +36,8 @@ export async function readHermesHealth(url: string, timeoutMs = 2500, maxBytes?:
     return null;
   }
 }
+
+export async function isHermesHealthy(url: string): Promise<boolean> {
+  const health = await readHermesHealth(url, 2500, 8192);
+  return health?.status === 'ok';
+}

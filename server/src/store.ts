@@ -78,18 +78,20 @@ function bumpRev(botId: string): number {
   return (db.prepare('SELECT rev FROM bots WHERE id=?').get(botId) as any).rev;
 }
 
-/** Append a new row. Returns its seq. */
+/** Insert a row inside the caller's transaction. */
+export function insertRow(botId: string, kind: RowKind, body: RowBody): { userId: string; row: Row } {
+  const b = db.prepare('SELECT user_id, generation, next_seq FROM bots WHERE id=?').get(botId) as any;
+  const seq = b.next_seq;
+  db.prepare('UPDATE bots SET next_seq = next_seq + 1 WHERE id=?').run(botId);
+  const rev = bumpRev(botId);
+  const t = now();
+  db.prepare('INSERT INTO rows(bot_id,generation,seq,updated_seq,kind,body,created_at) VALUES (?,?,?,?,?,?,?)').run(botId, b.generation, seq, rev, kind, JSON.stringify(body), t);
+  return { userId: b.user_id, row: { botId, generation: b.generation, seq, updatedSeq: rev, kind, body, createdAt: t } };
+}
+
+/** Append a new row and publish it. */
 export function appendRow(botId: string, kind: RowKind, body: RowBody): Row {
-  const tx = db.transaction(() => {
-    const b = db.prepare('SELECT user_id, generation, next_seq FROM bots WHERE id=?').get(botId) as any;
-    const seq = b.next_seq;
-    db.prepare('UPDATE bots SET next_seq = next_seq + 1 WHERE id=?').run(botId);
-    const rev = bumpRev(botId);
-    const t = now();
-    db.prepare('INSERT INTO rows(bot_id,generation,seq,updated_seq,kind,body,created_at) VALUES (?,?,?,?,?,?,?)').run(botId, b.generation, seq, rev, kind, JSON.stringify(body), t);
-    return { userId: b.user_id as string, row: { botId, generation: b.generation, seq, updatedSeq: rev, kind, body, createdAt: t } as Row };
-  });
-  const { userId, row } = tx();
+  const { userId, row } = db.transaction(insertRow)(botId, kind, body);
   hub.emit(userId, { type: 'rows', botId, generation: row.generation, rows: [row] });
   return row;
 }
