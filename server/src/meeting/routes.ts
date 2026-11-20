@@ -36,12 +36,15 @@ const turn = z.object({
   speaker: z.string().trim().min(1).max(256),
   text: z.string().max(16_000),
   at: z.number().nonnegative(),
+  /** True only when the meeting platform reports the speaker as the signed-in host (Jitsi moderator). */
+  host: z.boolean().optional(),
 });
 const gateRequest = callRequest.extend({ transcript: z.array(turn).max(24), last_agent_turn_at: z.number().nonnegative().nullable() });
 const toolRequest = callRequest.extend({
   name: z.string().min(1).max(64),
   arguments: z.record(z.string(), z.unknown()),
 });
+const GUEST_HANDOFF_REFUSED = 'Not handed off: only the meeting host can give you work. Tell the speaker kindly that the host can ask you for it. Do not retry.';
 const endRequest = callRequest.extend({ transcript: z.array(turn).max(10_000) });
 
 function meetingCall(bot: MeetingBot, id: string) {
@@ -140,6 +143,8 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
   const call = meetingCall(bot, call_id);
   if (!call) return c.json({ error: 'Call not found' }, 404);
 
+  // Work can be handed off only while the host holds the floor. Fail closed for guests and unknown roles.
+  call.hostHasFloor = transcript.at(-1)?.host === true;
   if (bot.archived_at != null || bot.paused) return c.json({ decision: 'silent' });
   call.lastActivityAt = Date.now();
   const decision = decideTurn({
@@ -169,6 +174,7 @@ meetingApi.post('/tool', ...meetingRequest(16 * 1024, 12), (c) => {
   if (bot.archived_at != null) return c.json({ error: 'Bot unavailable' }, 409);
   if (!MEETING_TOOLS.some((tool) => tool.name === name)) return c.json({ error: 'Tool unavailable in meetings' }, 403);
   call.lastActivityAt = Date.now();
+  if (name === 'send_task' && !call.hostHasFloor) return c.json({ output: GUEST_HANDOFF_REFUSED });
   return c.json(relayVoiceTool(bot, name, args, call));
 });
 

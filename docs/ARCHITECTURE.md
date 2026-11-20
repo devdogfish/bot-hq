@@ -52,13 +52,12 @@ The model's own history is Hermes' business; the app keeps only what it shows.
 
 ## Approvals
 
-Approvals happen inside the MCP call, so they work the same for every engine:
+Agents work like trusted coworkers. They ask only before paying, sending or publishing to outsiders, acting as the Owner, or deleting what they did not create. Everything else runs and shows up as activity.
 
-- Composio tools that only read run at once.
-- Anything else posts an **approval card** and the tool call waits. **Allow** runs it once, **Always allow** stores a per-tool policy, **Don't allow** returns a refusal that tells the agent not to retry.
+- Requests from the meeting host run straight away, like chat requests. The Agent's meeting bridge marks each turn `host` only when Jitsi reports the speaker as moderator (the signed-in Owner). `/api/meeting/tool` refuses `send_task` unless the latest gated turn came from the host. Guests can talk with the Agent but cannot give it work.
+- Hermes' own prompts for risky shell commands post an **approval card**. Unattended turns deny them.
+- Owner email that is not a plain "email me" request, and Personal Assistant Gmail replies and deletions, post a card for that one action.
 - A new user message, or no answer in time, closes the card and the call returns "skipped".
-
-Not covered: what a Bot does through its browser or shell, and Hermes' own prompts for risky commands.
 
 ## Bots working together
 
