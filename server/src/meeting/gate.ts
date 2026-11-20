@@ -12,8 +12,8 @@ interface TurnInput {
   transcript: readonly TranscriptTurn[];
   lastAgentTurnAt: number | null;
   mutedByRequest: boolean;
-  /** Trusted speaker label supplied by the meeting, defaulting to "Owner". */
-  ownerSpeaker?: string;
+  /** Owner display labels used for conversational cues, defaulting to "Owner". */
+  ownerNames?: readonly string[];
 }
 
 type SpeakDecision = 'respond' | 'silent';
@@ -75,7 +75,7 @@ function addressedToOther(text: string, names: readonly string[]): boolean {
   });
 }
 
-export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mutedByRequest, ownerSpeaker = 'Owner' }: TurnInput): TurnDecision {
+export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mutedByRequest, ownerNames = ['Owner'] }: TurnInput): TurnDecision {
   const latest = transcript.at(-1);
   if (!latest) return 'silent';
 
@@ -86,8 +86,8 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
 
   const text = clean(latest.text);
   if (!text) return 'silent';
-  const ownerLabel = clean(ownerSpeaker).toLowerCase();
-  const otherNames = [...new Set([...transcript.map((turn) => clean(turn.speaker).toLowerCase()), ownerLabel])]
+  const ownerLabels = ownerNames.map((name) => clean(name).toLowerCase());
+  const otherNames = [...new Set([...transcript.map((turn) => clean(turn.speaker).toLowerCase()), ...ownerLabels])]
     .filter((name) => name && name !== speaker && !agentSpeakers.has(name));
   const addressText = GREETING.test(text) ? text : text.replace(DISCOURSE_MARKER, '').trimStart();
   const addressed = addressedTo(addressText, names);
@@ -102,7 +102,7 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
   if (addressed === undefined && !followsAgent && previous && !previousIsAgent
     && addressedTo(clean(previous.text), [speaker]) !== undefined) return 'silent';
 
-  const owner = speaker === ownerLabel;
+  const owner = ownerLabels.includes(speaker);
   const body = addressed ?? cueText(text);
   const mute = MUTE.test(body);
   const unmute = UNMUTE.test(body);

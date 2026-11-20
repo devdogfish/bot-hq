@@ -1,5 +1,6 @@
 // Offline, in process: node --import tsx --test tests/meeting-routes.mjs
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { after, beforeEach, test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Hono } from 'hono';
@@ -8,6 +9,7 @@ Object.assign(process.env, {
   DB_PATH: ':memory:',
   SESSION_SECRET: 'meeting-test',
   XAI_API_KEY: 'test-xai-key',
+  HQ_MEETING_OWNER_NAMES: 'Jo Tester, , JO T. ',
   HQ_LOCAL_ENGINES: '1',
   HERMES_HOME_PRIMARY: '/nonexistent/meeting-test-home',
   HERMES_URL: 'https://hermes.meeting.test',
@@ -102,6 +104,20 @@ async function waitFor(condition) {
   assert.ok(condition(), 'Expected the background work to finish');
 }
 
+test('the Atlas Serve target restores the stripped meeting mount', async () => {
+  const runbook = readFileSync(new URL('../docs/atlas-deploy.md', import.meta.url), 'utf8');
+  const serve = runbook.match(/^sudo tailscale serve --bg --https=8787 --set-path=(\/api\/meeting) (http:\/\/\S+)$/m);
+  assert.ok(serve, 'Expected a meeting mount on the Agent listener');
+  const [, mount, target] = serve;
+  for (const route of ['session', 'gate', 'tool', 'end']) {
+    const stripped = `${mount}/${route}`.slice(mount.length);
+    const upstream = `${new URL(target).pathname}${stripped}`;
+    assert.equal((await post(upstream, {})).status, 401);
+    assert.equal((await post(upstream, {}, bearer('stacy'))).status, 400);
+    assert.equal((await post(stripped, {}, bearer('stacy'))).status, 404);
+  }
+});
+
 test('meeting auth accepts the existing MCP bearer and binds the session to its bot', async () => {
   const before = requests.length;
   for (const route of ['session', 'gate', 'tool', 'end']) {
@@ -148,7 +164,7 @@ test('primary MCP token loses access to the previous bot after reassignment', as
   await meetingPost('end', { call_id, transcript: [] });
 });
 
-test('gate applies direct address, follow-ups and mute without trusting speaker labels or ambiguous dialogue', async () => {
+test('gate applies direct address, follow-ups and bare cues from configured Owner display names', async () => {
   const { call_id } = await meetingPost('session', meeting);
   const ask = (speaker, text, lastTurnAt) => meetingPost('gate', gate(call_id, [say(speaker, text)], lastTurnAt));
   const before = requests.length;
@@ -156,6 +172,10 @@ test('gate applies direct address, follow-ups and mute without trusting speaker 
   assert.deepEqual(await ask('Priya', 'Stacy, what is the status?'), { decision: 'respond' });
   assert.deepEqual(await ask('Priya', 'Which update?', 1000), { decision: 'respond' });
   assert.deepEqual(await ask('Owner', 'Mute yourself.'), { decision: 'silent' });
+  assert.deepEqual(await ask('Jo Tester Jr.', 'Mute yourself.'), { decision: 'silent' });
+  assert.deepEqual(await ask('jO tEsTeR', 'Mute yourself.'), { decision: 'silent', action: 'mute' });
+  assert.deepEqual(await ask('Priya', 'Unmute.'), { decision: 'silent' });
+  assert.deepEqual(await ask('Jo T.', 'Unmute.'), { decision: 'silent', action: 'unmute' });
   assert.deepEqual(await ask('Priya', 'Stacy, mute yourself.'), { decision: 'silent', action: 'mute' });
   assert.deepEqual(await ask('Priya', 'Stacy, go ahead.'), { decision: 'silent' });
   assert.deepEqual(await ask('Priya', 'Stacy, unmute.'), { decision: 'silent', action: 'unmute' });

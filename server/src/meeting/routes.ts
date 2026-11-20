@@ -3,6 +3,7 @@ import { bodyLimit } from 'hono/body-limit';
 import { createMiddleware } from 'hono/factory';
 import { z } from 'zod';
 import { isPersonalAssistant } from '../agent/personal-assistant.js';
+import { env } from '../env.js';
 import { botFromMcpBearer, mcpCaller } from '../lib/mcp-auth.js';
 import { getBotRow } from '../store.js';
 import { beginCall, finishMeeting, ownCall, relayVoiceTool, voiceInstructions } from '../voice/index.js';
@@ -142,8 +143,7 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
     transcript,
     lastAgentTurnAt: last_agent_turn_at,
     mutedByRequest: call.mutedByRequest,
-    // Roster display names are participant-supplied, with no verified moderator identity.
-    ownerSpeaker: '',
+    ownerNames: env.meetingOwnerNames,
   });
   if (typeof decision === 'object') {
     call.mutedByRequest = decision.action === 'mute';
