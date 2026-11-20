@@ -176,7 +176,7 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
     ownerNames: env.meetingOwnerNames,
   });
   if (typeof decision === 'object') {
-    call.mutedByRequest = decision.action === 'mute';
+    if (decision.action !== 'leave') call.mutedByRequest = decision.action === 'mute';
     return c.json({ decision: 'silent', action: decision.action });
   }
   // A classifier reading participant dialogue cannot grant the floor for an ambiguous turn.
