@@ -464,8 +464,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       <div className="screen__body">
         <div ref={viewRef} className="screen__view" style={large ? undefined : { aspectRatio: `${width} / ${height}` }}>
           <div className="screen__canvas">
-            <div ref={snapshotRef} className="screen__snapshot" aria-hidden />
             <div ref={streamRef} className="screen__stream" />
+            <div ref={snapshotRef} className="screen__snapshot" aria-hidden />
           </div>
           {/* noVNC swallows clicks on its canvas, so the way into the large view is a button laid over it. */}
           {expandable && <button type="button" className="screen__expand" onClick={() => onExpand?.('watch')} aria-label={`Open ${bot.name}’s computer in the large view`} title="Open the large view" />}
