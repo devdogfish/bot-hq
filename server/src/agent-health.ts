@@ -1,6 +1,6 @@
 import { isIPv4 } from 'node:net';
 import { Hono } from 'hono';
-import { readHermesHealth } from './hermes-health.js';
+import { isHermesHealthy } from './hermes-health.js';
 
 function parseTargets(setting: string) {
   const targets = new Map<string, string>();
@@ -26,8 +26,8 @@ export function agentHealthRoutes(setting: string) {
     const origin = targets.get(c.req.param('agent'));
     if (!origin) return c.json({ ok: false }, 404);
 
-    const health = await readHermesHealth(origin, 2500, 8192);
-    return health?.status === 'ok' ? c.json({ ok: true }, 200) : c.json({ ok: false }, 503);
+    const ok = await isHermesHealthy(origin);
+    return c.json({ ok }, ok ? 200 : 503);
   });
   return routes;
 }

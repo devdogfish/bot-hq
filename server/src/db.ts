@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS rows (
   PRIMARY KEY (bot_id, generation, seq)
 );
 CREATE INDEX IF NOT EXISTS rows_rev ON rows(bot_id, updated_seq);
+CREATE TABLE IF NOT EXISTS agent_gateway_health (
+  bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
+  gateway_url TEXT NOT NULL,
+  consecutive_failures INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS llm_items (
   bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
@@ -167,6 +172,19 @@ addColumn('bots', 'engine_port', 'INTEGER');
 addColumn('bots', 'handback_at', 'INTEGER');
 addColumn('bots', 'hermes_url', 'TEXT');
 addColumn('bots', 'hermes_key', 'TEXT');
+addColumn('bots', 'gateway_revision', 'INTEGER NOT NULL DEFAULT 0');
+// Discard the old outage and invalidate outstanding probes in the same configuration write.
+db.exec(`
+CREATE TRIGGER IF NOT EXISTS reset_agent_gateway_health
+AFTER UPDATE OF hermes_url, engine, engine_port ON bots
+WHEN NULLIF(OLD.hermes_url, '') IS NOT NULLIF(NEW.hermes_url, '')
+  OR (NULLIF(NEW.hermes_url, '') IS NULL AND (OLD.engine IS NOT NEW.engine
+    OR (NEW.engine = 'managed' AND OLD.engine_port IS NOT NEW.engine_port)))
+BEGIN
+  UPDATE bots SET gateway_revision = gateway_revision + 1 WHERE id = NEW.id;
+  DELETE FROM agent_gateway_health WHERE bot_id = NEW.id;
+END;
+`);
 addColumn('bots', 'websockify_url', 'TEXT');
 addColumn('bots', 'vnc_password', 'TEXT');
 addColumn('bots', 'cdp_port', 'INTEGER');
