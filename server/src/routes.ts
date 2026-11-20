@@ -356,7 +356,6 @@ api.patch('/routines/:id', async (c) => {
   const r = db.prepare('SELECT r.*, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   if (r.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
-  if (enabled && r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   setRoutineEnabled(r.id, !!enabled);
   const next = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(r.id));
   enabled ? scheduleRoutine(next) : unscheduleRoutine(r.id);
@@ -370,7 +369,7 @@ api.post('/routines/:id/run', (c) => {
   if (isBotResetting(r.bot_id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   if (r.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
   if (r.paused) return c.json({ error: 'This bot is paused.' }, 409);
-  if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
+  if (r.schedule.startsWith('event:')) return c.json({ error: 'This routine requires an event.' }, 409);
   runRoutine(r.id, true);
   return c.json({ ok: true });
 });

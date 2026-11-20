@@ -122,9 +122,72 @@ desktop activity on both runs.
   Hermes launcher. `HERMES_BIN`, `HERMES_HOME_PRIMARY`, `ENGINES_DIR`,
   `HERMES_URL` and `HERMES_KEY` configure it. Existing bot IDs and
   transcripts persist. Register each Agent's new screen in the app.
-- Composio is disabled, including its Google sign-in path and app-triggered
-  routines. Owner one-time sign-in, scheduled routines and xAI voice remain.
+- Composio is disabled, including its Google sign-in path.
   Set `XAI_API_KEY` to enable voice and X research.
+
+## Event routines
+
+Provision an enabled routine on the target Bot with `schedule = 'event:<name>'`
+and a prompt describing what the Agent should do. Use one routine per event
+name on each Bot. To create one, ask the target Agent to create a routine with
+that event schedule and prompt. The URL uses the schedule suffix, which can differ from the
+routine's display name. For example, `event:gmail_push` receives deliveries at
+`POST /hooks/<botId>/gmail_push`. URL-encode the suffix as one path segment.
+
+Send JSON over HTTPS with `Authorization: Bearer <token>` and
+`Content-Type: application/json`.
+On the HQ host, derive the token as the hex HMAC-SHA256 of `hook:<botId>` keyed
+by `SESSION_SECRET`. Give the service only its Bot's hook token.
+
+```sh
+# Use a private terminal with SESSION_SECRET already in the environment.
+node -e 'const { createHmac } = require("node:crypto");
+const secret = process.env.SESSION_SECRET;
+if (!secret || !process.argv[1]) process.exit(1);
+console.log(createHmac("sha256", secret).update("hook:" + process.argv[1]).digest("hex"));' "$BOT_ID"
+```
+
+```json
+{
+  "event_id": "gmail:history:12345",
+  "summary": "New inbox activity",
+  "refs": { "messageId": "12345" }
+}
+```
+
+Use stable, source-prefixed IDs and reuse the ID when retrying. `event_id` and
+`summary` are nonempty strings. `refs` is a JSON object, for example
+`{"messageId":"12345"}` or `{"uidvalidity":345,"uid":90}`. The body limit is 16 KiB.
+
+| Status | Meaning |
+| --- | --- |
+| 202 | Event accepted, `{"status":"accepted"}` |
+| 200 | ID already accepted for this Bot, `{"status":"duplicate"}` |
+| 400 | Invalid JSON or fields |
+| 401 | Missing or invalid Bot bearer |
+| 404 | No enabled event routine available over HTTP for this Bot and schedule suffix |
+| 409 | Bot or routine is unavailable, or the pending batch is full. Retry with the same ID. |
+| 413 | Request body exceeds 16 KiB |
+
+In-process services can call `enqueueEvent(botId, routineName, { event_id, summary, refs })`
+with the same schedule suffix and fields. It returns `{ status }`. The possible
+statuses are `accepted`, `duplicate`, `not_found`, `unavailable`, `invalid`, and
+`too_large`. An event added to an existing batch also returns `accepted`. The
+private Personal Assistant accepts enabled event routines through this
+in-process path. Each event turn uses its own conversation and has no Owner
+chat tool context.
+
+HQ stores accepted IDs in SQLite per Bot across all its routines. The first
+event opens a 100 ms collection window. Events for the same routine continue
+to join that batch while it waits in the Bot's queue. At the start of the turn,
+HQ sends the routine prompt followed by the batch's summaries and references.
+Events arriving during the turn form the next batch. A batch can hold up to 64
+events or 64 KiB of serialized event data. HQ commits the payload and ID before
+acknowledging and recovers unclaimed batches on restart. Pausing, archiving or
+resetting a Bot invalidates its pending batches. Disabling or deleting a routine
+also invalidates its batch. Accepted IDs remain recorded in SQLite.
+HQ claims each batch once when the turn starts. A crash after that point can
+interrupt the turn.
 
 ## Draft-only gateway
 

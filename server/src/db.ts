@@ -120,6 +120,31 @@ CREATE TABLE IF NOT EXISTS routines (
   last_run_at INTEGER,
   created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS routines_event_schedule ON routines(bot_id, schedule)
+  WHERE enabled=1;
+CREATE TABLE IF NOT EXISTS seen_events (
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  event_id TEXT NOT NULL,
+  PRIMARY KEY (bot_id, event_id)
+);
+CREATE TABLE IF NOT EXISTS event_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  routine_id TEXT NOT NULL UNIQUE REFERENCES routines(id) ON DELETE CASCADE,
+  bot_id TEXT NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
+  schedule TEXT NOT NULL,
+  pause_revision INTEGER NOT NULL,
+  run_revision INTEGER NOT NULL,
+  ready_at INTEGER NOT NULL,
+  event_count INTEGER NOT NULL DEFAULT 0,
+  event_bytes INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS event_batches_bot ON event_batches(bot_id);
+CREATE TABLE IF NOT EXISTS pending_routine_events (
+  id INTEGER PRIMARY KEY,
+  batch_id INTEGER NOT NULL REFERENCES event_batches(id) ON DELETE CASCADE,
+  payload TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pending_routine_events_batch ON pending_routine_events(batch_id);
 CREATE TABLE IF NOT EXISTS jobs_monitor (
   bot_id TEXT PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
   uidvalidity INTEGER,
@@ -195,10 +220,10 @@ addColumn('secure_input_requests', 'submitted_one_time', 'INTEGER');
 addColumn('bots', 'screen_revision', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'paused', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'pause_revision', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('bots', 'kind', "TEXT NOT NULL DEFAULT 'agent'");
 addColumn('bots', 'parent_bot_id', 'TEXT REFERENCES bots(id) ON DELETE SET NULL');
 addColumn('bots', 'archived_at', 'INTEGER');
 addColumn('routines', 'consecutive_failures', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('routines', 'run_revision', 'INTEGER NOT NULL DEFAULT 0');
-db.prepare("UPDATE routines SET enabled=0 WHERE schedule LIKE 'event:%' AND enabled=1").run();
 
 export const now = () => Date.now();

@@ -187,16 +187,16 @@ export function describeCron(expr: string): string {
 }
 
 function describeEventSlug(schedule: string) {
-  const words = schedule.slice(6).split('_');
-  const app = words.shift() ?? '';
-  return `When ${app.charAt(0) + app.slice(1).toLowerCase()}: ${words.join(' ').toLowerCase()}`;
+  return `Event: ${schedule.slice('event:'.length)}`;
 }
 
 export function toRoutine(r: any): Routine {
   const enabled = !!r.enabled && r.archived_at == null;
   let nextRunAt: number | null = null;
   try {
-    nextRunAt = enabled ? new Cron(r.schedule, { timezone: r.timezone, paused: true }).nextRun()?.getTime() ?? null : null;
+    if (enabled && !r.schedule.startsWith('event:')) {
+      nextRunAt = new Cron(r.schedule, { timezone: r.timezone, paused: true }).nextRun()?.getTime() ?? null;
+    }
   } catch { /* invalid cron */ }
   return {
     id: r.id, botId: r.bot_id, name: r.name, prompt: r.prompt, schedule: r.schedule, timezone: r.timezone,

@@ -19,9 +19,18 @@ export function initRoutines(enqueue: EnqueueTurn, isBusy = (_botId: string) => 
   console.log(`[routines] scheduled ${jobs.size}`);
 }
 
+export function validateRoutineSchedule(schedule: string, timezone: string) {
+  if (schedule.startsWith('event:')) {
+    const name = schedule.slice('event:'.length);
+    if (!name.trim()) throw new Error('Event name is required.');
+    return;
+  }
+  new Cron(schedule, { timezone, paused: true });
+}
+
 export function scheduleRoutine(r: Pick<Routine, 'id' | 'botId' | 'name' | 'prompt' | 'schedule' | 'timezone'>) {
-  if (r.schedule.startsWith('event:')) return;
   unscheduleRoutine(r.id);
+  if (r.schedule.startsWith('event:')) return;
   try {
     const job = new Cron(r.schedule, { timezone: r.timezone || 'UTC', protect: true }, () => runRoutine(r.id));
     jobs.set(r.id, job);
@@ -79,8 +88,12 @@ export function runRoutine(id: string, manual = false) {
     if (botBusy(r.bot_id)) return;
   }
   if (!enqueueFn(r.bot_id, { type: 'routine', routineId: id, name: r.name, prompt: r.prompt, runRevision: r.run_revision })) return;
-  db.prepare('UPDATE routines SET last_run_at=? WHERE id=?').run(now(), id);
-  appendRow(r.bot_id, 'event', { type: 'event', event: 'routine-run', text: `Running routine: ${r.name}`, ref: id });
+  recordRoutineRun(r.bot_id, id, r.name);
+}
+
+export function recordRoutineRun(botId: string, routineId: string, name: string) {
+  db.prepare('UPDATE routines SET last_run_at=? WHERE id=?').run(now(), routineId);
+  appendRow(botId, 'event', { type: 'event', event: 'routine-run', text: `Running routine: ${name}`, ref: routineId });
 }
 
 /** Reconcile this bot's timers after an archive change, preserving its routine preferences. */

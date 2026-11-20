@@ -3,12 +3,11 @@ import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { writeLibraryFile } from '../library.js';
 import { env } from '../env.js';
-import { appendRow, getBotRow, listRoutines, toRoutine, describeCron } from '../store.js';
-import { scheduleRoutine, setRoutineEnabled, unscheduleRoutine } from '../routines.js';
+import { appendRow, getBotRow, listRoutines, toRoutine } from '../store.js';
+import { scheduleRoutine, setRoutineEnabled, unscheduleRoutine, validateRoutineSchedule } from '../routines.js';
 import { setCheckins } from '../proactive.js';
 import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
-import { Cron } from 'croner';
 import { OWNER_EMAIL_TOOL } from './owner-email-policy.js';
 import { SECURE_INPUT_KINDS, SECURE_INPUT_TOOL } from '../secure-input.js';
 
@@ -143,17 +142,17 @@ export const TOOLS: ToolDef[] = [
   },
   {
     name: 'create_routine',
-    description: 'Create a recurring routine you will run on a schedule. `schedule` is a 5-field cron expression (minute hour day-of-month month day-of-week), e.g. "0 8 * * 1-5" for weekdays at 8:00. `prompt` is the instruction you will follow each time it runs.',
+    description: 'Create a routine. `schedule` can be a 5-field cron expression such as "0 8 * * 1-5" for weekdays at 8:00, or "event:<name>" for an external event. `prompt` is the instruction you will follow each time it runs.',
     parameters: obj({ name: { type: 'string' }, prompt: { type: 'string' }, schedule: { type: 'string' }, timezone: { type: 'string', description: 'IANA timezone, e.g. America/New_York' } }, ['name', 'prompt', 'schedule']),
     activity: 'working',
     label: 'Setting up a routine',
     impl: async (a, ctx) => {
-      try { new Cron(a.schedule, { paused: true, timezone: a.timezone || 'UTC' }); } catch (e: any) { return { output: `Invalid schedule: ${e.message}` }; }
+      try { validateRoutineSchedule(a.schedule, a.timezone || 'UTC'); } catch (e: any) { return { output: `Invalid schedule: ${e.message}` }; }
       const id = newId('rt');
       db.prepare('INSERT INTO routines(id,bot_id,name,prompt,schedule,timezone,enabled,created_at) VALUES (?,?,?,?,?,?,1,?)').run(id, ctx.botId, a.name, a.prompt, a.schedule, a.timezone || 'UTC', now());
       const r = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(id));
       scheduleRoutine(r);
-      appendRow(ctx.botId, 'event', { type: 'event', event: 'routine-created', text: `Routine created: ${a.name} · ${describeCron(a.schedule)}`, ref: id });
+      appendRow(ctx.botId, 'event', { type: 'event', event: 'routine-created', text: `Routine created: ${a.name} · ${r.description}`, ref: id });
       hub.emit(ctx.userId, { type: 'routines', botId: ctx.botId });
       return { output: JSON.stringify({ ok: true, routine: r }), summary: `Created routine ${a.name}` };
     },
@@ -199,7 +198,7 @@ export const TOOLS: ToolDef[] = [
       const cur = db.prepare('SELECT * FROM routines WHERE id=? AND bot_id=?').get(a.routine_id, ctx.botId) as any;
       if (!cur) return { output: 'No such routine.' };
       const next = { ...cur, name: a.name ?? cur.name, prompt: a.prompt ?? cur.prompt, schedule: a.schedule ?? cur.schedule, timezone: a.timezone ?? cur.timezone, enabled: a.enabled === undefined ? cur.enabled : a.enabled ? 1 : 0 };
-      try { new Cron(next.schedule, { paused: true, timezone: next.timezone }); } catch (e: any) { return { output: `Invalid schedule: ${e.message}` }; }
+      try { validateRoutineSchedule(next.schedule, next.timezone); } catch (e: any) { return { output: `Invalid schedule: ${e.message}` }; }
       db.transaction(() => {
         db.prepare('UPDATE routines SET name=?,prompt=?,schedule=?,timezone=? WHERE id=?').run(next.name, next.prompt, next.schedule, next.timezone, cur.id);
         if (next.enabled !== cur.enabled) setRoutineEnabled(cur.id, !!next.enabled);
