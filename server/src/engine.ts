@@ -359,7 +359,7 @@ function gatewayAddress(url: URL) {
 
 /** The deployment operator provides a separate, tool-free Runs gateway for each enabled bot. */
 export function draftEngineFor(bot: DraftBot): Engine | undefined {
-  if (bot.archived_at != null || bot.kind === 'room' || bot.id === process.env.HQ_TYLER_PERSONAL_BOT_ID) return;
+  if (bot.archived_at != null || bot.kind === 'room' || bot.id === process.env.HQ_PERSONAL_BOT_ID) return;
   const config = process.env.HQ_DRAFT_GATEWAYS;
   if (!config) return;
   let gateway: { url?: unknown; key?: unknown } | undefined;

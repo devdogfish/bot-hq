@@ -368,25 +368,25 @@ Owner's named approval for Bot HQ, record `accepted` and the receipt ID
 when delivery is confirmed, or `rejected` when the provider proves refusal.
 Keep unresolved rows across restarts and upgrades.
 
-## Tyler's private Personal Assistant
+## James, the Personal Assistant
 
-Use the approved [Quantself Hermes spec](https://github.com/devdogfish/quantself/blob/main/docs/agents/hermes-setup.md) and get a named yes for the Tyler gateway, the Bot HQ and Quantself releases, and the Tailscale grant. On Tyler, the Quantself installer stages a separate locked service account and Hermes home. The private gateway binds TCP 8643 on Tyler's Tailscale IP. Limit that port to Bot HQ. Keep the personal record out of group chats and give it its own gateway key and MCP token.
+James Diaz is the Owner's Personal Assistant and his own Agent ([Quantself ADR 0060](https://github.com/devdogfish/quantself/blob/main/docs/adr/0060-muse-owns-meta-and-intake-gates-stay-few.md)). Use the approved [Quantself Hermes spec](https://github.com/devdogfish/quantself/blob/main/docs/agents/hermes-setup.md) and get a named yes for James's VM, the Bot HQ and Quantself releases, and any Tailscale change. James runs a gateway-only Hermes on his own Atlas VM. Limit his API port to Bot HQ. Keep his record out of group chats and give it its own gateway key and MCP token.
 
-In Bot HQ, pair the exact new record ID with Tyler's existing business identity in `HQ_OWNER_EMAIL_TARGETS`. Set `HQ_TYLER_PERSONAL_BOT_ID` to the private record ID and `HQ_TYLER_PERSONAL_GATEWAY_ORIGIN` to the exact isolated gateway origin. Use the registered personal record's own MCP URL in Tyler's private managed config.
+Set `HQ_PERSONAL_BOT_ID` to James's record ID and `HQ_PERSONAL_GATEWAY_ORIGIN` to his exact gateway origin. Bot HQ gives that record only the personal tools, and only while no other Bot uses the same gateway and his record is not one of the business Agents in `HQ_OWNER_EMAIL_TARGETS`. Use his record's own MCP URL in James's managed config.
 
 The Owner enables Gmail API in a Google Cloud project and downloads a Desktop OAuth client JSON. On the Owner's Mac, use a private directory and run the consent helper with the chosen mailbox and a new output file. Review the two Gmail scopes in the browser. The helper verifies the account and writes root-stageable settings without displaying tokens.
 
 ```sh
-python3 -B scripts/authorize-personal-gmail.py CLIENT.json OWNER_EMAIL PRIVATE_DIRECTORY/tyler-gmail.env
+python3 -B scripts/authorize-personal-gmail.py CLIENT.json OWNER_EMAIL PRIVATE_DIRECTORY/personal-gmail.env
 ```
 
-For the separately approved mailbox-management release, rerun the same command with `--mailbox-actions` and a new output path. Review the full Gmail scope in Google consent. Set `HQ_TYLER_GMAIL_MAILBOX_ACTIONS=1` only alongside that verified grant. With the setting unset, the existing read/send credential supports unread filtering. The full grant enables Tyler’s one-message archive, trash, and existing-label tools, plus permanent deletion after its own Owner card. Every send remains gated by the separate exact-email card.
+For the separately approved mailbox-management release, rerun the same command with `--mailbox-actions` and a new output path. Review the full Gmail scope in Google consent. Set `HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS=1` only alongside that verified grant. With the setting unset, the existing read/send credential supports unread filtering. The full grant enables James’s one-message archive, trash, and existing-label tools, plus permanent deletion after its own Owner card. Every send remains gated by the separate exact-email card.
 
 Move the four generated Gmail settings into Bot HQ's protected runtime environment using the Owner's private credential handoff. Google's External Testing mode uses expiring refresh tokens. Verify the consent state before relying on unattended refresh. [Google OAuth refresh token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
 
-Set `HQ_TYLER_QUANTSELF_ORIGIN` to the private Quantself HTTPS origin and `HQ_TYLER_QUANTSELF_KEY` to the dedicated Personal Assistant key with only `personal-assistant:create`. Quantself binds that key's Agent client ID through `QUANTSELF_PERSONAL_ASSISTANT_CLIENT_ID`.
+Set `HQ_PERSONAL_QUANTSELF_ORIGIN` to the private Quantself HTTPS origin and `HQ_PERSONAL_QUANTSELF_KEY` to the dedicated Personal Assistant key with only `personal-assistant:create`. Quantself binds that key's Agent client ID through `QUANTSELF_PERSONAL_ASSISTANT_CLIENT_ID`.
 
-Verify Tyler's private chat can read one agreed Gmail message and submit one exact approval-gated test reply. Check that the business Agent and the other Agents cannot call the personal tools, and verify creation and Owner Undo of one test Appointment and To-Do. For rollback, pause the private record, stop its gateway, and remove the Gmail and Quantself credentials from Bot HQ. Retain the private record ID in the configuration so its restricted tool policy remains in force. Revoke both grants when retiring access.
+Verify James's private chat can read one agreed Gmail message and submit one exact approval-gated test reply. Check that the business Agent and the other Agents cannot call the personal tools, and verify creation and Owner Undo of one test Appointment and To-Do. For rollback, pause the private record, stop its gateway, and remove the Gmail and Quantself credentials from Bot HQ. Retain the private record ID in the configuration so its restricted tool policy remains in force. Revoke both grants when retiring access.
 
 ## Verify and record
 

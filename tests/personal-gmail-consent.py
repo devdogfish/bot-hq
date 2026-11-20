@@ -32,7 +32,7 @@ class ConsentTest(unittest.TestCase):
                 consent.authorize(client_file, "owner@example.net", output)
             self.assertEqual(stat.S_IMODE(output.stat().st_mode), 0o600)
             private = output.read_text()
-            self.assertIn("HQ_TYLER_GMAIL_REFRESH_TOKEN=fixture-refresh", private)
+            self.assertIn("HQ_PERSONAL_GMAIL_REFRESH_TOKEN=fixture-refresh", private)
             self.assertNotIn("fixture-access", private)
             self.assertNotIn("fixture-", report.getvalue())
             with self.assertRaises(ValueError):

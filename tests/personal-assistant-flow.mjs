@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { setTimeout as wait } from 'node:timers/promises';
 import { Hono } from 'hono';
 
-const gateway = 'https://tyler-personal.example.test';
+const gateway = 'https://james.example.test';
 Object.assign(process.env, {
   SESSION_SECRET: 'test-only-personal-assistant',
   DB_PATH: ':memory:',
@@ -14,13 +14,13 @@ Object.assign(process.env, {
   HQ_OWNER_EMAIL_TO: JSON.stringify(['owner@example.net', 'alt@example.net', 'other@example.net']),
   BOT_HQ_EMAIL_SES_ACCESS_KEY_ID: 'test-ses-key',
   BOT_HQ_EMAIL_SES_SECRET_ACCESS_KEY: 'test-ses-secret',
-  HQ_TYLER_GMAIL_MAILBOX: 'owner@example.net',
-  HQ_TYLER_GMAIL_CLIENT_ID: 'test-client',
-  HQ_TYLER_GMAIL_CLIENT_SECRET: 'test-client-secret',
-  HQ_TYLER_GMAIL_REFRESH_TOKEN: 'test-refresh-token',
-  HQ_TYLER_PERSONAL_GATEWAY_ORIGIN: gateway,
-  HQ_TYLER_QUANTSELF_ORIGIN: 'https://quantself.example.test',
-  HQ_TYLER_QUANTSELF_KEY: 'test-create-only-key',
+  HQ_PERSONAL_GMAIL_MAILBOX: 'owner@example.net',
+  HQ_PERSONAL_GMAIL_CLIENT_ID: 'test-client',
+  HQ_PERSONAL_GMAIL_CLIENT_SECRET: 'test-client-secret',
+  HQ_PERSONAL_GMAIL_REFRESH_TOKEN: 'test-refresh-token',
+  HQ_PERSONAL_GATEWAY_ORIGIN: gateway,
+  HQ_PERSONAL_QUANTSELF_ORIGIN: 'https://quantself.example.test',
+  HQ_PERSONAL_QUANTSELF_KEY: 'test-create-only-key',
 });
 
 const { api } = await import('../server/dist/routes.js');
@@ -43,7 +43,7 @@ async function until(check) {
   assert.fail('Expected Bot HQ state was not reached');
 }
 
-test('a private Tyler turn gates Gmail, captures scoped facts, and requires exact reply approval', async (t) => {
+test('a private James turn gates Gmail, captures scoped facts, and requires exact reply approval', async (t) => {
   const hq = new Hono();
   hq.route('/api', api);
   hq.route('/mcp', mcpApi);
@@ -62,11 +62,11 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   }
   const { bots: [tyler] } = await request('/bots');
   const { bot: other } = await request('/bots', 'POST', { name: 'Stacy' });
-  const { bot: personal } = await request('/bots', 'POST', { name: 'Tyler Personal' });
+  const { bot: personal } = await request('/bots', 'POST', { name: 'James' });
   db.prepare('UPDATE bots SET hermes_url=?,hermes_key=? WHERE id=?')
     .run(gateway, 'test-personal-gateway', personal.id);
   process.env.HQ_OWNER_EMAIL_TARGETS = JSON.stringify({ tyler: tyler.id, stacy: other.id });
-  process.env.HQ_TYLER_PERSONAL_BOT_ID = personal.id;
+  process.env.HQ_PERSONAL_BOT_ID = personal.id;
   const captures = [];
   const readCalls = [];
   const sends = [];
@@ -143,8 +143,8 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   assert.equal(readCalls.length, 0);
 
   assert(!(await rpc(personal.id, 'tools/list')).tools.some(({ name }) => name === 'stage_personal_delete'));
-  process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS = '1';
-  t.after(() => delete process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS);
+  process.env.HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS = '1';
+  t.after(() => delete process.env.HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS);
   for (const decision of ['deny', 'allow']) {
     stream = undefined;
     await request(path + '/messages', 'POST', { text: 'Check my personal email and reply.' });
@@ -206,7 +206,7 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   });
   const changes = [];
   const deleteTool = 'mcp__hq__stage_personal_delete';
-  process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS = '1';
+  process.env.HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS = '1';
   try {
     for (const decision of ['deny', 'allow']) {
       stream = undefined;
@@ -249,7 +249,29 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
     assert.deepEqual(changes.at(-1), { id: 'fixture', action: 'archive', label: undefined });
     assert.equal(sends.length, 1);
   } finally {
-    delete process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS;
+    delete process.env.HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS;
   }
 
+});
+
+test('James is ready only on his own gateway, outside the business Agents', async () => {
+  const { personalAssistantPaired } = await import('../server/dist/agent/personal-assistant.js');
+  const personal = process.env.HQ_PERSONAL_BOT_ID;
+  const targets = process.env.HQ_OWNER_EMAIL_TARGETS;
+  const [business] = Object.values(JSON.parse(targets));
+  assert.equal(personalAssistantPaired(personal), true);
+  const original = db.prepare('SELECT hermes_url FROM bots WHERE id=?').get(business).hermes_url;
+  try {
+    db.prepare('UPDATE bots SET hermes_url=? WHERE id=?').run(process.env.HQ_PERSONAL_GATEWAY_ORIGIN, business);
+    assert.equal(personalAssistantPaired(personal), false, 'a business Agent shares his gateway');
+  } finally {
+    db.prepare('UPDATE bots SET hermes_url=? WHERE id=?').run(original, business);
+  }
+  process.env.HQ_OWNER_EMAIL_TARGETS = JSON.stringify({ ...JSON.parse(targets), tyler: personal });
+  try {
+    assert.equal(personalAssistantPaired(personal), false, 'he is listed as a business Agent');
+  } finally {
+    process.env.HQ_OWNER_EMAIL_TARGETS = targets;
+  }
+  assert.equal(personalAssistantPaired(personal), true);
 });

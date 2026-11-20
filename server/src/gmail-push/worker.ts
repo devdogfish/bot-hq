@@ -74,7 +74,7 @@ export function startGmailPushWorker({ gmail, subscription, store, enqueueEvent,
       try {
         for (const [index, headers] of results.entries()) {
           if (!headers) continue;
-          if (!canDeliver()) throw new Error('Tyler Personal pairing unavailable');
+          if (!canDeliver()) throw new Error('Personal Assistant unavailable');
           const id = batch[index];
           const { from, subject } = headers;
           const result = await enqueueEvent(botId, ROUTINE, {
@@ -96,7 +96,7 @@ export function startGmailPushWorker({ gmail, subscription, store, enqueueEvent,
     const cursor = store.cursor();
     if (!cursor) throw new Error('Gmail watch is not initialized');
     if (!newer(target, cursor)) return;
-    if (!canDeliver()) throw new Error('Tyler Personal pairing unavailable');
+    if (!canDeliver()) throw new Error('Personal Assistant unavailable');
     let changes = await gmail.history(cursor);
     if (!changes) {
       // Take the anchor before listing so concurrent arrivals can be replayed from it.
