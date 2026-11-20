@@ -16,6 +16,8 @@ interface TurnInput {
   mutedByRequest: boolean;
   /** Owner display labels used for conversational cues, defaulting to "Owner". */
   ownerNames?: readonly string[];
+  /** Exactly one other person is in the call, so everything they say is meant for the Agent. */
+  oneToOne?: boolean;
 }
 
 type SpeakDecision = 'respond' | 'silent';
@@ -80,7 +82,7 @@ function addressedToOther(text: string, names: readonly string[]): boolean {
   });
 }
 
-export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mutedByRequest, ownerNames = ['Owner'] }: TurnInput): TurnDecision {
+export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mutedByRequest, ownerNames = ['Owner'], oneToOne = false }: TurnInput): TurnDecision {
   const latest = transcript.at(-1);
   if (!latest) return 'silent';
 
@@ -91,6 +93,16 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
 
   const text = clean(latest.text);
   if (!text) return 'silent';
+  if (oneToOne) {
+    // Nobody else is in the call, so every turn is meant for the Agent.
+    const body = cueText(text.replace(GREETING, '').replace(DISCOURSE_MARKER, '').trimStart())
+      .replace(new RegExp(`^@?(?:${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})[,:]?\\s*`, 'iu'), '');
+    // A guest's request to leave gets a spoken reply instead; only the host can send the Agent away.
+    if (LEAVE.test(body)) return latest.host === true ? { action: 'leave' } : 'respond';
+    if (MUTE.test(body)) return { action: 'mute' };
+    if (UNMUTE.test(body)) return { action: 'unmute' };
+    return mutedByRequest ? 'silent' : 'respond';
+  }
   const ownerLabels = ownerNames.map((name) => clean(name).toLowerCase());
   const otherNames = [...new Set([...transcript.map((turn) => clean(turn.speaker).toLowerCase()), ...ownerLabels])]
     .filter((name) => name && name !== speaker && !agentSpeakers.has(name));
