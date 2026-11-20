@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Bot, VoiceOption } from '@shared/types';
 import { useStore } from '../store';
 import { voiceApi, type VoiceOptions } from '../voice/api';
@@ -19,7 +19,10 @@ const optionsApi: {
   providerOptions?: () => Promise<SettingsOptions>;
 } = voiceApi;
 
-const XAI_ONLY = [{ id: 'xai', name: 'xAI', available: true }] as const;
+const KNOWN_PROVIDERS = [
+  { id: 'xai', name: 'xAI' },
+  { id: 'elevenlabs', name: 'ElevenLabs' },
+] as const;
 const FALLBACK: SettingsOptions = {
   voices: ['ara', 'eve', 'leo', 'luna', 'rex', 'sal'].map((id) => ({ id, name: id[0].toUpperCase() + id.slice(1) })),
   languages: [{ code: 'auto', name: 'Auto-detect' }, { code: 'en', name: 'English' }],
@@ -32,6 +35,8 @@ const speedLabel = (s: number) => `${Number(s.toFixed(2))}x`;
 export function VoiceSettings({ bot }: { bot: VoiceBot }) {
   const [opts, setOpts] = useState<SettingsOptions>(FALLBACK);
   const [providerMenu, setProviderMenu] = useState(false);
+  const providerPicker = useRef<HTMLSpanElement>(null);
+  const providerTrigger = useRef<HTMLButtonElement>(null);
   const [changingVoice, setChangingVoice] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +44,36 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
 
   useEffect(() => { (optionsApi.providerOptions ?? optionsApi.options)().then(setOpts).catch(() => {}); }, []);
   useEffect(() => { setError(null); setProviderMenu(false); }, [bot.id]);
+
+  const enabledProviderItems = () => Array.from(
+    providerPicker.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]:enabled') ?? [],
+  );
+
+  useEffect(() => {
+    if (!providerMenu) return;
+    const items = enabledProviderItems();
+    (items.find((item) => item.getAttribute('aria-checked') === 'true') ?? items[0])?.focus();
+  }, [providerMenu]);
+
+  const onProviderKey = (e: KeyboardEvent<HTMLSpanElement>) => {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+    if (changingVoice || (!providerMenu && e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+    e.preventDefault();
+    if (!providerMenu) {
+      setProviderMenu(true);
+      return;
+    }
+    const items = enabledProviderItems();
+    if (!items.length) return;
+    const current = items.findIndex((item) => item === document.activeElement);
+    if (e.key === 'Home' || e.key === 'End') {
+      items[e.key === 'Home' ? 0 : items.length - 1].focus();
+    } else {
+      const direction = e.key === 'ArrowDown' ? 1 : -1;
+      const next = current < 0 ? (direction === 1 ? 0 : items.length - 1) : (current + direction + items.length) % items.length;
+      items[next].focus();
+    }
+  };
 
   const updateBot = (patch: Partial<Pick<VoiceBot, 'voice' | 'voiceSpeed' | 'voiceLanguage' | 'voiceProvider'>>) => {
     useStore.setState((s) => ({ bots: s.bots.map((b) => (b.id === bot.id ? { ...b, ...patch } : b)) }));
@@ -80,8 +115,9 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
     finally { setPreviewing(false); }
   };
 
-  const providers = opts.providers ?? XAI_ONLY;
-  const provider = providers.find((p) => p.id === bot.voiceProvider) ?? providers.find((p) => p.id === 'xai') ?? XAI_ONLY[0];
+  const providers = KNOWN_PROVIDERS.map((fallback) => opts.providers?.find((p) => p.id === fallback.id)
+    ?? { ...fallback, available: opts.providers == null && fallback.id === 'xai' });
+  const provider = providers.find((p) => p.id === bot.voiceProvider) ?? providers[0];
   const providerVoices = (id: ProviderId) => Array.isArray(opts.voices) ? (id === 'xai' ? opts.voices : []) : opts.voices[id] ?? [];
   const catalog = providerVoices(provider.id);
   const voices = catalog.some((v) => v.id === bot.voice) ? catalog : [{ id: bot.voice, name: bot.voice }, ...catalog];
@@ -91,19 +127,24 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
     <div className="panel-card">
       <div className="panel-row panel-row--setting">
         <span>Provider</span>
-        <span className="model-picker voice-provider">
-          <button type="button" className="mini-select mini-select--button" aria-label={`Provider: ${provider.name}`}
+        <span ref={providerPicker} className="model-picker voice-provider" onKeyDown={onProviderKey}
+          onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget)) setProviderMenu(false); }}>
+          <button ref={providerTrigger} type="button" className="mini-select mini-select--button" aria-label={`Provider: ${provider.name}`}
             aria-haspopup="menu" aria-expanded={providerMenu} disabled={changingVoice}
             onMouseDown={(e) => { if (providerMenu) e.stopPropagation(); }} onClick={() => setProviderMenu(!providerMenu)}>
             <span>{provider.name}</span>
             <Icon name="chev_down" size={10} opacity={0.66} />
           </button>
           {providerMenu && (
-            <Menu align="right" onClose={() => setProviderMenu(false)} items={[]}>
+            <Menu align="right" onClose={() => {
+              if (providerPicker.current?.contains(document.activeElement)) providerTrigger.current?.focus();
+              setProviderMenu(false);
+            }} items={[]}>
               {providers.map((p) => (
-                <button key={p.id} type="button" role="menuitemradio" aria-checked={p.id === provider.id}
+                <button key={p.id} type="button" role="menuitemradio" tabIndex={-1} aria-checked={p.id === provider.id}
                   className="menu__item model-menu__item" disabled={!p.available}
                   onClick={() => {
+                    providerTrigger.current?.focus();
                     setProviderMenu(false);
                     if (p.id === provider.id) return;
                     const choices = providerVoices(p.id);
@@ -121,7 +162,7 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
       </div>
       <div className="panel-row panel-row--setting">
         <span>Voice</span>
-        <fieldset className="voice-setting__right" disabled={changingVoice}>
+        <fieldset className="voice-setting__right" disabled={changingVoice || !provider.available}>
           <button type="button" className="voice-preview" onClick={preview} disabled={previewing} title={`Hear ${bot.name}'s voice`}>{previewing ? 'Playing…' : 'Preview'}</button>
           <MiniSelect label="Voice" value={bot.voice} options={voices.map((v) => ({ value: v.id, label: v.name }))} onChange={(voice) => save({ voice })} />
         </fieldset>
@@ -134,7 +175,7 @@ export function VoiceSettings({ bot }: { bot: VoiceBot }) {
         <span>Language</span>
         <MiniSelect label="Language" value={bot.voiceLanguage} options={opts.languages.map((l) => ({ value: l.code, label: l.name }))} onChange={(voiceLanguage) => save({ voiceLanguage })} />
       </div>
-      <button type="button" className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`} disabled={changingVoice && !inCall} onClick={() => (inCall ? endCall() : startCall(bot.id))}>
+      <button type="button" className={`panel-row panel-row--action panel-row--call${inCall ? ' is-active' : ''}`} disabled={(changingVoice || !provider.available) && !inCall} onClick={() => (inCall ? endCall() : startCall(bot.id))}>
         <Icon name="voice_a" size={14} opacity={inCall ? 1 : 0.56} /> {inCall ? 'End voice chat' : 'Start voice chat'}
       </button>
       {error && <div className="voice-error">{error}</div>}
