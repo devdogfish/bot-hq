@@ -4,8 +4,9 @@ import { BotAvatar, BotAvatarFor, PICKER_SHAPES } from '../../avatar/BotAvatar';
 import { COLOR_ORDER, botVars, palette } from '../../lib/colors';
 import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
-import { useStore } from '../../store';
+import { isArchived, useStore } from '../../store';
 import { Icon } from '../Icon';
+import { MiniSelect } from '../MiniSelect';
 import { Modal } from '../modals/Modal';
 import { Glyph } from './glyphs';
 import { ConfirmButton, Field, Segmented, Switch, nextRunLabel, shortDate } from './ui';
@@ -86,16 +87,27 @@ export function BotSettingsModal() {
 
 // ---------------------------------------------------------------------------
 
-type Draft = Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>;
-const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description: b.description, instructions: b.instructions, avatarShape: b.avatarShape, avatarColor: b.avatarColor, effort: b.effort, mode: b.mode });
+type Draft = Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode' | 'parentBotId'>;
+const draftOf = (b: Bot): Draft => ({ name: b.name, label: b.label, description: b.description, instructions: b.instructions, avatarShape: b.avatarShape, avatarColor: b.avatarColor, effort: b.effort, mode: b.mode, parentBotId: b.parentBotId });
 
 function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
+  const bots = useStore((s) => s.bots);
+  const archived = useStore((s) => isArchived(bot, s.pendingArchive));
+  const archiveError = useStore((s) => s.archiveError);
+  const setArchived = useStore((s) => s.setBotArchived);
+  const pendingArchive = useStore((s) => s.pendingArchive);
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   useEffect(() => { setDraft(draftOf(bot)); }, [bot.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const descendants = new Set([bot.id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const b of bots) if (b.parentBotId && descendants.has(b.parentBotId) && !descendants.has(b.id)) { descendants.add(b.id); grew = true; }
+  }
+  const parentChoices = bots.filter((b) => !descendants.has(b.id) && (!isArchived(b, pendingArchive) || b.id === bot.parentBotId));
   const base = draftOf(bot);
   const changed = (Object.keys(draft) as (keyof Draft)[]).filter((k) => draft[k] !== base[k]);
   const dirty = changed.length > 0;
@@ -144,6 +156,10 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
       </section>
 
       <section className="cfg-section">
+        <Field label="Parent Bot">
+          <MiniSelect label="Parent Bot" value={draft.parentBotId ?? ''} onChange={(v) => put('parentBotId', v || null)}
+            options={[{ value: '', label: 'None' }, ...parentChoices.map((candidate) => ({ value: candidate.id, label: candidate.name }))]} />
+        </Field>
         <Field label="About" htmlFor="cfg-about">
           <textarea id="cfg-about" className="text-input cfg-textarea" rows={2} value={draft.description} maxLength={500} placeholder="What is this Bot for?" onChange={(e) => put('description', e.target.value)} />
         </Field>
@@ -186,6 +202,21 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
             </div>
           )}
         </div>
+      </section>
+
+      <section className="cfg-section">
+        <div className="cfg-card">
+          <div className="cfg-row">
+            <div className="cfg-row__text">
+              <div className="cfg-row__title">{archived ? 'Archived' : 'Archive Bot'}</div>
+              <div className="cfg-row__sub">{archived ? 'Unarchive to return to the sidebar and resume enabled routines.' : 'Hides this Bot and stops its routines and gateway connection.'}</div>
+            </div>
+            <button type="button" className="cfg-btn cfg-btn--secondary" onClick={() => void setArchived(bot.id, !archived)}>
+              {archived ? 'Unarchive' : 'Archive'}
+            </button>
+          </div>
+        </div>
+        {archiveError && <div className="cfg-error" role="alert">{archiveError}</div>}
       </section>
 
       <section className="cfg-section">
@@ -377,6 +408,7 @@ function MemoriesTab({ bot, data, onChange }: { bot: Bot; data: BotSettingsBundl
 // ---------------------------------------------------------------------------
 
 function RoutinesTab({ bot, routines }: { bot: Bot; routines: Routine[] | undefined }) {
+  const archived = useStore((s) => bot.archivedAt != null || isArchived(bot, s.pendingArchive));
   const [flash, setFlash] = useState<string | null>(null);
   const say = (t: string) => { setFlash(t); setTimeout(() => setFlash(null), 2200); };
   return (
@@ -384,7 +416,7 @@ function RoutinesTab({ bot, routines }: { bot: Bot; routines: Routine[] | undefi
       <div className="cfg-page__head">
         <div>
           <div className="cfg-page__title">Routines</div>
-          <div className="cfg-page__sub">Recurring jobs {bot.name} runs on a schedule. To add or change one, ask in chat.</div>
+          <div className="cfg-page__sub">{archived ? 'Routines are paused while this Bot is archived.' : `Recurring jobs ${bot.name} runs on a schedule. To add or change one, ask in chat.`}</div>
         </div>
         {flash && <span className="cfg-savebar__note" role="status">{flash}</span>}
       </div>
@@ -392,14 +424,14 @@ function RoutinesTab({ bot, routines }: { bot: Bot; routines: Routine[] | undefi
         <div className="cfg-empty">No routines yet. Try asking {bot.name}: “every Friday at 4pm, recap my week”.</div>
       ) : (
         <div className="cfg-list">
-          {routines.map((r) => <RoutineItem key={r.id} r={r} onFlash={say} />)}
+          {routines.map((r) => <RoutineItem key={r.id} r={r} archived={archived} onFlash={say} />)}
         </div>
       )}
     </div>
   );
 }
 
-function RoutineItem({ r, onFlash }: { r: Routine; onFlash: (t: string) => void }) {
+function RoutineItem({ r, archived, onFlash }: { r: Routine; archived: boolean; onFlash: (t: string) => void }) {
   const [enabled, setEnabled] = useState(r.enabled);
   useEffect(() => setEnabled(r.enabled), [r.enabled]);
   const toggle = async (v: boolean) => {
@@ -411,15 +443,15 @@ function RoutineItem({ r, onFlash }: { r: Routine; onFlash: (t: string) => void 
       <span className="cfg-item__icon"><Icon name="clock" size={14} /></span>
       <div className="cfg-item__text">
         <div className="cfg-item__title">{r.name}</div>
-        <div className="cfg-item__sub">{enabled ? [r.description || r.schedule, nextRunLabel(r.nextRunAt, r.timezone)].filter(Boolean).join(' · ') : 'Paused'}</div>
+        <div className="cfg-item__sub">{enabled && !archived ? [r.description || r.schedule, nextRunLabel(r.nextRunAt, r.timezone)].filter(Boolean).join(' · ') : 'Paused'}</div>
         <div className="cfg-item__prompt">{r.prompt}</div>
       </div>
       <div className="cfg-item__actions">
-        <button type="button" className="cfg-icon-btn" title="Run now" aria-label={`Run ${r.name} now`} onClick={() => configApi.runRoutine(r.id).then(() => onFlash('Running now')).catch((e) => onFlash(e.message))}>
+        <button type="button" className="cfg-icon-btn" disabled={archived} title="Run now" aria-label={`Run ${r.name} now`} onClick={() => configApi.runRoutine(r.id).then(() => onFlash('Running now')).catch((e) => onFlash(e.message))}>
           <Glyph name="play" size={13} />
         </button>
         <ConfirmButton className="cfg-icon-btn" title="Delete" onConfirm={() => configApi.deleteRoutine(r.id).then(() => onFlash('Deleted'))}><Glyph name="trash" size={14} /></ConfirmButton>
-        <Switch on={enabled} onChange={toggle} label={`${r.name} ${enabled ? 'on' : 'paused'}`} />
+        <Switch on={enabled && !archived} disabled={archived} onChange={toggle} label={`${r.name} ${enabled && !archived ? 'on' : 'paused'}`} />
       </div>
     </div>
   );

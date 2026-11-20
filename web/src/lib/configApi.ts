@@ -39,7 +39,7 @@ export interface AgentSettings {
 /** Production model (`provider`/`model`) and the direct-chat override (`chatProvider`/`chatModel`); null clears. */
 export type EnginePatch = Partial<Record<'provider' | 'model' | 'chatProvider' | 'chatModel', string | null>>;
 
-export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>>;
+export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode' | 'parentBotId'>>;
 
 export const configApi = {
   settings: (botId: string) => req<BotSettingsBundle>('GET', `/bots/${botId}/settings`),

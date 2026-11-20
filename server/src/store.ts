@@ -26,6 +26,8 @@ export function toBot(r: any): Bot {
     avatarColor: r.avatar_color,
     mode: r.mode,
     isPrimary: !!r.is_primary,
+    parentBotId: r.parent_bot_id ?? null,
+    archivedAt: r.archived_at ?? null,
     paused: !!r.paused,
     draftOnlyAvailable: !!draftEngineFor(r),
     kind: r.kind === 'room' ? 'room' : 'agent',
@@ -50,7 +52,7 @@ export function toBot(r: any): Bot {
 export const getBotRow = (id: string) => db.prepare('SELECT * FROM bots WHERE id=?').get(id) as any;
 
 export function activePauseRevision(botId: string): number | undefined {
-  const state = db.prepare('SELECT pause_revision FROM bots WHERE id=? AND paused=0').get(botId) as
+  const state = db.prepare('SELECT pause_revision FROM bots WHERE id=? AND paused=0 AND archived_at IS NULL').get(botId) as
     { pause_revision: number } | undefined;
   return state?.pause_revision;
 }
@@ -166,8 +168,6 @@ export function setLive(botId: string, patch: Partial<LiveState>) {
   if (b) hub.emit(b.user_id, { type: 'live', state: next });
 }
 
-export const allLive = (userId: string) => listBots(userId).map((b) => getLive(b.id));
-
 // ---------- routines / tasks ----------
 
 export function describeCron(expr: string): string {
@@ -191,17 +191,20 @@ function describeEventSlug(schedule: string) {
 }
 
 export function toRoutine(r: any): Routine {
+  const enabled = !!r.enabled && r.archived_at == null;
   let nextRunAt: number | null = null;
   try {
-    nextRunAt = r.enabled ? new Cron(r.schedule, { timezone: r.timezone, paused: true }).nextRun()?.getTime() ?? null : null;
+    nextRunAt = enabled ? new Cron(r.schedule, { timezone: r.timezone, paused: true }).nextRun()?.getTime() ?? null : null;
   } catch { /* invalid cron */ }
   return {
     id: r.id, botId: r.bot_id, name: r.name, prompt: r.prompt, schedule: r.schedule, timezone: r.timezone,
-    enabled: !!r.enabled, nextRunAt, lastRunAt: r.last_run_at, description: r.schedule.startsWith('event:') ? describeEventSlug(r.schedule) : describeCron(r.schedule),
+    enabled, nextRunAt, lastRunAt: r.last_run_at, description: r.schedule.startsWith('event:') ? describeEventSlug(r.schedule) : describeCron(r.schedule),
   };
 }
 
-export const listRoutines = (botId: string) => (db.prepare('SELECT * FROM routines WHERE bot_id=? ORDER BY created_at').all(botId) as any[]).map(toRoutine);
+export const listRoutines = (botId: string) => (db.prepare(
+  'SELECT r.*, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.bot_id=? ORDER BY r.created_at',
+).all(botId) as any[]).map(toRoutine);
 
 export const toTask = (r: any): Task => ({ id: r.id, botId: r.bot_id, title: r.title, state: r.state, note: r.note, updatedAt: r.updated_at });
 export const listTasks = (botId: string) => (db.prepare('SELECT * FROM tasks WHERE bot_id=? ORDER BY updated_at DESC').all(botId) as any[]).map(toTask);

@@ -20,6 +20,8 @@ export interface Bot {
   avatarColor: AvatarColor;
   mode: 'personal' | 'teammate';
   isPrimary: boolean;
+  parentBotId: string | null;
+  archivedAt: number | null;
   paused: boolean;
   draftOnlyAvailable?: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */

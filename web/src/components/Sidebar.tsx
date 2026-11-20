@@ -1,9 +1,10 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { useConfigUI } from '../configStore';
 import { TasksIsland } from './config/TasksView';
 import type { Bot } from '@shared/types';
 import { BotAvatarFor } from '../avatar/BotAvatar';
-import { displayName, useStore } from '../store';
+import { displayName, isArchived, useStore } from '../store';
 import { api } from '../lib/api';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
@@ -29,11 +30,11 @@ function previewFor(bot: Bot, running: boolean, awaiting: string | null) {
   return bot.lastPreview ?? 'No messages yet';
 }
 
-const BotRow = memo(function BotRow({ bot, selected, running, awaiting, onSelect }: { bot: Bot; selected: boolean; running: boolean; awaiting: string | null; onSelect: (id: string) => void }) {
+const BotRow = memo(function BotRow({ bot, avatar, selected, running, awaiting, onSelect }: { bot: Bot; avatar: Bot; selected: boolean; running: boolean; awaiting: string | null; onSelect: (id: string) => void }) {
   return (
     <button type="button" className={`bot-row${selected ? ' is-selected' : ''}`} onClick={() => onSelect(bot.id)} aria-current={selected || undefined}>
       <span className="bot-row__avatar">
-        <BotAvatarFor bot={bot} size={36} />
+        <span aria-hidden><BotAvatarFor bot={avatar} size={36} /></span>
         {(running || awaiting || bot.unread > 0) && (
           <span className={`status-dot ${awaiting ? 'is-attention' : running ? 'is-working' : 'is-unread'}`} aria-label={awaiting ? 'Needs attention' : running ? 'Working' : 'Unread activity'} />
         )}
@@ -48,6 +49,8 @@ const BotRow = memo(function BotRow({ bot, selected, running, awaiting, onSelect
 
 export function Sidebar() {
   const bots = useStore((s) => s.bots);
+  const pendingArchive = useStore((s) => s.pendingArchive);
+  const archiveError = useStore((s) => s.archiveError);
   const live = useStore((s) => s.live);
   const storeSelectedBotId = useStore((s) => s.selectedBotId);
   const inTasks = useConfigUI((s) => s.view === 'tasks');
@@ -60,10 +63,71 @@ export function Sidebar() {
   const selectBot = useCallback((id: string) => { useConfigUI.getState().setView('chat'); storeSelectBot(id); }, [storeSelectBot]);
   const setModal = useStore((s) => s.setModal);
   const [accountMenu, setAccountMenu] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const logout = async () => { await api.logout().catch(() => {}); location.reload(); };
 
-  const primary = bots.find((b) => b.isPrimary);
-  const others = bots.filter((b) => !b.isPrimary).sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  const { byId, children, roots } = useMemo(() => {
+    const active = bots.filter((bot) => !isArchived(bot, pendingArchive));
+    const byId = new Map(bots.map((bot) => [bot.id, bot]));
+    const activeIds = new Set(active.map((bot) => bot.id));
+    const children = new Map<string, Bot[]>();
+    const roots: Bot[] = [];
+    active.sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || b.lastActivityAt - a.lastActivityAt);
+    for (const bot of active) {
+      if (bot.parentBotId && activeIds.has(bot.parentBotId)) {
+        const siblings = children.get(bot.parentBotId) ?? [];
+        siblings.push(bot);
+        children.set(bot.parentBotId, siblings);
+      } else roots.push(bot);
+    }
+    return { byId, children, roots };
+  }, [bots, pendingArchive]);
+
+  function renderBot(bot: Bot, nested = false) {
+    const linked = children.get(bot.id);
+    const open = expanded.has(bot.id);
+    const primary = !nested && bot.isPrimary;
+    const selected = selectedBotId === bot.id;
+    const avatar = (nested && byId.get(bot.parentBotId ?? '')) || bot;
+    const running = !!live[bot.id]?.isRunning;
+    return (
+      <div key={bot.id} className={primary ? 'bot-group bot-group--primary' : 'bot-group'}>
+        <div className={primary ? 'pinned' : 'bot-group__row'}>
+          {primary ? (
+            <button type="button" className={`pinned__tile${selected ? ' is-selected' : ''}`} onClick={() => selectBot(bot.id)} title={displayName(bot)} aria-current={selected || undefined}>
+              <span className="pinned__avatar">
+                <BotAvatarFor bot={avatar} size={collapsed ? 44 : 60} star />
+                {running && <span className="status-dot is-working pinned__dot" />}
+              </span>
+              {!collapsed && <span className="pinned__label">{displayName(bot)}</span>}
+            </button>
+          ) : collapsed ? (
+            <button type="button" className={`bot-rail-item${selected ? ' is-selected' : ''}`} onClick={() => selectBot(bot.id)} title={displayName(bot)} aria-current={selected || undefined}>
+              <span aria-hidden><BotAvatarFor bot={avatar} size={36} /></span>
+            </button>
+          ) : (
+            <BotRow bot={bot} avatar={avatar} selected={selected} running={running} awaiting={live[bot.id]?.awaiting?.reason ?? null} onSelect={selectBot} />
+          )}
+          {linked && (
+            <button type="button" className="bot-group__toggle" aria-expanded={open} aria-controls={`linked-${bot.id}`}
+              aria-label={`Linked Bots for ${bot.name}`} onClick={() => setExpanded((previous) => {
+                const next = new Set(previous);
+                if (next.has(bot.id)) next.delete(bot.id);
+                else next.add(bot.id);
+                return next;
+              })}>
+              {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            </button>
+          )}
+        </div>
+        {linked && (
+          <div id={`linked-${bot.id}`} className="bot-group__children" hidden={!open}>
+            {open && linked.map((child) => renderBot(child, true))}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <aside className={`sidebar${collapsed ? ' is-collapsed' : ''}`}>
@@ -88,28 +152,10 @@ export function Sidebar() {
 
       <div className="sidebar__scroll">
         <TasksIsland />
-        {primary && (
-          <div className="pinned">
-            <button type="button" className={`pinned__tile${selectedBotId === primary.id ? ' is-selected' : ''}`} onClick={() => selectBot(primary.id)} title={displayName(primary)}>
-              <span className="pinned__avatar">
-                <BotAvatarFor bot={primary} size={collapsed ? 44 : 60} star />
-                {live[primary.id]?.isRunning && <span className="status-dot is-working pinned__dot" />}
-              </span>
-              {!collapsed && <span className="pinned__label">{displayName(primary)}</span>}
-            </button>
-          </div>
-        )}
+        {archiveError && <div className="cfg-error" role="alert">{archiveError}</div>}
         <div className="bot-list">
-          {others.map((b) =>
-            collapsed ? (
-              <button key={b.id} type="button" className={`bot-rail-item${selectedBotId === b.id ? ' is-selected' : ''}`} onClick={() => selectBot(b.id)} title={displayName(b)}>
-                <BotAvatarFor bot={b} size={36} />
-              </button>
-            ) : (
-              <BotRow key={b.id} bot={b} selected={selectedBotId === b.id} running={!!live[b.id]?.isRunning} awaiting={live[b.id]?.awaiting?.reason ?? null} onSelect={selectBot} />
-            ),
-          )}
-          {!collapsed && others.length === 0 && (
+          {roots.map((bot) => renderBot(bot))}
+          {!collapsed && !roots.some((bot) => !bot.isPrimary || children.has(bot.id)) && (
             <button type="button" className="bot-list__empty" onClick={() => setModal('create')}>
               <span className="bot-list__empty-plus"><Icon name="plus" size={14} opacity={0.66} /></span>
               <span>

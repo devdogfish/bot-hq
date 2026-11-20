@@ -13,6 +13,8 @@ interface State {
 
   bots: Bot[];
   pendingPause: Record<string, boolean | undefined>;
+  pendingArchive: Record<string, boolean | undefined>;
+  archiveError: string | null;
   live: Record<string, LiveState>;
   selectedBotId: string | null;
   transcripts: Record<string, Transcript>;
@@ -33,6 +35,7 @@ interface State {
   checkAuth(): Promise<void>;
   loadBots(): Promise<void>;
   setBotPaused(id: string, paused: boolean): Promise<void>;
+  setBotArchived(id: string, archived: boolean): Promise<void>;
   selectBot(id: string): void;
   loadRows(id: string): Promise<void>;
   loadRoutines(id: string): Promise<void>;
@@ -49,12 +52,16 @@ const LS_SIDEBAR = 'grokbot.sidebarCollapsed';
 const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 
+export const isArchived = (bot: Bot, pending: State['pendingArchive']) => pending[bot.id] ?? (bot.archivedAt != null);
+
 export const useStore = create<State>((set, get) => ({
   user: null,
   devLogin: false,
   authChecked: false,
   bots: [],
   pendingPause: {},
+  pendingArchive: {},
+  archiveError: null,
   live: {},
   selectedBotId: lsGet(LS_SELECTED),
   transcripts: {},
@@ -81,12 +88,8 @@ export const useStore = create<State>((set, get) => ({
     const { bots, live } = await api.bots();
     const liveMap: Record<string, LiveState> = {};
     for (const l of live) liveMap[l.botId] = l;
-    const sel = get().selectedBotId;
-    const selectedBotId = sel && bots.some((b) => b.id === sel) ? sel : (bots.find((b) => b.isPrimary) ?? bots[0])?.id ?? null;
     set({ bots, live: liveMap });
-    if (selectedBotId !== get().selectedBotId || !get().transcripts[selectedBotId ?? '']) {
-      if (selectedBotId) get().selectBot(selectedBotId);
-    }
+    syncSelection(true);
   },
 
   async setBotPaused(id, paused) {
@@ -112,7 +115,51 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async setBotArchived(id, archived) {
+    const pending = get().pendingArchive;
+    if (pending[id] === archived) return;
+    set({ pendingArchive: { ...pending, [id]: archived }, archiveError: null });
+    syncSelection();
+    if (pending[id] !== undefined) return; // The in-flight save will send the latest intent next.
+    try {
+      let desired = get().pendingArchive[id];
+      while (desired !== undefined) {
+        const current = get().bots.find((b) => b.id === id);
+        if (!current || (current.archivedAt != null) === desired) break;
+        try {
+          const { bot } = await api.setArchived(id, desired);
+          set((s) => ({ bots: s.bots.map((b) => b.id === id ? { ...b, archivedAt: bot.archivedAt, draftOnlyAvailable: bot.draftOnlyAvailable } : b) }));
+        } catch (error) {
+          if (!(error instanceof ApiError) || error.status >= 500) {
+            // The server may have saved the change before the response was lost.
+            try {
+              await get().loadBots();
+              const saved = get().bots.find((b) => b.id === id);
+              if (!saved || (saved.archivedAt != null) !== desired) throw error;
+            } catch {
+              set({ archiveError: `Couldn’t verify the change to ${current.name}. Reload to check its status.` });
+              if (get().pendingArchive[id] === desired) break;
+            }
+          } else if (get().pendingArchive[id] === desired) {
+            set({ archiveError: `Couldn’t ${desired ? 'archive' : 'unarchive'} ${current.name}. ${(error as Error).message}` });
+            break;
+          }
+        }
+        desired = get().pendingArchive[id];
+      }
+    } finally {
+      set((s) => {
+        const pendingArchive = { ...s.pendingArchive };
+        delete pendingArchive[id];
+        return { pendingArchive };
+      });
+      syncSelection();
+    }
+  },
+
   selectBot(id) {
+    const bot = get().bots.find((b) => b.id === id);
+    if (!bot || isArchived(bot, get().pendingArchive)) return;
     if (get().selectedBotId !== id) {
       set({ selectedBotId: id, viewerOpen: false, viewerMode: 'watch', viewerHint: null });
     }
@@ -120,8 +167,7 @@ export const useStore = create<State>((set, get) => ({
     const t = get().transcripts[id];
     if (!t?.loaded) get().loadRows(id).catch(console.error);
     get().loadRoutines(id).catch(console.error);
-    const bot = get().bots.find((b) => b.id === id);
-    if (bot?.unread) api.markRead(id).catch(() => {});
+    if (bot.unread) api.markRead(id).catch(() => {});
   },
 
   async loadRows(id) {
@@ -186,6 +232,7 @@ export const useStore = create<State>((set, get) => ({
         // Opening a bot marks it read; keep the open bot at 0 unread.
         if (ev.bot.id === s.selectedBotId && ev.bot.unread > 0 && document.visibilityState === 'visible') api.markRead(ev.bot.id).catch(() => {});
         set((st) => ({ bots: exists ? st.bots.map((b) => (b.id === ev.bot.id ? ev.bot : b)) : [...st.bots, ev.bot] }));
+        if (!s.selectedBotId || s.selectedBotId === ev.bot.id) syncSelection();
         return;
       }
       case 'computer':
@@ -210,6 +257,21 @@ export const useStore = create<State>((set, get) => ({
     set(p);
   },
 }));
+
+function syncSelection(loadMissing = false) {
+  const s = useStore.getState();
+  const active = s.bots.filter((bot) => !isArchived(bot, s.pendingArchive));
+  if (active.some((bot) => bot.id === s.selectedBotId)) {
+    if (loadMissing && s.selectedBotId && !s.transcripts[s.selectedBotId]) s.selectBot(s.selectedBotId);
+    return;
+  }
+  const fallback = active.find((bot) => bot.isPrimary) ?? active[0];
+  if (fallback) s.selectBot(fallback.id);
+  else if (s.selectedBotId) {
+    s.set({ selectedBotId: null, viewerOpen: false, viewerMode: 'watch', viewerHint: null });
+    lsSet(LS_SELECTED, '');
+  }
+}
 
 /** Rows for a bot, ordered by seq. */
 export function sortedRows(t: Transcript | undefined): Row[] {

@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
 import { configApi } from '../../lib/configApi';
 import { useConfigUI, type AppSection, type Theme } from '../../configStore';
-import { useStore } from '../../store';
+import { isArchived, useStore } from '../../store';
 import { Icon } from '../Icon';
 import { Glyph } from './glyphs';
 
@@ -11,6 +11,7 @@ const SECTIONS: { id: AppSection; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'computer', label: 'Computer' },
   { id: 'account', label: 'Account' },
+  { id: 'archived', label: 'Archived' },
 ];
 
 /** Full-window settings page, opened from the account menu. */
@@ -41,6 +42,7 @@ export function AppSettings() {
           {section === 'general' && <GeneralSection />}
           {section === 'computer' && <ComputerSection />}
           {section === 'account' && <AccountSection />}
+          {section === 'archived' && <ArchivedSection />}
         </div>
       </div>
     </div>,
@@ -95,12 +97,13 @@ function GeneralSection() {
 function ComputerSection() {
   const computer = useStore((s) => s.computer);
   const bots = useStore((s) => s.bots);
+  const pendingArchive = useStore((s) => s.pendingArchive);
   const registered = new Set(computer?.screens.map((screen) => screen.botId));
   return (
     <>
       <PageHead title="Agent screens" sub="Register each screen in the bot’s Agent connection settings." />
       <div className="cfg-card">
-        {bots.filter((bot) => bot.kind !== 'room').map((bot) => (
+        {bots.filter((bot) => bot.kind !== 'room' && !isArchived(bot, pendingArchive)).map((bot) => (
           <div className="cfg-row" key={bot.id}>
             <BotAvatarFor bot={bot} size={28} />
             <div className="cfg-row__text">
@@ -110,6 +113,39 @@ function ComputerSection() {
           </div>
         ))}
       </div>
+    </>
+  );
+}
+
+function ArchivedSection() {
+  const bots = useStore((s) => s.bots);
+  const pending = useStore((s) => s.pendingArchive);
+  const archiveError = useStore((s) => s.archiveError);
+  const setArchived = useStore((s) => s.setBotArchived);
+  const entries = bots.filter((bot) => isArchived(bot, pending) || pending[bot.id] === false);
+  return (
+    <>
+      <PageHead title="Archived" />
+      {archiveError && <div className="cfg-error" role="alert">{archiveError}</div>}
+      {entries.length === 0 ? <p>No archived Bots.</p> : (
+        <div className="cfg-card">
+          {entries.map((bot) => {
+            const archived = isArchived(bot, pending);
+            const action = archived ? 'Unarchive' : 'Undo unarchive';
+            return (
+              <div className="cfg-row" key={bot.id}>
+                <BotAvatarFor bot={bot} size={28} />
+                <div className="cfg-row__text">
+                  <div className="cfg-row__title">{bot.name}</div>
+                </div>
+                <button type="button" className="cfg-btn cfg-btn--secondary" aria-label={`${action} ${bot.name}`} onClick={() => void setArchived(bot.id, !archived)}>
+                  {action}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }
