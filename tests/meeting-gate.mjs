@@ -82,6 +82,17 @@ const turns = [
   ['muted Agent receives a question', say('Priya', 'Atlas, what is the status?'), 'silent', muted],
   ['muted Agent receives ambiguous question', say('Priya', 'What is the status?'), 'silent', muted],
   ['muted Agent receives handoff', say('Owner', 'Your turn.'), 'silent', muted],
+  ['host asks the Agent to leave', { ...say('Owner', 'Atlas, leave the call.'), host: true }, { action: 'leave' }],
+  ['host follow-up asking the Agent to leave', { ...say('Owner', 'Can you please leave the call?'), host: true }, { action: 'leave' }, afterAgent],
+  ['guest cannot send the Agent away', say('Priya', 'Atlas, leave the call.'), 'silent'],
+  ['guest named Owner cannot send the Agent away', say('Owner', 'Atlas, please leave the meeting.'), 'silent'],
+  ['host leave request needs the Agent addressed', { ...say('Owner', 'I have to leave the call.'), host: true }, 'silent'],
+  ['name, short pause, then the sentence', say('Priya', 'Thanks for joining the call.', 4_000), 'respond',
+    { prior: [say('Priya', 'Hey Atlas.', 1_000)] }],
+  ['name then an unrelated sentence much later', say('Priya', 'Thanks for joining.', 20_000), 'silent',
+    { prior: [say('Priya', 'Hey Atlas.', 1_000)] }],
+  ['another speaker continues after someone named the Agent', say('Sam', 'Thanks for joining.', 4_000), 'silent',
+    { prior: [say('Priya', 'Hey Atlas.', 1_000)] }],
 ];
 
 for (const [label, latest, expected, { prior = [], ...overrides } = {}] of turns) {

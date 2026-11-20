@@ -19,9 +19,12 @@ interface TurnInput {
 }
 
 type SpeakDecision = 'respond' | 'silent';
-type TurnDecision = SpeakDecision | 'ask_llm' | { action: 'mute' | 'unmute' };
+type TurnDecision = SpeakDecision | 'ask_llm' | { action: 'mute' | 'unmute' | 'leave' };
 
 const FOLLOW_UP_MS = 30_000;
+// "Hey Stacy." and then, after a short pause, the actual sentence.
+const CONTINUE_MS = 8_000;
+const LEAVE = /^(?:(?:can|could|would|will) you )?(?:please )?(?:go ahead and )?(?:leave|drop off|hang up|exit|head out)(?: (?:the|this) (?:call|meeting))?(?: (?:please|now|for now))?$/iu;
 const MUTE = /^(?:(?:can|could|would|will) you )?(?:please )?(?:mute(?: yourself)?|go on mute)(?: (?:please|now|for now))?$/iu;
 const UNMUTE = /^(?:(?:you can|(?:can|could|would|will) you) )?(?:please )?unmute(?: yourself)?(?: (?:please|now))?$/iu;
 const HANDOFF = /^(?:please )?(?:go ahead|(?:it['’]s )?your turn|over to you|take it away|you have the floor)(?: please)?$/iu;
@@ -106,6 +109,10 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
 
   const owner = latest.host === true || ownerLabels.includes(speaker);
   const body = addressed ?? cueText(text);
+  // Only the verified host can send the Agent out of the meeting.
+  if (LEAVE.test(body)) {
+    return latest.host === true && (addressed !== undefined || followsAgent) ? { action: 'leave' } : 'silent';
+  }
   const mute = MUTE.test(body);
   const unmute = UNMUTE.test(body);
   if (mute || unmute) {
@@ -114,6 +121,12 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
 
   if (mutedByRequest) return 'silent';
   if (addressed !== undefined) return 'respond';
+  if (previous && !previousIsAgent && clean(previous.speaker).toLowerCase() === speaker
+    && latest.at - previous.at <= CONTINUE_MS) {
+    const previousText = clean(previous.text);
+    const previousAddress = GREETING.test(previousText) ? previousText : previousText.replace(DISCOURSE_MARKER, '').trimStart();
+    if (addressedTo(previousAddress, names) !== undefined) return 'respond';
+  }
   if (HANDOFF.test(body)) return owner || followsAgent ? 'respond' : 'ask_llm';
   const question = addressText.replace(GREETING, '');
   if (GROUP_QUESTION.test(question)) return 'silent';
