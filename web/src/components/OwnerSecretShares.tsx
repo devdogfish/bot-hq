@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ApiError, api, type OwnerSecretMetadata } from '../lib/api';
+import { Icon } from './Icon';
 
 const KIND: Record<OwnerSecretMetadata['kind'], string> = {
   login: 'Login',
@@ -47,7 +48,7 @@ export function OwnerSecretShares({ botId }: { botId: string }) {
 
   const visible = shares?.filter(({ ref }) => revocations[ref] !== 'revoked');
   return (
-    <details className="panel-card" onToggle={(event) => {
+    <details className="engine__disclosure" onToggle={(event) => {
       const nextOpen = event.currentTarget.open;
       setOpen(nextOpen);
       if (!nextOpen) {
@@ -55,7 +56,10 @@ export function OwnerSecretShares({ botId }: { botId: string }) {
         setLoadError(null);
       }
     }}>
-      <summary className="panel-row">Shared with this Agent</summary>
+      <summary className="panel-row panel-row--link engine__summary">
+        <span className="engine__summary-title">Shared with this Agent</span>
+        <Icon name="chev_right" size={10} opacity={0.56} className="engine__summary-chev" />
+      </summary>
       {open && (loadError ? (
         <div className="panel-empty" role="alert">
           {loadError}{' '}

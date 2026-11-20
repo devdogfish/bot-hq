@@ -36,6 +36,9 @@ export interface AgentSettings {
   ownerSecretTokenSet: boolean;
 }
 
+/** Production model (`provider`/`model`) and the direct-chat override (`chatProvider`/`chatModel`); null clears. */
+export type EnginePatch = Partial<Record<'provider' | 'model' | 'chatProvider' | 'chatModel', string | null>>;
+
 export type BotPatch = Partial<Pick<Bot, 'name' | 'label' | 'description' | 'instructions' | 'avatarShape' | 'avatarColor' | 'effort' | 'mode'>>;
 
 export const configApi = {
@@ -71,7 +74,7 @@ export const configApi = {
   checkChrome: (botId: string) => req<{ browser: string }>('GET', `/bots/${botId}/agent/chrome`),
 
   engine: (botId: string) => req<{ engine: EngineInfo }>('GET', `/bots/${botId}/engine`),
-  setEngine: (botId: string, p: { provider?: string | null; model?: string | null }) => req<{ engine: EngineInfo }>('PATCH', `/bots/${botId}/engine`, p),
+  setEngine: (botId: string, p: EnginePatch) => req<{ engine: EngineInfo }>('PATCH', `/bots/${botId}/engine`, p),
   restartEngine: (botId: string) => req<{ engine: EngineInfo }>('POST', `/bots/${botId}/engine/restart`),
   /** Stops the private screen the agent runs for itself, so its computer work shows on the screen in the app. */
   stopOwnScreen: (botId: string) => req<{ engine: EngineInfo }>('POST', `/bots/${botId}/engine/screen/stop`),

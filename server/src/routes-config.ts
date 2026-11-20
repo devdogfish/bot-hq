@@ -125,14 +125,22 @@ configApi.get('/bots/:id/engine', async (c) => {
   return c.json({ engine: await engineInfo(b.id) });
 });
 
-/** Which model this bot's turns ask for. Empty values go back to the agent's own default. */
+/**
+ * Which models this bot's turns ask for: `model`/`provider` for production (routines, handoffs, rooms) and
+ * `chatModel`/`chatProvider` for direct chat. Empty values go back to the default (the agent's own, or production for chat).
+ */
 configApi.patch('/bots/:id/engine', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
-  const p = await c.req.json<{ provider?: string | null; model?: string | null }>().catch(() => ({} as { provider?: string | null; model?: string | null }));
+  type EnginePatch = { provider?: string | null; model?: string | null; chatProvider?: string | null; chatModel?: string | null };
+  const p = await c.req.json<EnginePatch>().catch(() => ({} as EnginePatch));
   const clean = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 120) : null);
-  if (p.provider !== undefined) db.prepare('UPDATE bots SET provider=?, updated_at=? WHERE id=?').run(clean(p.provider), now(), b.id);
-  if (p.model !== undefined) db.prepare('UPDATE bots SET model=?, updated_at=? WHERE id=?').run(clean(p.model), now(), b.id);
+  const columns = { provider: 'provider', model: 'model', chatProvider: 'chat_provider', chatModel: 'chat_model' } as const;
+  const sets = (Object.keys(columns) as (keyof typeof columns)[]).filter((k) => p[k] !== undefined);
+  if (sets.length) {
+    db.prepare(`UPDATE bots SET ${sets.map((k) => `${columns[k]}=?`).join(', ')}, updated_at=? WHERE id=?`)
+      .run(...sets.map((k) => clean(p[k])), now(), b.id);
+  }
   emitBot(b.id);
   return c.json({ engine: await engineInfo(b.id) });
 });

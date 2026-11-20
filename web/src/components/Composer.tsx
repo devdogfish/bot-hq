@@ -3,6 +3,7 @@ import type { Bot } from '@shared/types';
 import { api } from '../lib/api';
 import { displayName } from '../store';
 import { Icon } from './Icon';
+import { ComposerModel } from './ComposerModel';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { useDictation } from '../voice/dictation';
@@ -110,6 +111,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
           />
         </div>
         <div className="composer__right">
+          {bot.kind !== 'room' && <ComposerModel bot={bot} onError={setError} />}
           {bot.draftOnlyAvailable && (
             <button
               type="button"

@@ -486,6 +486,9 @@ export function initEngines() {
 /** Providers worth showing even when not signed in. */
 const WELL_KNOWN = ['anthropic', 'openai-codex', 'xai-oauth', 'xai', 'openrouter', 'nous', 'gemini', 'openai-api'];
 
+/** Enough for every current model of a direct provider; aggregators send a featured shortlist instead. */
+const MODELS_PER_PROVIDER = 24;
+
 const optionsCache = new Map<string, { at: number; data: any }>();
 
 async function modelOptions(botId: string, e: { url: string; key: string }): Promise<any | null> {
@@ -500,7 +503,7 @@ async function modelOptions(botId: string, e: { url: string; key: string }): Pro
   } catch { return null; }
 }
 
-function toProviders(data: any): EngineProvider[] {
+export function toProviders(data: any): EngineProvider[] {
   const list: any[] = Array.isArray(data?.providers) ? data.providers : [];
   const out = list
     .filter((p) => p?.slug && (p.authenticated || WELL_KNOWN.includes(p.slug)))
@@ -512,7 +515,7 @@ function toProviders(data: any): EngineProvider[] {
         // Hermes lists Anthropic as an API-key provider, yet it can also sign in to a Claude subscription. Offer that until a key is in place.
         kind: String(p.auth_type ?? '').includes('oauth') || (p.slug === 'anthropic' && !p.authenticated) ? 'subscription' : 'api_key',
         connected: !!p.authenticated,
-        models: featured.filter((m: unknown) => typeof m === 'string').slice(0, 12),
+        models: featured.filter((m: unknown) => typeof m === 'string').slice(0, MODELS_PER_PROVIDER),
       };
     });
   const rank = (p: EngineProvider) => (p.connected ? 0 : 1) * 100 + (WELL_KNOWN.indexOf(p.id) < 0 ? 50 : WELL_KNOWN.indexOf(p.id));
@@ -523,7 +526,7 @@ export async function engineInfo(botId: string): Promise<EngineInfo> {
   const b = botRow(botId);
   if (!b) throw new Error('bot not found');
   const kind = engineKind(botId);
-  const base: EngineInfo = { botId, kind, profile: kind === 'primary' ? 'default' : botId, status: 'stopped', error: null, model: b.model ?? null, provider: b.provider ?? null, version: null, providers: [], ownScreen: kind ? ownScreenOn(botId) : false };
+  const base: EngineInfo = { botId, kind, profile: kind === 'primary' ? 'default' : botId, status: 'stopped', error: null, model: b.model ?? null, provider: b.provider ?? null, chatModel: b.chat_model ?? null, chatProvider: b.chat_provider ?? null, version: null, providers: [], ownScreen: kind ? ownScreenOn(botId) : false };
   if (!kind) return { ...base, status: 'error', error: 'Register a Hermes URL and API key in Agent settings.' };
 
   let e: { url: string; key: string };
