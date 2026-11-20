@@ -1,6 +1,7 @@
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
+import { isRoutineRunCurrent, recordRoutineResult } from '../routines.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
 import type { ActivityKind, ApprovalChoice, MessageBody, ToolCallBody } from '../types.js';
 import { draftEngineFor, engineFor } from '../engine.js';
@@ -31,7 +32,7 @@ import {
 
 export type Trigger =
   | { type: 'user'; text: string; chatRow?: { generation: number; seq: number }; draftOnly?: boolean }
-  | { type: 'routine'; routineId: string; name: string; prompt: string }
+  | { type: 'routine'; routineId: string; name: string; prompt: string; runRevision?: number }
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'secure-input' }
   | { type: 'system'; text: string };
@@ -647,6 +648,10 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   const mark = turnTimer(botId);
   const bot = getBotRow(botId);
   if (!bot || bot.kind === 'room' || bot.paused || bot.pause_revision !== pauseRevision) return;
+  // A queued run from before a pause or re-enable cannot affect the new streak.
+  const routine = trigger.type === 'routine' ? trigger : undefined;
+  const runRevision = routine?.runRevision;
+  if (routine && runRevision !== undefined && !isRoutineRunCurrent(routine.routineId, runRevision)) return;
   const userId: string = bot.user_id;
   const personal = isPersonalAssistant(botId);
   const draftOnly = trigger.type === 'user' && trigger.draftOnly === true;
@@ -726,6 +731,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   let cancelled = false;
   let terminal = false;
   let cleanCompletion = false;
+  let routineError: string | undefined;
   let remote: HermesRun | undefined;
   let completedDeletion: { ref: ToolRef; output: unknown } | undefined;
   let completedEmail: { ref: ToolRef; output: unknown; error: boolean } | undefined;
@@ -955,12 +961,21 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
           if (!wroteText && typeof d.output === 'string') say(d.output);
           break;
 
+        case 'response.completed':
+          if (!remote && routine) cleanCompletion = true;
+          break;
+
+        case 'response.incomplete':
+          if (routine) throw new Error('Hermes did not complete the turn.');
+          break;
+
         case 'run.incomplete':
           terminal = true;
           turn.ownerEmail = undefined;
           turn.personal = undefined;
           expireApprovals(botId);
           if (!wroteText && typeof d.output === 'string') say(d.output);
+          if (routine) throw new Error(d.error ?? 'Hermes did not complete the turn.');
           break;
 
         case 'run.cancelled':
@@ -1029,7 +1044,9 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       cancelled = true;
       throw new Error('interrupted');
     }
-    if (remote && !terminal) throw new Error('Hermes closed the stream without a final run status.');
+    if ((remote && !terminal) || (routine && !remote && !cleanCompletion)) {
+      throw new Error('Hermes closed the stream without a final run status.');
+    }
     if (draftOnly) say(draftOutput?.trim() || draftText);
     if (remote && secureInputReceipts.length) {
       const results = cleanCompletion && turn.secureInput?.proposals.size
@@ -1063,9 +1080,12 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     failed = true;
     const stopped = ctrl.signal.aborted || cancelled || (draftOnly && remote?.stopRequested);
     closeMessage();
+    const error = String(remote?.stopError ?? e?.message ?? e);
+    if (routine && !stopped && !remote?.stopRequested) routineError = error;
     const failure = personal ? 'The Personal Assistant turn failed.' : draftOnly ? 'The draft-only turn failed.'
-      : `Something went wrong: ${remote?.stopError ?? e?.message ?? e}`;
-    appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : failure, tone: stopped ? 'info' : 'error' });
+      : `Something went wrong: ${error}`;
+    appendRow(botId, 'notice', { type: 'notice', text: stopped ? 'Stopped.' : failure, tone: stopped ? 'info' : 'error',
+      routineId: routine?.routineId });
     if (!stopped && !personal) console.error('[agent]', botId, e);
   } finally {
     turn.ownerEmail = undefined;
@@ -1091,5 +1111,9 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     if (!pendingApprovals(botId).length) setLive(botId, { isRunning: false, activity: null, awaiting: null, startedAt: null, caption: null });
     else setLive(botId, { isRunning: false, caption: null });
     emitBot(botId);
+  }
+  if (routine && runRevision !== undefined && (routineError !== undefined ||
+      (cleanCompletion && !failed && !ctrl.signal.aborted && !remote?.stopRequested))) {
+    recordRoutineResult(routine.routineId, runRevision, userId, routineError);
   }
 }

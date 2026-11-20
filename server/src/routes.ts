@@ -12,7 +12,7 @@ import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, set
 import { computerState } from './computer.js';
 import { assignEngine, draftEngineFor, provisionEngine, removeEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
-import { runRoutine, scheduleRoutine, unscheduleRoutine } from './routines.js';
+import { runRoutine, scheduleRoutine, setRoutineEnabled, unscheduleRoutine } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
@@ -312,11 +312,11 @@ api.get('/bots/:id/routines', (c) => {
 });
 
 api.patch('/routines/:id', async (c) => {
+  const { enabled } = await c.req.json<{ enabled: boolean }>();
   const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
-  const { enabled } = await c.req.json<{ enabled: boolean }>();
   if (enabled && r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
-  db.prepare('UPDATE routines SET enabled=? WHERE id=?').run(enabled ? 1 : 0, r.id);
+  setRoutineEnabled(r.id, !!enabled);
   const next = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(r.id));
   enabled ? scheduleRoutine(next) : unscheduleRoutine(r.id);
   hub.emit(c.get('user').id, { type: 'routines', botId: r.bot_id });
@@ -329,7 +329,7 @@ api.post('/routines/:id/run', (c) => {
   if (isBotResetting(r.bot_id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
   if (r.paused) return c.json({ error: 'This bot is paused.' }, 409);
   if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
-  runRoutine(r.id);
+  runRoutine(r.id, true);
   return c.json({ ok: true });
 });
 
