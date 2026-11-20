@@ -34,6 +34,16 @@
 .sidebar.is-collapsed .pinned__tile { width: 64px; padding: 6px; }
 
 .bot-list { display: flex; flex-direction: column; gap: 4px; }
+.bot-group__row { display: flex; align-items: center; }
+.bot-group__row > :first-child { flex: 1; min-width: 0; }
+.bot-group__toggle { display: grid; place-items: center; align-self: center; flex: 0 0 28px; height: 28px; border-radius: 6px; color: var(--color-text-secondary); }
+.bot-group__toggle:hover { background: var(--color-bg-hover); color: var(--color-ink); }
+.bot-group__children { margin-inline-start: 16px; border-inline-start: 1px solid var(--color-border-tertiary); padding-inline-start: 8px; }
+.bot-group--primary > .pinned { padding-bottom: 6px; }
+.bot-group--primary { margin-bottom: 12px; }
+.sidebar.is-collapsed .bot-group__children { margin-inline-start: 5px; padding-inline-start: 2px; }
+.sidebar.is-collapsed .bot-group__toggle { flex-basis: 20px; }
+.sidebar.is-collapsed .pinned:has(.bot-group__toggle) .pinned__tile { width: 44px; padding-inline: 0; }
 .bot-row {
   display: flex; align-items: center; gap: 10px; height: 54px; padding: 8px; border-radius: 12px; width: 100%;
   transition: background-color 120ms var(--ease-out);

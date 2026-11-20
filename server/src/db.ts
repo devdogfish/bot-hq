@@ -177,6 +177,8 @@ addColumn('secure_input_requests', 'submitted_one_time', 'INTEGER');
 addColumn('bots', 'screen_revision', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'paused', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('bots', 'pause_revision', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('bots', 'parent_bot_id', 'TEXT REFERENCES bots(id) ON DELETE SET NULL');
+addColumn('bots', 'archived_at', 'INTEGER');
 addColumn('routines', 'consecutive_failures', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('routines', 'run_revision', 'INTEGER NOT NULL DEFAULT 0');
 db.prepare("UPDATE routines SET enabled=0 WHERE schedule LIKE 'event:%' AND enabled=1").run();

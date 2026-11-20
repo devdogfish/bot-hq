@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BotAvatarFor } from '../../avatar/BotAvatar';
-import { displayName, useStore } from '../../store';
+import { displayName, isArchived, useStore } from '../../store';
 import { Icon } from '../Icon';
 import { Modal } from './Modal';
 
 export function SearchModal() {
   const bots = useStore((s) => s.bots);
+  const pendingArchive = useStore((s) => s.pendingArchive);
   const setModal = useStore((s) => s.setModal);
   const selectBot = useStore((s) => s.selectBot);
   const [q, setQ] = useState('');
@@ -14,11 +15,11 @@ export function SearchModal() {
   const close = useCallback(() => setModal(null), [setModal]);
 
   const results = useMemo(() => {
-    const ordered = [...bots].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || b.lastActivityAt - a.lastActivityAt);
+    const ordered = bots.filter((bot) => !isArchived(bot, pendingArchive)).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || b.lastActivityAt - a.lastActivityAt);
     const needle = q.trim().toLowerCase();
     if (!needle) return ordered;
     return ordered.filter((b) => `${b.name} ${b.label} ${b.description}`.toLowerCase().includes(needle));
-  }, [bots, q]);
+  }, [bots, pendingArchive, q]);
 
   useEffect(() => setActive(0), [q]);
   useEffect(() => {

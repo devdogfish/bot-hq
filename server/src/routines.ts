@@ -14,7 +14,7 @@ let botBusy: (botId: string) => boolean;
 export function initRoutines(enqueue: EnqueueTurn, isBusy = (_botId: string) => false) {
   enqueueFn = enqueue;
   botBusy = isBusy;
-  const all = db.prepare("SELECT * FROM routines WHERE enabled=1 AND schedule NOT LIKE 'event:%'").all() as any[];
+  const all = db.prepare("SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.enabled=1 AND b.archived_at IS NULL AND r.schedule NOT LIKE 'event:%'").all() as any[];
   for (const r of all) scheduleRoutine({ id: r.id, botId: r.bot_id, name: r.name, prompt: r.prompt, schedule: r.schedule, timezone: r.timezone } as Routine);
   console.log(`[routines] scheduled ${jobs.size}`);
 }
@@ -71,7 +71,7 @@ export function recordRoutineResult(id: string, revision: number, userId: string
 }
 
 export function runRoutine(id: string, manual = false) {
-  const r = db.prepare('SELECT * FROM routines WHERE id=?').get(id) as any;
+  const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.archived_at IS NULL').get(id) as any;
   if (!r || !enqueueFn || (!r.enabled && !manual) || r.schedule.startsWith('event:')) return;
   if (isJobsMonitor(r.bot_id, r.name)) {
     if (!r.enabled) return;
@@ -81,4 +81,13 @@ export function runRoutine(id: string, manual = false) {
   if (!enqueueFn(r.bot_id, { type: 'routine', routineId: id, name: r.name, prompt: r.prompt, runRevision: r.run_revision })) return;
   db.prepare('UPDATE routines SET last_run_at=? WHERE id=?').run(now(), id);
   appendRow(r.bot_id, 'event', { type: 'event', event: 'routine-run', text: `Running routine: ${r.name}`, ref: id });
+}
+
+/** Reconcile this bot's timers after an archive change, preserving its routine preferences. */
+export function syncBotRoutines(botId: string) {
+  const routines = db.prepare('SELECT r.*, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.bot_id=?').all(botId) as any[];
+  for (const r of routines) {
+    if (r.archived_at != null || !r.enabled || !enqueueFn) unscheduleRoutine(r.id);
+    else scheduleRoutine({ id: r.id, botId, name: r.name, prompt: r.prompt, schedule: r.schedule, timezone: r.timezone });
+  }
 }

@@ -65,7 +65,10 @@ export function primaryBotId(): string | null {
 }
 
 export function engineKind(botId: string): EngineKind | null {
-  const b = botRow(botId);
+  return engineKindFor(botRow(botId));
+}
+
+function engineKindFor(b: ReturnType<typeof botRow>): EngineKind | null {
   if (b?.hermes_url) return 'remote';
   if (!env.localEngines) return null;
   const e = b?.engine;
@@ -334,6 +337,7 @@ function ensureManaged(botId: string): Promise<void> {
 
 interface DraftBot {
   id: string;
+  archived_at?: number | null;
   kind?: string;
   engine?: string;
   hermes_url?: string;
@@ -355,7 +359,7 @@ function gatewayAddress(url: URL) {
 
 /** The deployment operator provides a separate, tool-free Runs gateway for each enabled bot. */
 export function draftEngineFor(bot: DraftBot): Engine | undefined {
-  if (bot.kind === 'room' || bot.id === process.env.HQ_TYLER_PERSONAL_BOT_ID) return;
+  if (bot.archived_at != null || bot.kind === 'room' || bot.id === process.env.HQ_TYLER_PERSONAL_BOT_ID) return;
   const config = process.env.HQ_DRAFT_GATEWAYS;
   if (!config) return;
   let gateway: { url?: unknown; key?: unknown } | undefined;
@@ -389,18 +393,16 @@ export function draftEngineFor(bot: DraftBot): Engine | undefined {
 
 /** Where to send this bot's turns. Starts its gateway if it is not running. */
 export async function engineFor(botId: string): Promise<Engine> {
-  let kind = engineKind(botId);
+  const b = botRow(botId);
+  if (!b) throw new Error('bot not found');
+  if (b.archived_at != null) throw new Error('This Bot is archived.');
+  let kind = engineKindFor(b);
   if (!kind) {
-    const b = botRow(botId);
-    if (!b) throw new Error('bot not found');
     if (b.kind === 'room') throw new Error('A group chat has no agent of its own.');
     kind = assignEngine(botId);
   }
   if (!kind) throw new Error('Register a Hermes URL and API key in Agent settings.');
-  if (kind === 'remote') {
-    const b = botRow(botId);
-    return { kind, url: b.hermes_url, key: b.hermes_key };
-  }
+  if (kind === 'remote') return { kind, url: b.hermes_url, key: b.hermes_key };
   if (kind === 'primary') return { kind, url: env.hermesUrl, key: primaryKey() };
   const url = managedUrl(botId);
   if (!(await healthy(url, 1500)) || !managedKey(botId)) await ensureManaged(botId);
@@ -449,14 +451,20 @@ export function stopOwnScreen(botId: string): Promise<void> {
 
 /** Start the gateway in the background (after creating a bot, or on server start). */
 export function provisionEngine(botId: string) {
-  if (engineKind(botId) === 'managed') ensureManaged(botId).catch(() => {});
+  const b = botRow(botId);
+  if (b?.archived_at == null && engineKindFor(b) === 'managed') ensureManaged(botId).catch(() => {});
 }
 
-export async function restartEngine(botId: string): Promise<void> {
+export async function stopManagedEngine(botId: string): Promise<void> {
   if (engineKind(botId) !== 'managed') return;
   await starting.get(botId)?.catch(() => {});
   await stopGateway(botId);
-  optionsCache.delete(botId);
+  forgetEngineOptions(botId);
+}
+
+export async function restartEngine(botId: string): Promise<void> {
+  if (engineKind(botId) !== 'managed' || botRow(botId)?.archived_at != null) return;
+  await stopManagedEngine(botId);
   provisionEngine(botId);
 }
 
@@ -476,7 +484,7 @@ export async function removeEngine(botId: string): Promise<void> {
 export function initEngines() {
   if (!env.localEngines) return;
   fs.mkdirSync(env.enginesDir, { recursive: true });
-  const bots = db.prepare("SELECT id, is_primary FROM bots WHERE engine IS NULL AND COALESCE(kind,'agent') <> 'room' AND COALESCE(hidden,0)=0 ORDER BY is_primary DESC, created_at ASC").all() as any[];
+  const bots = db.prepare("SELECT id, is_primary FROM bots WHERE engine IS NULL AND archived_at IS NULL AND COALESCE(kind,'agent') <> 'room' AND COALESCE(hidden,0)=0 ORDER BY is_primary DESC, created_at ASC").all() as any[];
   for (const b of bots) assignEngine(b.id);
   for (const b of db.prepare("SELECT id FROM bots WHERE engine='managed'").all() as any[]) provisionEngine(b.id);
 }
@@ -525,8 +533,9 @@ export function toProviders(data: any): EngineProvider[] {
 export async function engineInfo(botId: string): Promise<EngineInfo> {
   const b = botRow(botId);
   if (!b) throw new Error('bot not found');
-  const kind = engineKind(botId);
+  const kind = engineKindFor(b);
   const base: EngineInfo = { botId, kind, profile: kind === 'primary' ? 'default' : botId, status: 'stopped', error: null, model: b.model ?? null, provider: b.provider ?? null, chatModel: b.chat_model ?? null, chatProvider: b.chat_provider ?? null, version: null, providers: [], ownScreen: kind ? ownScreenOn(botId) : false };
+  if (b.archived_at != null) return base;
   if (!kind) return { ...base, status: 'error', error: 'Register a Hermes URL and API key in Agent settings.' };
 
   let e: { url: string; key: string };

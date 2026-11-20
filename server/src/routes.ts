@@ -6,13 +6,13 @@ import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
-import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
+import { appendRow, clearConversation, emitBot, getBot, getBotRow, getLive, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { isApprovalChoice } from './agent/hermes-run.js';
 import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, setBotPaused } from './agent/loop.js';
 import { computerState } from './computer.js';
-import { assignEngine, draftEngineFor, provisionEngine, removeEngine, syncPersona } from './engine.js';
+import { assignEngine, draftEngineFor, provisionEngine, removeEngine, stopManagedEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
-import { runRoutine, scheduleRoutine, setRoutineEnabled, unscheduleRoutine } from './routines.js';
+import { runRoutine, scheduleRoutine, setRoutineEnabled, syncBotRoutines, unscheduleRoutine } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
@@ -146,7 +146,10 @@ const ownBot = (userId: string, id: string) => {
   return b && b.user_id === userId ? b : null;
 };
 
-api.get('/bots', (c) => c.json({ bots: listBots(c.get('user').id), live: allLive(c.get('user').id) }));
+api.get('/bots', (c) => {
+  const bots = listBots(c.get('user').id);
+  return c.json({ bots, live: bots.filter((bot) => bot.archivedAt === null).map((bot) => getLive(bot.id)) });
+});
 
 api.post('/bots', async (c) => {
   const body = await c.req.json();
@@ -165,6 +168,20 @@ api.patch('/bots/:id', async (c) => {
   if (p.voice_provider !== undefined && !isVoiceProviderId(p.voice_provider)) {
     return c.json({ error: 'Unknown voice provider' }, 400);
   }
+  if (p.parentBotId !== undefined) {
+    const parent = typeof p.parentBotId === 'string' ? ownBot(b.user_id, p.parentBotId) : null;
+    if (p.parentBotId !== null && (!parent || parent.hidden)) return c.json({ error: 'Choose a Bot on your team.' }, 400);
+    const cycle = parent && db.prepare(`
+      WITH RECURSIVE ancestors(id) AS (
+        SELECT ?
+        UNION
+        SELECT b.parent_bot_id FROM bots b JOIN ancestors a ON a.id=b.id WHERE b.parent_bot_id IS NOT NULL
+      )
+      SELECT 1 FROM ancestors WHERE id=?
+    `).get(parent.id, b.id);
+    if (cycle) return c.json({ error: 'A Bot cannot be its own ancestor.' }, 400);
+    db.prepare('UPDATE bots SET parent_bot_id=? WHERE id=?').run(p.parentBotId, b.id);
+  }
   if (p.voice_provider !== undefined && p.voice_provider !== b.voice_provider) {
     db.prepare('UPDATE bots SET voice_provider=?, voice=?, updated_at=? WHERE id=?')
       .run(p.voice_provider, p.voice || defaultVoiceFor(p.voice_provider), now(), b.id);
@@ -179,6 +196,28 @@ api.patch('/bots/:id', async (c) => {
   }
   emitBot(b.id);
   return c.json({ bot: getBot(b.id) });
+});
+
+api.patch('/bots/:id/archive', async (c) => {
+  const body = await c.req.json<{ archived?: unknown }>().catch(() => null);
+  const bot = ownBot(c.get('user').id, c.req.param('id'));
+  if (!bot) return c.json({ error: 'not found' }, 404);
+  if (typeof body?.archived !== 'boolean') return c.json({ error: 'archived must be a boolean' }, 400);
+  if (isBotResetting(bot.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if ((bot.archived_at != null) === body.archived) return c.json({ bot: getBot(bot.id) });
+  if (body.archived) {
+    if (isSharingSecureInput(bot.id)) return c.json({ error: 'Wait for the secure input submission to finish.' }, 409);
+    db.prepare('UPDATE bots SET archived_at=?, pause_revision=pause_revision+1 WHERE id=?').run(now(), bot.id);
+    syncBotRoutines(bot.id);
+    await resetBotQueue(bot.id, () => stopManagedEngine(bot.id));
+  } else {
+    db.prepare('UPDATE bots SET archived_at=NULL WHERE id=?').run(bot.id);
+    syncBotRoutines(bot.id);
+    provisionEngine(bot.id);
+  }
+  emitBot(bot.id);
+  hub.emit(bot.user_id, { type: 'routines', botId: bot.id });
+  return c.json({ bot: getBot(bot.id) });
 });
 
 api.delete('/bots/:id', async (c) => {
@@ -229,6 +268,7 @@ api.post('/bots/:id/messages', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(b.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if (b.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
   if (b.paused) return c.json({ error: 'This bot is paused.' }, 409);
   if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'empty' }, 400);
   if (mode !== undefined && mode !== 'draft') return c.json({ error: 'Invalid message mode.' }, 400);
@@ -313,8 +353,9 @@ api.get('/bots/:id/routines', (c) => {
 
 api.patch('/routines/:id', async (c) => {
   const { enabled } = await c.req.json<{ enabled: boolean }>();
-  const r = db.prepare('SELECT r.* FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
+  const r = db.prepare('SELECT r.*, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
+  if (r.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
   if (enabled && r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   setRoutineEnabled(r.id, !!enabled);
   const next = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(r.id));
@@ -324,9 +365,10 @@ api.patch('/routines/:id', async (c) => {
 });
 
 api.post('/routines/:id/run', (c) => {
-  const r = db.prepare('SELECT r.*, b.paused FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
+  const r = db.prepare('SELECT r.*, b.paused, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   if (isBotResetting(r.bot_id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  if (r.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
   if (r.paused) return c.json({ error: 'This bot is paused.' }, 409);
   if (r.schedule.startsWith('event:')) return c.json({ error: 'App triggers are disabled.' }, 409);
   runRoutine(r.id, true);

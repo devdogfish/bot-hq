@@ -142,6 +142,7 @@ mcpApi.post('/:bot', async (c) => {
   if (!who) return c.json(rpcError(null, -32001, 'Unauthorized'), 401);
   let body: any;
   try { body = await c.req.json(); } catch { return c.json(rpcError(null, -32700, 'Parse error'), 400); }
+  if (who.botId && getBotRow(who.botId)?.archived_at != null) return c.json(rpcError(null, -32002, 'This Bot is archived.'), 409);
   if (Array.isArray(body)) {
     const answers = (await Promise.all(body.map((m) => handle(m, who.botId)))).filter(Boolean);
     return answers.length ? c.json(answers) : c.body(null, 202);

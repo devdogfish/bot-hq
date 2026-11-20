@@ -48,6 +48,7 @@ export const api = {
   send: (id: string, text: string, mode?: 'draft') => req<{ row: Row }>('POST', `/bots/${id}/messages`, { text, mode }),
   interrupt: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/interrupt`),
   setPaused: (id: string, paused: boolean) => req<{ paused: boolean }>('PATCH', `/bots/${id}/pause`, { paused }),
+  setArchived: (id: string, archived: boolean) => req<{ bot: Bot }>('PATCH', `/bots/${id}/archive`, { archived }),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
 
   approve: (approvalId: string, decision: ApprovalChoice) => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
