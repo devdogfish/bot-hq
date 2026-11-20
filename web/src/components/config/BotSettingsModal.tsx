@@ -6,6 +6,7 @@ import { configApi, type BotSettingsBundle } from '../../lib/configApi';
 import { useConfigUI, useVersion, type BotSettingsTab } from '../../configStore';
 import { isArchived, useStore } from '../../store';
 import { Icon } from '../Icon';
+import { MiniSelect } from '../MiniSelect';
 import { Modal } from '../modals/Modal';
 import { Glyph } from './glyphs';
 import { ConfirmButton, Field, Segmented, Switch, nextRunLabel, shortDate } from './ui';
@@ -94,12 +95,19 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
   const archived = useStore((s) => isArchived(bot, s.pendingArchive));
   const archiveError = useStore((s) => s.archiveError);
   const setArchived = useStore((s) => s.setBotArchived);
+  const pendingArchive = useStore((s) => s.pendingArchive);
   const [draft, setDraft] = useState<Draft>(() => draftOf(bot));
   const [picker, setPicker] = useState(false);
   const [saving, setSaving] = useState(false);
   const [note, setNote] = useState<{ text: string; tone: 'ok' | 'error' } | null>(null);
   useEffect(() => { setDraft(draftOf(bot)); }, [bot.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const descendants = new Set([bot.id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const b of bots) if (b.parentBotId && descendants.has(b.parentBotId) && !descendants.has(b.id)) { descendants.add(b.id); grew = true; }
+  }
+  const parentChoices = bots.filter((b) => !descendants.has(b.id) && (!isArchived(b, pendingArchive) || b.id === bot.parentBotId));
   const base = draftOf(bot);
   const changed = (Object.keys(draft) as (keyof Draft)[]).filter((k) => draft[k] !== base[k]);
   const dirty = changed.length > 0;
@@ -148,13 +156,9 @@ function GeneralTab({ bot, onClose }: { bot: Bot; onClose: () => void }) {
       </section>
 
       <section className="cfg-section">
-        <Field label="Parent Bot" htmlFor="cfg-parent">
-          <select id="cfg-parent" className="text-input" value={draft.parentBotId ?? ''} onChange={(e) => put('parentBotId', e.target.value || null)}>
-            <option value="">None</option>
-            {bots.filter((candidate) => candidate.id !== bot.id).map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
-            ))}
-          </select>
+        <Field label="Parent Bot">
+          <MiniSelect label="Parent Bot" value={draft.parentBotId ?? ''} onChange={(v) => put('parentBotId', v || null)}
+            options={[{ value: '', label: 'None' }, ...parentChoices.map((candidate) => ({ value: candidate.id, label: candidate.name }))]} />
         </Field>
         <Field label="About" htmlFor="cfg-about">
           <textarea id="cfg-about" className="text-input cfg-textarea" rows={2} value={draft.description} maxLength={500} placeholder="What is this Bot for?" onChange={(e) => put('description', e.target.value)} />

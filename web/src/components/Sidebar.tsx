@@ -88,7 +88,7 @@ export function Sidebar() {
     const open = expanded.has(bot.id);
     const primary = !nested && bot.isPrimary;
     const selected = selectedBotId === bot.id;
-    const avatar = byId.get(bot.parentBotId ?? '') ?? bot;
+    const avatar = (nested && byId.get(bot.parentBotId ?? '')) || bot;
     const running = !!live[bot.id]?.isRunning;
     return (
       <div key={bot.id} className={primary ? 'bot-group bot-group--primary' : 'bot-group'}>
