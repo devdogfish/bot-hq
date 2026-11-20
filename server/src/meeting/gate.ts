@@ -25,10 +25,12 @@ const UNMUTE = /^(?:(?:you can|(?:can|could|would|will) you) )?(?:please )?unmut
 const HANDOFF = /^(?:please )?(?:go ahead|(?:it['’]s )?your turn|over to you|take it away|you have the floor)(?: please)?$/iu;
 const QUESTION_START = /^(?:(?:could|can|would|will|do|did|are|have|were|should) you\b|(?:what|why|when|where|who|which|how)(?:['’]s\b| (?:about|did|does|do|is|are|was|were|will|would|can|could|should|has|have|long|much|many)\b))/iu;
 const DIRECT_REQUEST = /^(?:please|tell us|tell me|give us|give me|share|explain|summarize|walk us through)\b/iu;
-const GROUP_QUESTION = /^(?:(?:(?:does|can|could|would|will) )?(?:anyone|anybody|everyone|everybody|somebody|someone)|any (?:other )?(?:questions|thoughts|updates|objections))\b/iu;
+const GROUP_QUESTION = /^(?:(?:(?:does|do|did|can|could|would|will|is|are|was|were|has|have|had|should) )?(?:anyone|anybody|everyone|everybody|somebody|someone|any of you|all of you)|any (?:other )?(?:questions|thoughts|updates|objections))\b/iu;
 const NAMED_VOCATIVE = /^[\p{Lu}][\p{L}'’-]*(?: [\p{Lu}][\p{L}'’-]*)?\s*[:,]/u;
 const TRAILING_VOCATIVE = /,\s*(?:@[\p{L}\p{N}_+.-]+|[\p{Lu}][\p{L}'’-]*(?: [\p{Lu}][\p{L}'’-]*)?)[.!?…]*$/u;
 const DISCOURSE_MARKER = /^(?:hey|hi|okay|ok|thanks|yes|no|sure|so|right|well)[,:]/iu;
+const GREETING = /^(?:hey|hi|okay|ok)[, ]+/iu;
+const GREETED_VOCATIVE = /^[\p{L}][\p{L}'’-]*(?: [\p{L}][\p{L}'’-]*)?\s*[:,]/u;
 
 function clean(text: string): string {
   return text.normalize('NFKC').trim().replace(/\s+/gu, ' ');
@@ -44,7 +46,7 @@ function addressedTo(text: string, names: readonly string[]): string | undefined
   const alternatives = [...names].sort((a, b) => b.length - a.length)
     .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const name = `(?:${alternatives})`;
-  const leading = text.match(new RegExp(`^(?:(?:hey|hi|okay|ok)[, ]+)?(@?)${name}(?=$|[ ,:!?…]|[.–—](?![\\p{L}\\p{N}_]))(.*)$`, 'iu'));
+  const leading = text.match(new RegExp(`^(?:(?:hey|hi|okay|ok)[, ]+)?(@?)${name}(?=$|[ ,:!?…]|[.–—](?![.]*[\\p{L}\\p{M}\\p{N}_]))(.*)$`, 'iu'));
   if (leading) {
     const [, atSign, suffix] = leading;
     const body = cueText(suffix.trim().replace(/^[,:–—]\s*/u, ''));
@@ -58,7 +60,10 @@ function addressedTo(text: string, names: readonly string[]): string | undefined
 }
 
 function addressedToOther(text: string, names: readonly string[]): boolean {
-  if (addressedTo(text, names) !== undefined) return true;
+  const withoutGreeting = text.replace(GREETING, '');
+  if (addressedTo(text, names) !== undefined || TRAILING_VOCATIVE.test(text) || withoutGreeting.startsWith('@')) return true;
+  const vocative = withoutGreeting === text ? NAMED_VOCATIVE : GREETED_VOCATIVE;
+  if (vocative.test(withoutGreeting) && !DISCOURSE_MARKER.test(withoutGreeting)) return true;
   const body = cueText(text);
   if (!QUESTION_START.test(body)) return false;
   const lower = body.toLowerCase();
@@ -84,15 +89,10 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
   const ownerLabel = clean(ownerSpeaker).toLowerCase();
   const otherNames = [...new Set([...transcript.map((turn) => clean(turn.speaker).toLowerCase()), ownerLabel])]
     .filter((name) => name && name !== speaker && !agentSpeakers.has(name));
-  const addressed = addressedTo(text, names);
-  if (addressedToOther(text, otherNames)
-    || (addressed && addressedToOther(addressed, otherNames))) return 'silent';
-
-  // A named vocative can refer to a participant who hasn't spoken in this window yet.
-  const withoutGreeting = text.replace(/^(?:hey|hi|okay|ok)[, ]+/iu, '');
-  if (addressed === undefined && (/^(?:(?:hey|hi|okay|ok)[, ]+)?@/iu.test(text)
-    || TRAILING_VOCATIVE.test(text)
-    || (NAMED_VOCATIVE.test(withoutGreeting) && !DISCOURSE_MARKER.test(withoutGreeting)))) return 'silent';
+  const addressText = GREETING.test(text) ? text : text.replace(DISCOURSE_MARKER, '').trimStart();
+  const addressed = addressedTo(addressText, names);
+  if ((addressed !== undefined && addressedTo(addressText, otherNames) !== undefined)
+    || addressedToOther(addressed ?? addressText, otherNames)) return 'silent';
 
   const previous = transcript.at(-2);
   const previousIsAgent = previous && agentSpeakers.has(clean(previous.speaker).toLowerCase());
@@ -113,11 +113,11 @@ export function decideTurn({ agentName, aliases, transcript, lastAgentTurnAt, mu
   if (mutedByRequest) return 'silent';
   if (addressed !== undefined) return 'respond';
   if (HANDOFF.test(body)) return owner || followsAgent ? 'respond' : 'ask_llm';
-  const question = withoutGreeting.replace(DISCOURSE_MARKER, '').trimStart();
+  const question = addressText.replace(GREETING, '');
   if (GROUP_QUESTION.test(question)) return 'silent';
-  const subject = question.toLowerCase().match(/^(?:can|could|does|did|will|would|should|is|has) (.+)$/u)?.[1];
-  if (subject && [...otherNames, ...agentSpeakers].some((name) => subject.startsWith(`${name} `))) return 'silent';
-  if (/\?["”']?$/u.test(text) || QUESTION_START.test(text)) return followsAgent ? 'respond' : 'ask_llm';
+  const subject = cueText(question.toLowerCase()).match(/^(?:(?:what|why|when|where|who|which|how) )?(?:can|could|do|does|did|will|would|should|is|are|was|were|has|have|had) (.+)$/u)?.[1];
+  if (subject && [...otherNames, ...agentSpeakers].some((name) => subject === name || subject.startsWith(`${name} `))) return 'silent';
+  if (/\?["”']?$/u.test(text) || QUESTION_START.test(question)) return followsAgent ? 'respond' : 'ask_llm';
   if (DIRECT_REQUEST.test(text)) return 'ask_llm';
   return 'silent';
 }
@@ -153,6 +153,7 @@ const callXai: ModelCall = async ({ instructions, prompt, signal }) => {
 export async function llmGate(prompt: string, callModel: ModelCall = callXai): Promise<SpeakDecision> {
   if (!prompt.trim()) return 'silent';
   const controller = new AbortController();
+  const deadlineAt = performance.now() + LLM_TIMEOUT_MS;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     const deadline = new Promise<SpeakDecision>((resolve) => {
@@ -162,6 +163,7 @@ export async function llmGate(prompt: string, callModel: ModelCall = callXai): P
       }, LLM_TIMEOUT_MS);
     });
     const decision = await Promise.race([deadline, callModel({ instructions: LLM_INSTRUCTIONS, prompt, signal: controller.signal })]);
+    if (performance.now() >= deadlineAt) controller.abort();
     return !controller.signal.aborted && decision.trim().toLowerCase() === 'respond' ? 'respond' : 'silent';
   } catch {
     return 'silent';
