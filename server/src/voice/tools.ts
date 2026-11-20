@@ -33,3 +33,10 @@ export const VOICE_TOOLS = [
     parameters: obj({}),
   },
 ];
+
+// A shared room can delegate work without giving participants access to private chat.
+export const MEETING_TOOLS = VOICE_TOOLS.filter((tool) => tool.name === 'send_task')
+  .map((tool) => ({
+    ...tool,
+    description: 'Hand work requested by the meeting to your main Agent. Include who asked and enough context to do the work. The result will be posted in Bot HQ chat.',
+  }));

@@ -125,6 +125,17 @@ desktop activity on both runs.
 - Composio is disabled, including its Google sign-in path.
   Set `XAI_API_KEY` to enable voice and X research.
 
+## Meeting transcripts
+
+Send `POST /api/meeting/end` to the same origin as the Agent's Bot HQ MCP URL
+with its per-bot bearer token. The JSON body contains `call_id` and `transcript`.
+Before sending, trim the transcript to fit within 2 MiB (2,097,152 bytes) of
+UTF-8 JSON for the whole body. The transcript may contain at most 10,000 turns,
+with up to 16,000 characters of text and 256 characters per speaker label.
+Bot HQ returns HTTP 413 for an oversized body. Submit the transcript in a single
+request. Retry transient failures with the same `call_id` and payload. A retry
+of an accepted submission returns the same `seq`.
+
 ## Event routines
 
 Provision an enabled routine on the target Bot with `schedule = 'event:<name>'`

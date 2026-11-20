@@ -111,7 +111,7 @@ else {
               return Response.json({ voices: [{ voice_id: 'luna', name: 'Luna' }] });
             case '/v1/realtime/client_secrets':
               assert.deepEqual(await req.json(), { expires_after: { seconds: 300 } });
-              return Response.json({ value: 'ephemeral-xai', expires_at: 12345 });
+              return Response.json({ value: 'ephemeral-xai', expires_at: Math.floor(Date.now() / 1000) + 300 });
             case '/v1/tts':
               assert.deepEqual(await req.json(), {
                 text: "Hi, I'm Default. This is how I'll sound when we talk.",

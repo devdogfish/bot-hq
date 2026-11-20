@@ -1,7 +1,6 @@
-import crypto from 'node:crypto';
 import { Hono } from 'hono';
 import { activePauseRevision, getBotRow } from './store.js';
-import { mcpToken, primaryBotId } from './engine.js';
+import { mcpCaller } from './lib/mcp-auth.js';
 import { claimToolRow, enqueueBotMessage, markSilent, noteToolOutcome, personalTool, stageOwnerEmail, stageSecureInput, turnDepth } from './agent/loop.js';
 import { toolMap, TOOLS, type ToolCtx } from './agent/tools.js';
 import { OWNER_EMAIL_TOOL } from './agent/owner-email-policy.js';
@@ -25,23 +24,6 @@ const PAUSED = 'This bot is paused.';
 
 interface CallResult { content: { type: 'text'; text: string }[]; isError?: boolean }
 const text = (t: string, isError = false): CallResult => ({ content: [{ type: 'text', text: t }], ...(isError ? { isError: true } : {}) });
-
-function sameToken(a: string, b: string) {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && crypto.timingSafeEqual(x, y);
-}
-
-/** Which bot a request is for, or null when the token does not fit the URL. `botId` is null for /mcp/primary before a bot is bound to it. */
-function caller(slug: string, auth: string | undefined): { botId: string | null } | null {
-  const given = (auth ?? '').replace(/^Bearer\s+/i, '').trim();
-  if (!given || !sameToken(given, mcpToken(slug))) return null;
-  if (slug === 'primary') {
-    const botId = primaryBotId();
-    return isPersonalAssistant(botId) ? null : { botId };
-  }
-  return getBotRow(slug) ? { botId: slug } : null;
-}
 
 async function callTool(botId: string | null, rawName: string, args: any): Promise<CallResult> {
   const bot = botId ? getBotRow(botId) : null;
@@ -138,7 +120,7 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
 export const mcpApi = new Hono();
 
 mcpApi.post('/:bot', async (c) => {
-  const who = caller(c.req.param('bot'), c.req.header('authorization'));
+  const who = mcpCaller(c.req.param('bot'), c.req.header('authorization'));
   if (!who) return c.json(rpcError(null, -32001, 'Unauthorized'), 401);
   let body: any;
   try { body = await c.req.json(); } catch { return c.json(rpcError(null, -32700, 'Parse error'), 400); }

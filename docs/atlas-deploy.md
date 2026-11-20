@@ -2,7 +2,7 @@
 
 Use during the Owner-approved go-live session for [#354](https://github.com/devdogfish/quantself/issues/354).
 Bot HQ runs in its own guest and listens on loopback. Tailscale Serve exposes
-the Owner's HTTPS UI on TCP 443 and the Agents' MCP path on TCP 8787. There
+the Owner's HTTPS UI on TCP 443 and the Agents' MCP and meeting paths on TCP 8787. There
 is no public ingress.
 
 ## Provision the guest
@@ -243,6 +243,8 @@ sudoedit /etc/bot-hq/runtime.env
 ```
 
 Fill in the actual URLs, Owner email and a fresh random session secret.
+Set `HQ_MEETING_OWNER_NAMES` to the Owner's comma-separated meeting display
+names for bare moderator cues. Matching is case-insensitive and defaults to `Owner`.
 Preserve `runtime.env` on upgrades and restores. The secret signs Agent
 MCP credentials. Keep the Database, Library and environment file on the VM's
 backed-up disk. Use the platform's existing credential workflow if enabling
@@ -259,15 +261,16 @@ sudo /usr/local/sbin/activate-bot-hq-release "$revision" &&
   ss -ltn 'sport = :18787'
 ```
 
-Confirm Node listens on `127.0.0.1:18787`. Serve the UI and MCP after the
-local health check and grant review. The repeated `/mcp` preserves the
-backend's path when Serve strips the mount prefix.
+Confirm Node listens on `127.0.0.1:18787`. Configure Serve after the local
+health check and grant review. Port 8787 mounts only `/mcp` and `/api/meeting`.
+Repeating each path in the upstream URL restores the prefix Serve strips.
 See [Serve](https://tailscale.com/docs/features/tailscale-serve) and the
 [Serve path behavior](https://github.com/tailscale/tailscale/issues/12413).
 
 ```sh
 sudo tailscale serve --bg --https=443 http://127.0.0.1:18787
 sudo tailscale serve --bg --https=8787 --set-path=/mcp http://127.0.0.1:18787/mcp
+sudo tailscale serve --bg --https=8787 --set-path=/api/meeting http://127.0.0.1:18787/api/meeting
 sudo tailscale serve status --json
 sudo tailscale funnel status
 ```
@@ -391,7 +394,9 @@ Verify Tyler's private chat can read one agreed Gmail message and submit one exa
 | --- | --- |
 | Owner's tailnet device opens 443 and signs in | HTTPS, then a stream and live noVNC watch/control |
 | Each Agent calls its own `/mcp/<botId>` on TCP 8787 | Authenticated JSON-RPC `ping` succeeds. Missing or wrong bearer returns 401 |
+| Agent sends an empty JSON object to `POST /api/meeting/session` on 8787 | Valid per-bot bearer returns 400 with `Invalid meeting URL or platform`. Missing or wrong bearer returns 401 |
 | Agent requests `/api/health` and `/mcp/../api/health` on 8787 | No app response. Use `curl --path-as-is` for the traversal probe |
+| Agent requests `/api/meeting/../health` on 8787 | No app response. Use `curl --path-as-is` |
 | Agent requests `/mcp/../api/agent-health/tyler` on 8787 | Agent health status is inaccessible. Use `curl --path-as-is` |
 | Agent tries the 443 UI. Unrelated tailnet device tries both ports | Access denied |
 | Bot HQ checks each Agent's API health, screen and DevTools | The exact registered ports respond |
