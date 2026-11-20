@@ -447,9 +447,11 @@ function RoutineItem({ r, archived, onFlash }: { r: Routine; archived: boolean; 
         <div className="cfg-item__prompt">{r.prompt}</div>
       </div>
       <div className="cfg-item__actions">
-        <button type="button" className="cfg-icon-btn" disabled={archived} title="Run now" aria-label={`Run ${r.name} now`} onClick={() => configApi.runRoutine(r.id).then(() => onFlash('Running now')).catch((e) => onFlash(e.message))}>
-          <Glyph name="play" size={13} />
-        </button>
+        {!r.schedule.startsWith('event:') && (
+          <button type="button" className="cfg-icon-btn" disabled={archived} title="Run now" aria-label={`Run ${r.name} now`} onClick={() => configApi.runRoutine(r.id).then(() => onFlash('Running now')).catch((e) => onFlash(e.message))}>
+            <Glyph name="play" size={13} />
+          </button>
+        )}
         <ConfirmButton className="cfg-icon-btn" title="Delete" onConfirm={() => configApi.deleteRoutine(r.id).then(() => onFlash('Deleted'))}><Glyph name="trash" size={14} /></ConfirmButton>
         <Switch on={enabled && !archived} disabled={archived} onChange={toggle} label={`${r.name} ${enabled && !archived ? 'on' : 'paused'}`} />
       </div>

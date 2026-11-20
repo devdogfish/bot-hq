@@ -20,6 +20,7 @@ import { configApi } from './routes-config.js';
 import { secureInputApi } from './routes-secure-input.js';
 import { mcpApi } from './mcp.js';
 import { hooksApi } from './routes-hooks.js';
+import { resumeEventRoutines } from './events.js';
 import { initEngines } from './engine.js';
 import { agentHealthRoutes } from './agent-health.js';
 import { startAgentGatewayMonitor } from './agent-gateway-monitor.js';
@@ -59,4 +60,6 @@ if (schedulerEnabled) {
   initProactive(enqueue);
 } else console.log('[grokbot] scheduler disabled (GROKBOT_NO_SCHEDULER=1)');
 initEngines();
+// Recover accepted webhook work even when periodic scheduling is disabled.
+resumeEventRoutines();
 if (schedulerEnabled) startAgentGatewayMonitor();

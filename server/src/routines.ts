@@ -19,6 +19,15 @@ export function initRoutines(enqueue: EnqueueTurn, isBusy = (_botId: string) => 
   console.log(`[routines] scheduled ${jobs.size}`);
 }
 
+export function validateRoutineSchedule(schedule: string, timezone: string) {
+  if (schedule.startsWith('event:')) {
+    const name = schedule.slice('event:'.length);
+    if (!name.trim()) throw new Error('Event name is required.');
+    return;
+  }
+  new Cron(schedule, { timezone, paused: true });
+}
+
 export function scheduleRoutine(r: Pick<Routine, 'id' | 'botId' | 'name' | 'prompt' | 'schedule' | 'timezone'>) {
   unscheduleRoutine(r.id);
   if (r.schedule.startsWith('event:')) return;

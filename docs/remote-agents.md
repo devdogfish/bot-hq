@@ -129,29 +129,35 @@ desktop activity on both runs.
 
 Provision an enabled routine on the target Bot with `schedule = 'event:<name>'`
 and a prompt describing what the Agent should do. Use one routine per event
-name on each Bot. The URL uses the schedule suffix, which can differ from the
+name on each Bot. To create one, ask the target Agent to create a routine with
+that event schedule and prompt. The URL uses the schedule suffix, which can differ from the
 routine's display name. For example, `event:gmail_push` receives deliveries at
-`POST /hooks/<botId>/gmail_push`.
+`POST /hooks/<botId>/gmail_push`. URL-encode the suffix as one path segment.
 
-Send JSON with `Authorization: Bearer <token>` and `Content-Type: application/json`.
+Send JSON over HTTPS with `Authorization: Bearer <token>` and
+`Content-Type: application/json`.
 On the HQ host, derive the token as the hex HMAC-SHA256 of `hook:<botId>` keyed
 by `SESSION_SECRET`. Give the service only its Bot's hook token.
 
 ```sh
-printf 'hook:%s' "$BOT_ID" | openssl dgst -sha256 -hmac "$SESSION_SECRET" -r | cut -d' ' -f1
+# Use a private terminal with SESSION_SECRET already in the environment.
+node -e 'const { createHmac } = require("node:crypto");
+const secret = process.env.SESSION_SECRET;
+if (!secret || !process.argv[1]) process.exit(1);
+console.log(createHmac("sha256", secret).update("hook:" + process.argv[1]).digest("hex"));' "$BOT_ID"
 ```
 
 ```json
 {
   "event_id": "gmail:history:12345",
   "summary": "New inbox activity",
-  "refs": ["history:12345"]
+  "refs": { "messageId": "12345" }
 }
 ```
 
 Use stable, source-prefixed IDs and reuse the ID when retrying. `event_id` and
-`summary` are nonempty strings. `refs` is an array of reference strings and can
-be empty. The complete request body is limited to 16 KiB.
+`summary` are nonempty strings. `refs` accepts a flat object with string or
+numeric values or an array of reference strings. The body limit is 16 KiB.
 
 | Status | Meaning |
 | --- | --- |
@@ -159,22 +165,27 @@ be empty. The complete request body is limited to 16 KiB.
 | 200 | ID already accepted for this Bot, `{"status":"duplicate"}` |
 | 400 | Invalid JSON or fields |
 | 401 | Missing or invalid Bot bearer |
-| 404 | No enabled event routine for this Bot and schedule suffix |
-| 409 | Bot is unavailable for routine work. This delivery can be retried. |
+| 404 | No enabled event routine available over HTTP for this Bot and schedule suffix |
+| 409 | Bot or routine is unavailable, or the pending batch is full. Retry with the same ID. |
 | 413 | Request body exceeds 16 KiB |
 
 In-process services can call `enqueueEvent(botId, routineName, { event_id, summary, refs })`
 with the same schedule suffix and fields. It returns `accepted`, `duplicate`,
-`not_found`, or `unavailable`.
+`not_found`, or `unavailable`. The private Personal Assistant receives only its
+`Gmail new mail` routine through this in-process path. Each notification turn
+uses its own conversation and has no Owner chat tool context.
 
 HQ stores accepted IDs in SQLite per Bot across all its routines. The first
 event opens a 100 ms collection window. Events for the same routine continue
 to join that batch while it waits in the Bot's queue. At the start of the turn,
 HQ sends the routine prompt followed by the batch's summaries and references.
-Events arriving during the turn form the next batch. Acknowledgements cover
-enqueue only. Pending turns live in memory and can be discarded on restart,
-pause, or queue reset. HQ also discards the batch if its routine is disabled
-or deleted when the turn starts. Accepted IDs remain recorded in SQLite.
+Events arriving during the turn form the next batch. A batch can hold up to 64
+events or 64 KiB of serialized event data. HQ commits the payload and ID before
+acknowledging and recovers unclaimed batches on restart. Pausing, archiving or
+resetting a Bot invalidates its pending batches. Disabling or deleting a routine
+also invalidates its batch. Accepted IDs remain recorded in SQLite.
+HQ claims each batch once when the turn starts. A crash after that point can
+interrupt the turn.
 
 ## Draft-only gateway
 
