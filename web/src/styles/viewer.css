@@ -121,6 +121,7 @@
 .screen__chin :focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .screen__chin-text { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: 14px; font-weight: 500; line-height: 20px; }
 .screen__chin-text > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.screen__chin-text > .screen__chin-hint { flex-shrink: 2; font-size: 13px; font-weight: 400; opacity: 0.64; }
 .screen__ping { position: relative; width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 .screen__ping::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: currentColor; animation: screen-ping 1.8s ease-out infinite; }
 @keyframes screen-ping { from { opacity: 0.6; transform: scale(1); } to { opacity: 0; transform: scale(2.8); } }
