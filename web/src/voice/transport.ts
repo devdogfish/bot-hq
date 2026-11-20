@@ -131,7 +131,7 @@ function connectElevenLabs(session: Extract<VoiceSession, { provider: 'elevenlab
         events.error('ElevenLabs voice service error');
         return;
     }
-  }, () => events.closed(''));
+  }, events.closed);
   return {
     sendAudio: (pcm) => send({ user_audio_chunk: pcmToBase64(resamplePcm(pcm, inputRate)) }),
     sendToolResult: (id, output, isError) => send({ type: 'client_tool_result', tool_call_id: id, result: output, is_error: isError }),
