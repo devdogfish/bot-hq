@@ -5,7 +5,7 @@ export type IconName =
   | 'composer_plus' | 'copy' | 'edit' | 'file' | 'mic' | 'paperclip' | 'plus' | 'record' | 'save'
   | 'search' | 'share' | 'sidebar' | 'slack' | 'star' | 'voice_a' | 'voice_b'
   // inline extras not in the icon font export
-  | 'arrow_up' | 'stop' | 'more' | 'monitor' | 'refresh'
+  | 'arrow_up' | 'stop' | 'more' | 'monitor' | 'refresh' | 'lock'
   // inline outline glyphs
   | 'eye' | 'pointer' | 'expand' | 'shrink';
 
@@ -14,6 +14,7 @@ const INLINE: Partial<Record<IconName, string>> = {
   stop: 'M7 6h10a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z',
   more: 'M5 10.25a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 0 1 0-3.5Zm7 0a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 0 1 0-3.5Zm7 0a1.75 1.75 0 1 1 0 3.5 1.75 1.75 0 0 1 0-3.5Z',
   monitor: 'M4.5 4h15A2.5 2.5 0 0 1 22 6.5v9a2.5 2.5 0 0 1-2.5 2.5H13v1.5h3a1 1 0 1 1 0 2H8a1 1 0 1 1 0-2h3V18H4.5A2.5 2.5 0 0 1 2 15.5v-9A2.5 2.5 0 0 1 4.5 4Zm0 2a.5.5 0 0 0-.5.5v9c0 .28.22.5.5.5h15a.5.5 0 0 0 .5-.5v-9a.5.5 0 0 0-.5-.5h-15Z',
+  lock: 'M12 2.5a4.5 4.5 0 0 1 4.5 4.5v2.5h.5A2.5 2.5 0 0 1 19.5 12v7a2.5 2.5 0 0 1-2.5 2.5H7A2.5 2.5 0 0 1 4.5 19v-7A2.5 2.5 0 0 1 7 9.5h.5V7A4.5 4.5 0 0 1 12 2.5Zm0 2A2.5 2.5 0 0 0 9.5 7v2.5h5V7A2.5 2.5 0 0 0 12 4.5Zm0 8.5a1.75 1.75 0 0 0-1 3.19V18a1 1 0 1 0 2 0v-1.81A1.75 1.75 0 0 0 12 13Z',
   refresh: 'M12 4a8 8 0 0 1 7.2 4.5V6a1 1 0 1 1 2 0v5a1 1 0 0 1-1 1h-5a1 1 0 1 1 0-2h2.6A6 6 0 1 0 18 14.4a1 1 0 1 1 1.9.6A8 8 0 1 1 12 4Z',
 };
 

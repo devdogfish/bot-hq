@@ -5,6 +5,26 @@ import { Icon } from '../Icon';
 
 type Decision = 'submit' | 'decline';
 
+const SHARED: Record<SecureInputBody['kind'], string> = {
+  login: 'Sign-in details shared',
+  phone: 'Phone number shared',
+  code: 'Code shared',
+  text: 'Private text shared',
+};
+
+/** A resolved request collapses to one line, like a tool receipt, so the conversation stays readable. */
+function SecureInputPill({ body, status }: { body: SecureInputBody; status: SecureInputResult['status'] | 'unavailable' }) {
+  const ready = status === 'ready';
+  const text = ready ? SHARED[body.kind] : status === 'declined' ? 'Request declined' : 'Request expired';
+  return (
+    <div className={`secure-pill${ready ? '' : ' is-off'}`} role="status" title={ready ? `${body.label} · ${body.site}` : status === 'unavailable' ? 'Ask the Agent for a new request.' : body.site}>
+      <span className="secure-pill__icon"><Icon name="lock" size={16} /></span>
+      <span className="secure-pill__text">{text}</span>
+      <Icon name={ready ? 'check' : 'close'} size={16} opacity={ready ? 0.9 : 0.6} />
+    </div>
+  );
+}
+
 export function SecureInputCard({ body }: { body: SecureInputBody }) {
   const [busy, setBusy] = useState<Decision | null>(null);
   const [outcome, setOutcome] = useState<SecureInputResult['status'] | 'unavailable' | null>(null);
@@ -58,8 +78,10 @@ export function SecureInputCard({ body }: { body: SecureInputBody }) {
     void decide('submit', event.currentTarget);
   }
 
+  if (!pending) return <SecureInputPill body={body} status={status} />;
+
   return (
-    <div className={`card secure-input-card${pending ? '' : ' is-resolved'}`}>
+    <div className="card secure-input-card">
       <div className="card__head">
         <div className="card__titles">
           <div className="card__title">{body.label}</div>
