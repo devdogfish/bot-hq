@@ -33,7 +33,7 @@ const { db } = await import('../server/dist/db.js');
 const { mcpToken } = await import('../server/dist/engine.js');
 const { isBotBusy } = await import('../server/dist/agent/loop.js');
 const { hub } = await import('../server/dist/lib/hub.js');
-const { readSecureInputReceipt } = await import('../server/dist/secure-input.js');
+const { readSecureInputReceipt, OWNER_SECRET_WRITE_TIMEOUT_MS } = await import('../server/dist/secure-input.js');
 const { initSubagents } = await import('../server/dist/agent/subagents.js');
 const { initRooms } = await import('../server/dist/agent/rooms.js');
 initSubagents();
@@ -391,4 +391,10 @@ test('a UUID-shaped private value is never accepted as a vault receipt', async (
   const card = { kind: 'text', site: 'https://accounts.example.net' };
   const response = Response.json({ ...card, ref }, { status: 201 });
   assert.equal(await readSecureInputReceipt(response, card, [ref]), null);
+});
+
+test('Bot HQ waits longer for a share than the Agent vault write limit', () => {
+  // The Agent allows 45 s for its serial Bitwarden CLI calls; giving up first reports a false "may have stored".
+  assert.ok(OWNER_SECRET_WRITE_TIMEOUT_MS > 45_000);
+  assert.ok(OWNER_SECRET_WRITE_TIMEOUT_MS <= 60_000);
 });

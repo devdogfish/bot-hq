@@ -158,6 +158,9 @@ export function markSecureInputNotified(requestIds: string[]) {
   })();
 }
 
+/** Longer than the Agent's 45 s write limit, so the Agent's own answer arrives before Bot HQ gives up. */
+export const OWNER_SECRET_WRITE_TIMEOUT_MS = 50_000;
+
 export function callOwnerSecretEndpoint(target: Target, path: string, method: 'GET' | 'POST' | 'DELETE', body?: string) {
   return fetch(`${target.baseUrl}/v1/owner-secrets${path}`, {
     method, body,
@@ -166,7 +169,8 @@ export function callOwnerSecretEndpoint(target: Target, path: string, method: 'G
       ...(body === undefined ? {} : { 'content-type': 'application/json' }),
     },
     redirect: 'error',
-    signal: AbortSignal.timeout(10_000),
+    // A remembered share or revoke runs several Bitwarden CLI calls on the Agent (its own limit is 45 s).
+    signal: AbortSignal.timeout(method === 'GET' ? 10_000 : OWNER_SECRET_WRITE_TIMEOUT_MS),
   });
 }
 
