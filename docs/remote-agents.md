@@ -23,6 +23,42 @@ VNC relay uses the password on the server. Watch mode filters mouse, keyboard,
 clipboard and screen resize input. **Take control** enables input and **Hand
 back** tells the Agent to inspect the screen again on its next turn.
 
+## Benchmark the screen
+
+From the Bot HQ checkout, install dependencies with `npm ci`. Set
+`OWNER_SESSION_COOKIE` to the full Owner cookie header value
+(`grokbot_session=<value>`). Use HTTPS when benchmarking a remote HQ:
+
+```sh
+node scripts/screen-bench.mjs --hq-url https://hq.example.com --bot-id "$BOT_ID" --seconds 10
+```
+
+If the Agent's websockify endpoint is reachable directly, set
+`AGENT_WEBSOCKIFY_URL` to the full WebSocket URL, including any token in the
+query string. Set `VNC_PASSWORD` in the environment and run:
+
+```sh
+node scripts/screen-bench.mjs --seconds 10
+```
+
+Export credentials in the shell environment before running either command.
+`--seconds` defaults to 10. The script prints one JSON object:
+
+- `firstFrameMs` measures the time from connection start until the initial full
+  framebuffer update arrives.
+- `updatesPerSecond` counts complete incremental framebuffer updates per second.
+- `bytesPerSecond` counts incoming binary RFB payload bytes per second during
+  incremental sampling.
+- `medianRects` is the median rectangle count per incremental update, or `null`
+  when no incremental updates arrive.
+
+The benchmark measures RFB delivery without rendering. It advertises CopyRect,
+Tight, Raw and LastRect, with Tight quality 6 and compression 2. The first
+frame must arrive within 15 seconds.
+
+For before-and-after measurements, use the same endpoint, sample length and
+desktop activity on both runs.
+
 ## Paths and compatibility
 
 - `HQ_DATA_DIR` defaults to `data` in the app directory. Override the database
@@ -180,8 +216,12 @@ A transport failure is reported as an error.
 With `smart` and a guardian escalation, `/v1/responses` attempted to send the
 prompt through the API platform's unsupported outbound messaging path. The
 Runs stream emits `approval.request` with the prompt identity while the run
-waits. Bot HQ shows the returned command and reason with **Allow once** and
-**Don't allow**. The same prompt identity and generation go back to Hermes.
+waits. Bot HQ shows the returned command, reason, and offered choices.
+**Allow for this chat** grants permission for the Hermes conversation.
+It and **Always allow** also resolve pending prompts in the same run when the
+events share a `pattern_key`, offer that choice, and require no additional
+approval rules. Prompts without a key are handled individually. Each decision
+goes back to Hermes with its prompt identity and generation.
 Unattended turns deny prompts that require a human decision and post a
 notice. The guardian can still independently approve commands under
 `smart`. See the [Hermes Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#runs-api-streaming-friendly-alternative).

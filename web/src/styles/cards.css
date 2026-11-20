@@ -52,4 +52,9 @@
 .draft-card__text { padding-top: 12px; font-size: 14px; line-height: 20px; letter-spacing: 0.14px; color: var(--color-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .draft-card__actions { display: flex; gap: 8px; padding: 10px 16px 16px; }
 
+.approval-card { overflow: visible; }
 .approval-card .card__body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-card .card__actions { flex-wrap: wrap; }
+.approval-card .card__actions > .btn { flex-basis: auto; }
+.approval-card__menu { position: relative; display: flex; margin-left: auto; }
+.approval-card__menu .menu { min-width: 116px; }

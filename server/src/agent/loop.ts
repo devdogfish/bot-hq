@@ -2,9 +2,9 @@ import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
 import { activePauseRevision, appendRow, emitBot, getBotRow, getLive, getRow, setLive, updateRow } from '../store.js';
-import type { ActivityKind, MessageBody, ToolCallBody } from '../types.js';
+import type { ActivityKind, ApprovalChoice, MessageBody, ToolCallBody } from '../types.js';
 import { draftEngineFor, engineFor } from '../engine.js';
-import { HermesRun, type ApprovalPrompt } from './hermes-run.js';
+import { HermesRun, isApprovalChoice, type ApprovalPrompt } from './hermes-run.js';
 import { instructionsFor } from './prompt.js';
 import { activityFor, appToolName } from './tools.js';
 import { classifyOwnerEmailRequest, OWNER_EMAIL_TOOL, ownerEmailContent, ownerEmailProposalId } from './owner-email-policy.js';
@@ -340,17 +340,22 @@ function patchToolRow(botId: string, seq: number, patch: Partial<ToolCallBody>) 
 
 // ---------- approvals ----------
 
-type ApprovalDecision = 'allow' | 'deny' | 'expired' | 'unconfirmed';
+type ApprovalDecision = 'allow' | 'session' | 'always' | 'deny' | 'expired' | 'unconfirmed';
+type HermesApproval = { run: HermesRun; prompt: ApprovalPrompt };
 
 /** Longest a tool call waits for the user. Kept under the engines' 30 minute tool timeout. */
 const APPROVAL_WAIT_MS = 25 * 60_000;
 
-const waiters = new Map<string, {
+interface ApprovalWaiter {
   resolve: (decision: ApprovalDecision) => void;
-  send: (choice: 'once' | 'deny') => Promise<void>;
+  send: (choice: ApprovalChoice) => Promise<void>;
+  choices: ApprovalChoice[];
+  hermes?: HermesApproval;
   sending?: Promise<void>;
   expireAfterSend?: boolean;
-}>();
+}
+
+const waiters = new Map<string, ApprovalWaiter>();
 
 function setApprovalCard(botId: string, rowSeq: number, approvalId: string, status: string) {
   const card = getRow(botId, rowSeq);
@@ -365,16 +370,19 @@ const pendingApprovals = (botId: string) => db.prepare("SELECT * FROM approvals 
 async function requestApproval(
   who: { userId: string; botId: string },
   detail: string,
-  send: (choice: 'once' | 'deny') => Promise<void>,
+  send: (choice: ApprovalChoice) => Promise<void>,
   rowSeq: number | null,
   override?: { title: string; tool: string },
+  hermes?: HermesApproval,
 ): Promise<ApprovalDecision> {
   const { userId, botId } = who;
   const approvalId = newId('apr');
+  // Owner email and other in-app approvals authorize this action only.
+  const choices: ApprovalChoice[] = hermes?.prompt.choices ?? ['once', 'deny'];
   const card = appendRow(botId, 'card', {
     type: 'card', card: 'approval', approvalId,
     title: override?.title ?? `Allow ${getBotRow(botId).name} to perform this action?`,
-    detail, tool: override?.tool ?? 'Hermes approval', args: {}, status: 'pending',
+    detail, tool: override?.tool ?? 'Hermes approval', args: {}, choices, status: 'pending',
   });
   db.prepare('INSERT INTO approvals(id,bot_id,row_seq,call_id,tool,status,created_at) VALUES (?,?,?,?,?,?,?)').run(approvalId, botId, card.seq, '', override?.tool ?? 'hermes', 'pending', now());
   db.prepare('UPDATE bots SET unread = unread + 1 WHERE id=?').run(botId);
@@ -385,14 +393,14 @@ async function requestApproval(
 
   let timer: NodeJS.Timeout | undefined;
   const decision = await new Promise<ApprovalDecision>((resolve) => {
-    waiters.set(approvalId, { resolve, send });
+    waiters.set(approvalId, { resolve, send, choices, hermes });
     timer = setTimeout(() => expireApproval(approvalId), APPROVAL_WAIT_MS);
   });
   clearTimeout(timer);
   waiters.delete(approvalId);
 
   if (rowSeq !== null) {
-    if (decision === 'allow') {
+    if (decision === 'allow' || decision === 'session' || decision === 'always') {
       const row = getRow(botId, rowSeq);
       if (row?.body.type === 'tool-call' && row.body.status === 'awaiting-approval') {
         patchToolRow(botId, rowSeq, { status: 'running' });
@@ -409,7 +417,9 @@ async function requestApproval(
   return decision;
 }
 
-function finishApproval(ap: { id: string; bot_id: string; row_seq: number }, decision: ApprovalDecision) {
+interface ApprovalRow { id: string; bot_id: string; row_seq: number }
+
+function finishApproval(ap: ApprovalRow, decision: ApprovalDecision) {
   const status = decision === 'allow' ? 'allowed' : decision === 'deny' ? 'denied' : decision;
   db.prepare("UPDATE approvals SET status=?, resolved_at=? WHERE id=? AND status='pending'").run(status, now(), ap.id);
   setApprovalCard(ap.bot_id, ap.row_seq, ap.id, status);
@@ -436,25 +446,56 @@ export function expireStaleApprovals() {
   for (const ap of db.prepare("SELECT id FROM approvals WHERE status='pending'").all() as any[]) expireApproval(ap.id);
 }
 
+function sendApproval(ap: ApprovalRow, waiter: ApprovalWaiter, choice: ApprovalChoice, ready = Promise.resolve()) {
+  waiter.sending = ready.then(async () => {
+    if (waiter.expireAfterSend) {
+      finishApproval(ap, 'expired');
+      throw new Error('This approval expired before the decision was sent.');
+    }
+    try {
+      await waiter.send(choice);
+      finishApproval(ap, choice === 'once' ? 'allow' : choice);
+    } catch (error) {
+      if (waiter.expireAfterSend) finishApproval(ap, 'unconfirmed');
+      throw error;
+    }
+  }, (error) => {
+    if (waiter.expireAfterSend) finishApproval(ap, 'expired');
+    throw error;
+  }).finally(() => { waiter.sending = undefined; });
+  return waiter.sending;
+}
+
 /** Resolve an approval card from the UI. */
-export async function resolveApproval(userId: string, approvalId: string, decision: 'allow' | 'deny') {
+export async function resolveApproval(userId: string, approvalId: string, choice: ApprovalChoice) {
   const ap = db.prepare('SELECT a.*, b.user_id FROM approvals a JOIN bots b ON b.id=a.bot_id WHERE a.id=?').get(approvalId) as any;
   if (!ap || ap.user_id !== userId) return 'not found';
   if (ap.status !== 'pending') return null;
   const waiter = waiters.get(approvalId);
   if (!waiter) { expireApproval(approvalId); return null; }
   if (waiter.sending) return 'Approval decision is already being sent.';
-  try {
-    waiter.sending = waiter.send(decision === 'allow' ? 'once' : 'deny');
-    await waiter.sending;
-    finishApproval(ap, decision);
-    return null;
-  } catch (e: any) {
-    if (waiter.expireAfterSend) finishApproval(ap, 'unconfirmed');
-    return String(e?.message ?? e);
-  } finally {
-    waiter.sending = undefined;
+  if (!waiter.choices.includes(choice)) return 'This approval did not offer that choice.';
+
+  const primary = sendApproval(ap, waiter, choice);
+  const siblings: Promise<void>[] = [];
+  const hermes = waiter.hermes;
+  if ((choice === 'session' || choice === 'always') && hermes?.prompt.patternKey && hermes.prompt.patternKeys) {
+    const approvedKeys = new Set(hermes.prompt.patternKeys);
+    // Hermes resolves exact prompt IDs. Reserve each eligible sibling before awaiting the first POST.
+    for (const row of pendingApprovals(ap.bot_id)) {
+      const sibling = waiters.get(row.id);
+      if (!sibling || sibling.sending || !sibling.choices.includes(choice)) continue;
+      if (sibling.hermes?.run !== hermes.run || sibling.hermes.prompt.generation !== hermes.prompt.generation
+          || sibling.hermes.prompt.patternKey !== hermes.prompt.patternKey) continue;
+      // Hermes grants every rule on a prompt, so siblings with additional rules need separate consent.
+      if (!sibling.hermes.prompt.patternKeys?.every((key) => approvedKeys.has(key))) continue;
+      siblings.push(sendApproval(row, sibling, choice, primary));
+    }
   }
+  const [result, ...related] = await Promise.allSettled([primary, ...siblings]);
+  if (result.status === 'rejected') return String(result.reason?.message ?? result.reason);
+  if (related.some((outcome) => outcome.status === 'rejected')) return 'Could not resolve every related approval.';
+  return null;
 }
 
 // ---------- the engine's event stream ----------
@@ -795,17 +836,30 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
         case 'approval.request': {
           if (!remote || remote.stopRequested) break;
           const run = remote;
+          const patternKey = typeof d.pattern_key === 'string' && d.pattern_key ? d.pattern_key : undefined;
+          let patternKeys: string[] | undefined;
+          if (patternKey) {
+            if (d.pattern_keys === undefined) patternKeys = [patternKey];
+            else if (Array.isArray(d.pattern_keys) && d.pattern_keys.includes(patternKey)
+                && d.pattern_keys.every((key: unknown) => typeof key === 'string' && key.length > 0)) {
+              patternKeys = d.pattern_keys;
+            }
+          }
+          const choices = Array.isArray(d.choices) ? d.choices.filter(isApprovalChoice) : [];
           const prompt: ApprovalPrompt = {
             promptId: d.prompt_id, generation: d.execution_generation,
             command: typeof d.command === 'string' ? d.command : '',
             description: typeof d.description === 'string' ? d.description : '',
+            choices,
+            patternKey, patternKeys,
           };
           if (typeof prompt.promptId !== 'string' || !Number.isInteger(prompt.generation)) {
             throw new Error('Hermes returned an approval without its prompt identity.');
           }
           if (approvals.has(prompt.promptId)) break;
           const tool = turn.tools.findLast((ref) => !ref.done && ref.name === 'terminal');
-          const send = (choice: 'once' | 'deny') => run.approve(prompt, choice);
+          if (!prompt.choices.length) throw new Error('Hermes returned an approval without choices.');
+          const send = (choice: ApprovalChoice) => run.approve(prompt, choice);
           const decide = async () => {
             if (trigger.type !== 'user') {
               await send('deny');
@@ -813,7 +867,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
               return;
             }
             const decision = await requestApproval({ userId, botId },
-              [prompt.description, prompt.command].filter(Boolean).join('\n'), send, tool?.seq ?? null);
+              [prompt.description, prompt.command].filter(Boolean).join('\n'), send, tool?.seq ?? null, undefined, { run, prompt });
             if (terminal || run.stopRequested) return;
             if (decision === 'expired') await send('deny');
             if (decision === 'unconfirmed') run.stop();

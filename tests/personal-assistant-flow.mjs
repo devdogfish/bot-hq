@@ -53,11 +53,11 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
   });
   assert.equal(login.status, 200);
   headers.cookie = login.headers.get('set-cookie').split(';')[0];
-  async function request(path, method = 'GET', body) {
+  async function request(path, method = 'GET', body, status = 200) {
     const response = await hq.request('/api' + path, {
       method, headers, body: body === undefined ? undefined : JSON.stringify(body),
     });
-    assert.equal(response.status, 200);
+    assert.equal(response.status, status);
     return response.json();
   }
   const { bots: [tyler] } = await request('/bots');
@@ -186,6 +186,8 @@ test('a private Tyler turn gates Gmail, captures scoped facts, and requires exac
       return rows.find(({ body }) => body.card === 'approval' && body.status === 'pending')?.body;
     });
     assert.equal(card.detail, 'From: owner@example.net\nTo: friend@example.net\nSubject: Re: Appointment\n\nI can make that.');
+    assert.deepEqual(card.choices, ['once', 'deny']);
+    await request('/approvals/' + card.approvalId, 'POST', { decision: 'always' }, 409);
     assert.equal(sends.length, 0);
     if (lateRead) {
       deferred.resolve();

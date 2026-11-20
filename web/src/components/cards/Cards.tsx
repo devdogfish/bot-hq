@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import type { CardBody, Row } from '@shared/types';
+import type { ApprovalChoice, CardBody, Row } from '@shared/types';
 import { api } from '../../lib/api';
 import { useStore } from '../../store';
 import { Icon } from '../Icon';
+import { Menu } from '../Menu';
 import { ToolkitLogo } from '../ToolkitLogo';
 
 type Card<K extends CardBody['card']> = Extract<CardBody, { card: K }>;
@@ -24,12 +25,17 @@ export const humanizeToolkit = (slug: string) => KNOWN[slug.toLowerCase()] ?? sl
 
 // ---------------- approval ----------------
 
-const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired', unconfirmed: 'Decision unconfirmed' };
+const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', session: 'Allowed for this chat', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired', unconfirmed: 'Decision unconfirmed' };
+const LEGACY_APPROVAL_CHOICES: ApprovalChoice[] = ['deny', 'once'];
+const EMAIL_SEND_TOOL = /(?:^|__)(?:send_owner_email|stage_personal_reply|gmail_send_email)$/i;
 
 export function ApprovalCard({ body }: { body: Card<'approval'> }) {
   const { busy, error, run } = useBusy();
+  const [menuOpen, setMenuOpen] = useState(false);
   const pending = body.status === 'pending';
-  const decide = (d: 'allow' | 'deny') => run(d, () => api.approve(body.approvalId, d));
+  const choices = body.choices ?? LEGACY_APPROVAL_CHOICES;
+  const canAlwaysAllow = choices.includes('always') && !EMAIL_SEND_TOOL.test(body.tool);
+  const decide = (decision: ApprovalChoice) => run(decision, () => api.approve(body.approvalId, decision));
   const name = body.toolkit ? humanizeToolkit(body.toolkit) : prettyTool(body.tool);
   return (
     <div className={`card approval-card${pending ? '' : ' is-resolved'}`}>
@@ -42,19 +48,26 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
       </div>
       {body.detail && <div className="card__body">{body.detail}</div>}
       {pending ? (
-        <>
-          <div className="card__actions">
-            <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>
-            <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('allow')}>Allow once</button>
-          </div>
-          {error && <div className="card__error">{error}</div>}
-        </>
+        <div className="card__actions">
+          {choices.includes('deny') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>}
+          {choices.includes('once') && <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('once')}>Allow once</button>}
+          {choices.includes('session') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('session')}>Allow for this chat</button>}
+          {canAlwaysAllow && (
+            <div className="approval-card__menu">
+              <button type="button" className="btn btn--secondary" aria-label="More approval options" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!busy} onClick={() => setMenuOpen(true)}>
+                <Icon name="more" />
+              </button>
+              {menuOpen && <Menu align="right" placement="above" onClose={() => setMenuOpen(false)} items={[{ label: 'Always allow', onSelect: () => decide('always') }]} />}
+            </div>
+          )}
+        </div>
       ) : (
         <div className={`card__outcome is-${body.status}`}>
           <Icon name={body.status === 'denied' || body.status === 'expired' || body.status === 'unconfirmed' ? 'close' : 'check'} size={12} opacity={0.7} />
           {APPROVAL_OUTCOME[body.status] ?? body.status}
         </div>
       )}
+      {error && <div className="card__error" role="alert">{error}</div>}
     </div>
   );
 }
@@ -136,7 +149,7 @@ export function DraftCard({ body }: { body: Card<'draft'> }) {
       {pending ? (
         <div className="draft-card__actions">
           <button type="button" className="btn btn--secondary btn--grow" disabled={!!busy} onClick={() => run('discard', () => api.approve(body.approvalId, 'deny'))}>Discard</button>
-          <button type="button" className="btn btn--primary btn--grow" disabled={!!busy} onClick={() => run('send', () => api.approve(body.approvalId, 'allow'))}>Send</button>
+          <button type="button" className="btn btn--primary btn--grow" disabled={!!busy} onClick={() => run('send', () => api.approve(body.approvalId, 'once'))}>Send</button>
         </div>
       ) : (
         <div className={`card__outcome is-${body.status}`} style={{ padding: '0 16px 16px' }}>
