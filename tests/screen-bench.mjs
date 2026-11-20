@@ -31,7 +31,7 @@ function serverInit() {
   return Buffer.concat([header, name]);
 }
 
-function framebufferUpdate(rectCount, full) {
+function framebufferUpdate(rectCount, full, startX = 0) {
   const rectangleWidth = full ? width / rectCount : 1;
   const header = Buffer.alloc(4);
   header.writeUInt16BE(rectCount, 2);
@@ -39,7 +39,7 @@ function framebufferUpdate(rectCount, full) {
   const rectangles = encodings.map((encoding, x) => {
     const payloadBytes = encoding === 0 ? rectangleWidth * height * 4 : 4;
     const rectangle = Buffer.alloc(12 + payloadBytes);
-    rectangle.writeUInt16BE(x * rectangleWidth, 0);
+    rectangle.writeUInt16BE(startX + x * rectangleWidth, 0);
     rectangle.writeUInt16BE(rectangleWidth, 4);
     rectangle.writeUInt16BE(height, 6);
     rectangle.writeInt32BE(encoding, 8);
@@ -51,9 +51,10 @@ function framebufferUpdate(rectCount, full) {
   return Buffer.concat([header, ...rectangles]);
 }
 
-async function fakeScreen(t, direct) {
+async function fakeScreen(t, direct, { control = false, stallControl = false } = {}) {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   const requests = [];
+  const pointerEvents = [];
   let failure;
   let sampleBytes = 0;
   t.after(async () => {
@@ -72,10 +73,16 @@ async function fakeScreen(t, direct) {
     let pending = Buffer.alloc(0);
     let step = 'version';
     let fullFrameTimer;
+    let controlFrameTimer;
     let fullFrameSent = false;
-    socket.once('close', () => clearTimeout(fullFrameTimer));
+    let pointerX;
+    let sentUnrelatedUpdate;
+    socket.once('close', () => {
+      clearTimeout(fullFrameTimer);
+      clearTimeout(controlFrameTimer);
+    });
     try {
-      assert.equal(request.url, direct ? agentPath : '/api/bots/fixture-bot/screen?mode=watch');
+      assert.equal(request.url, direct ? agentPath : `/api/bots/fixture-bot/screen?mode=${control ? 'control' : 'watch'}`);
       assert.equal(request.headers.cookie, direct ? undefined : cookie);
       send(version, 5);
     } catch (error) {
@@ -150,6 +157,8 @@ async function fakeScreen(t, direct) {
           assert.ok(encodings.includes(0), 'client advertises Raw');
           assert.ok(encodings.includes(1), 'client advertises CopyRect');
           assert.ok(encodings.includes(7), 'client advertises Tight');
+          assert.ok(encodings.includes(-26), 'client advertises Tight quality level 6');
+          assert.ok(encodings.includes(control ? -255 : -254), 'client advertises Tight compression level');
           return true;
         }
         case 3: {
@@ -169,12 +178,40 @@ async function fakeScreen(t, direct) {
             }, 40);
           } else {
             assert.equal(fullFrameSent, true, 'client waits for the full frame');
-            if (count !== undefined) {
+            if (control) {
+              assert.notEqual(pointerX, undefined, 'input precedes the update request');
+              if (!sentUnrelatedUpdate) {
+                send(framebufferUpdate(1, false, width - 1 - pointerX), 13);
+                sentUnrelatedUpdate = true;
+              } else if (!stallControl) {
+                const update = framebufferUpdate(1, false, pointerX);
+                // Delay the last byte so the sample includes receiving the rectangle.
+                socket.send(update.subarray(0, update.length - 1));
+                controlFrameTimer = setTimeout(() => {
+                  pointerX = undefined;
+                  socket.send(update.subarray(update.length - 1));
+                }, 18);
+              }
+            } else if (count !== undefined) {
               const update = framebufferUpdate(count, false);
               sampleBytes += update.length;
               send(update, 13);
             }
           }
+          return true;
+        }
+        case 5: {
+          const message = read(6);
+          if (!message) return false;
+          assert.equal(control, true);
+          assert.equal(fullFrameSent, true, 'client waits for the full frame before sending input');
+          assert.equal(pointerX, undefined, 'client waits for the matching rectangle before sending more input');
+          assert.equal(message[1], 0, 'pointer moves without clicking');
+          assert.equal(message.readUInt16BE(4), height - 1);
+          pointerX = message.readUInt16BE(2);
+          assert.equal(pointerX, pointerEvents.length % 2 === 0 ? width - 1 : 0);
+          pointerEvents.push(pointerX);
+          sentUnrelatedUpdate = false;
           return true;
         }
         default:
@@ -200,6 +237,7 @@ async function fakeScreen(t, direct) {
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
     requests,
+    pointerEvents,
     get sampleBytes() { return sampleBytes; },
     get failure() { return failure; },
   };
@@ -225,5 +263,38 @@ for (const direct of [true, false]) {
     assert.equal(metrics.medianRects, 2.5);
     assert.equal(metrics.updatesPerSecond, rectangleCounts.length / sampleSeconds);
     assert.equal(metrics.bytesPerSecond, fixture.sampleBytes / sampleSeconds);
+    assert.equal('inputLatencyMs' in metrics, false);
+  });
+
+  test(`screen benchmark measures input latency over ${direct ? 'direct VNC auth' : 'Owner control'}`, async (t) => {
+    const fixture = await fakeScreen(t, direct, { control: true });
+    const args = direct ? [] : ['--hq-url', fixture.origin, '--bot-id', 'fixture-bot'];
+    const env = direct
+      ? { AGENT_WEBSOCKIFY_URL: `${fixture.origin.replace('http:', 'ws:')}${agentPath}`, VNC_PASSWORD: password }
+      : { OWNER_SESSION_COOKIE: cookie };
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [script, ...args, '--control', '--seconds', '3'],
+      { env, timeout: 5000 },
+    ).catch((error) => { throw fixture.failure ?? error; });
+
+    assert.ifError(fixture.failure);
+    assert.equal(fixture.pointerEvents.length, 20);
+    assert.deepEqual(fixture.requests, [0, ...Array(40).fill(1)]);
+    const metrics = JSON.parse(stdout);
+    assert.ok(Number.isFinite(metrics.inputLatencyMs) && metrics.inputLatencyMs >= 15);
   });
 }
+
+test('screen benchmark reports no input latency if the matching rectangle never arrives', async (t) => {
+  const fixture = await fakeScreen(t, false, { control: true, stallControl: true });
+  const { stdout } = await execFileAsync(
+    process.execPath,
+    [script, '--hq-url', fixture.origin, '--bot-id', 'fixture-bot', '--control', '--seconds', '0.25'],
+    { env: { OWNER_SESSION_COOKIE: cookie }, timeout: 5000 },
+  ).catch((error) => { throw fixture.failure ?? error; });
+
+  assert.ifError(fixture.failure);
+  assert.deepEqual(fixture.pointerEvents, [width - 1]);
+  assert.equal(JSON.parse(stdout).inputLatencyMs, null);
+});

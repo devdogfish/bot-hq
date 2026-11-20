@@ -88,6 +88,10 @@ class ScreenStream {
     Object.assign(this.host.style, { transformOrigin: 'top left', overflow: 'hidden' });
   }
 
+  get attached() {
+    return this.placement !== null;
+  }
+
   attach(placement: Placement, listener: StreamListener) {
     this.placement = placement;
     this.listener = listener;
@@ -121,7 +125,7 @@ class ScreenStream {
 
   detach(listener: StreamListener) {
     if (this.listener !== listener) return;
-    this.capture();
+    if (this.mode === 'watch') this.capture();
     this.listener = null;
     this.placement = null;
     this.host.remove();
@@ -142,6 +146,7 @@ class ScreenStream {
   }
 
   reconnect() {
+    if (this.mode === 'watch' && this.entry.control.attached) return;
     this.stop();
     const generation = this.generation;
     this.conn = 'connecting';
@@ -152,9 +157,12 @@ class ScreenStream {
       const url = `${proto}://${location.host}/api/bots/${this.entry.botId}/screen?mode=${this.mode}`;
       const rfb = new RFB(this.host, url, { shared: true }) as NoVnc;
       this.rfb = rfb;
-      rfb.qualityLevel = 8;
-      rfb.compressionLevel = 2;
-      rfb.viewOnly = this.mode === 'watch';
+      const watch = this.mode === 'watch';
+      // Trade some JPEG quality for smaller updates and use fast compression while driving.
+      rfb.qualityLevel = watch ? 8 : 6;
+      rfb.compressionLevel = watch ? 2 : 1;
+      if (!watch) rfb.showDotCursor = true;
+      rfb.viewOnly = watch;
       rfb.resizeSession = false;
       rfb.background = 'transparent';
       rfb.focusOnClick = this.mode === 'control';
@@ -200,7 +208,7 @@ class ScreenStream {
             rfb._handleDataRect = decode;
             rfb._framebufferUpdate = update;
             this.painted = true;
-            this.capture();
+            if (watch) this.capture();
             this.conn = 'connected';
             this.publish();
           }).catch(() => {});
@@ -448,7 +456,8 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
       return;
     }
     const entry = getScreen({ botId: bot.id, screenId, revision: screenRevision });
-    if (mode === 'control') entry.watch.capture();
+    // Save the watch frame for the switch and stop its background decoding while driving.
+    if (mode === 'control') entry.watch.stop();
     const stream = entry[mode];
     const update: StreamListener = setFrame;
     activeStream.current = stream;
@@ -457,7 +466,10 @@ export function ComputerScreen({ bot, variant, initialMode = 'watch', hint, paus
     return () => {
       activeStream.current = null;
       stream.detach(update);
-      if (mode === 'control') stream.stop();
+      if (mode === 'control') {
+        stream.stop();
+        if (tabIsVisible() && (selectedScreen === entry || entry.watch.attached)) entry.watch.start(true);
+      }
     };
   }, [userId, bot.id, screenId, screenRevision, mode, paused, visible]);
 

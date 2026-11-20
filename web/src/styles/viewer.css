@@ -31,7 +31,7 @@
 .screen__stream > div { background: transparent !important; }
 .screen--stage .screen__stream > div > div, .screen.is-fullscreen .screen__stream > div > div { overflow: hidden !important; }
 .screen--stage .screen__stream canvas, .screen.is-fullscreen .screen__stream canvas { margin: 0 !important; }
-.screen__canvas canvas { cursor: default !important; }
+.screen:not(.is-driving) .screen__canvas canvas { cursor: default !important; }
 .screen.is-panning .screen__stream canvas { cursor: grab !important; }
 .screen.is-panning .screen__stream canvas:active { cursor: grabbing !important; }
 .screen__cached-frame { display: block; }

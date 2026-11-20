@@ -3,11 +3,16 @@ import { parseArgs } from 'node:util';
 import { WebSocket } from 'ws';
 
 const FIRST_FRAME_TIMEOUT_MS = 15_000;
+const CONTROL_TRIALS = 20;
 const HELP = `Usage:
-  OWNER_SESSION_COOKIE=… node scripts/screen-bench.mjs --hq-url <base URL> --bot-id <id> [--seconds <N>]
-  AGENT_WEBSOCKIFY_URL=… VNC_PASSWORD=… node scripts/screen-bench.mjs [--seconds <N>]
+  OWNER_SESSION_COOKIE=… node scripts/screen-bench.mjs --hq-url <base URL> --bot-id <id> [--control] [--seconds <N>]
+  AGENT_WEBSOCKIFY_URL=… VNC_PASSWORD=… node scripts/screen-bench.mjs [--control] [--seconds <N>]
 
-Duration defaults to 10 seconds. Credentials are read from the environment.`;
+Duration defaults to 10 seconds. Credentials are read from the environment.
+--control moves the pointer without clicking and reports median inputLatencyMs
+from sending input to receiving a complete update covering the new pointer
+position. It runs up to 20 trials within the measurement window and reports null
+if none complete.`;
 
 function argumentsForBench() {
   let values;
@@ -17,6 +22,7 @@ function argumentsForBench() {
         'hq-url': { type: 'string' },
         'bot-id': { type: 'string' },
         seconds: { type: 'string', default: '10' },
+        control: { type: 'boolean' },
         help: { type: 'boolean', short: 'h' },
       },
     }));
@@ -27,9 +33,10 @@ function argumentsForBench() {
 
   const hqUrl = values['hq-url'];
   const botId = values['bot-id'];
+  const control = values.control;
   const useHq = hqUrl !== undefined || botId !== undefined;
   if (useHq && !(hqUrl && botId)) {
-    throw new Error('Supply both --hq-url and --bot-id for Owner watch mode.');
+    throw new Error('Supply both --hq-url and --bot-id for Owner mode.');
   }
   const endpoint = useHq ? hqUrl : process.env.AGENT_WEBSOCKIFY_URL;
   if (!endpoint) throw new Error('Set AGENT_WEBSOCKIFY_URL for direct Agent mode.');
@@ -55,12 +62,12 @@ function argumentsForBench() {
     const cookie = process.env.OWNER_SESSION_COOKIE;
     if (!cookie || /[\r\n]/.test(cookie)) throw new Error('Set OWNER_SESSION_COOKIE to the Owner Cookie header.');
     url.pathname = `/api/bots/${encodeURIComponent(botId)}/screen`;
-    url.search = '?mode=watch';
-    return { url, seconds, headers: { Cookie: cookie } };
+    url.search = control ? '?mode=control' : '?mode=watch';
+    return { url, seconds, control, headers: { Cookie: cookie } };
   }
   const password = process.env.VNC_PASSWORD;
   if (!password) throw new Error('Set VNC_PASSWORD for direct Agent mode.');
-  return { url, seconds, password };
+  return { url, seconds, control, password };
 }
 
 // RFB is a stream. A WebSocket message may contain any portion of it.
@@ -153,12 +160,15 @@ const COPY_RECT = 1;
 const TIGHT = 7;
 const LAST_RECT = -224;
 const TIGHT_QUALITY_LEVEL_6 = -26;
+const TIGHT_COMPRESSION_LEVEL_1 = -255;
 const TIGHT_COMPRESSION_LEVEL_2 = -254;
 
-function configureFramebuffer(send) {
+function configureFramebuffer(send, control) {
   // 32bpp, 24-bit true color, little endian, 8 bits per channel, RGB shifts 0/8/16.
   send(Buffer.from([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0]));
-  const encodings = [COPY_RECT, TIGHT, RAW, TIGHT_QUALITY_LEVEL_6, TIGHT_COMPRESSION_LEVEL_2, LAST_RECT];
+  const compression = control ? TIGHT_COMPRESSION_LEVEL_1 : TIGHT_COMPRESSION_LEVEL_2;
+  // Keep the pointer in the framebuffer by omitting client-side cursor encodings.
+  const encodings = [COPY_RECT, TIGHT, RAW, TIGHT_QUALITY_LEVEL_6, compression, LAST_RECT];
   const message = Buffer.alloc(4 + encodings.length * 4);
   message[0] = 2;
   message.writeUInt16BE(encodings.length, 2);
@@ -173,6 +183,14 @@ function requestFramebuffer(send, { width, height }, incremental) {
   request.writeUInt16BE(width, 6);
   request.writeUInt16BE(height, 8);
   send(request);
+}
+
+function movePointer(send, { x, y }) {
+  const message = Buffer.alloc(6);
+  message[0] = 5; // PointerEvent, with no mouse buttons pressed
+  message.writeUInt16BE(x, 2);
+  message.writeUInt16BE(y, 4);
+  send(message);
 }
 
 // Tight uses one to three bytes for a packed payload length.
@@ -208,7 +226,8 @@ async function skipTight(reader, width, height) {
   return reader.skip(length < 12 ? length : await tightLength(reader));
 }
 
-async function readRectangles(reader, count) {
+async function readRectangles(reader, count, pointer) {
+  let coversPointer = false;
   for (let index = 0; index < count; index++) {
     const rectangle = await reader.read(12);
     const width = rectangle.readUInt16BE(4);
@@ -218,20 +237,25 @@ async function readRectangles(reader, count) {
       case RAW: await reader.skip(width * height * 4); break;
       case COPY_RECT: await reader.skip(4); break;
       case TIGHT: await skipTight(reader, width, height); break;
-      case LAST_RECT: return index;
+      case LAST_RECT: return { rectangles: index, coversPointer };
       default: throw new Error(`Unsupported RFB rectangle encoding ${encoding}.`);
     }
+    if (pointer && !coversPointer) {
+      const x = rectangle.readUInt16BE(0);
+      const y = rectangle.readUInt16BE(2);
+      coversPointer = pointer.x >= x && pointer.x < x + width && pointer.y >= y && pointer.y < y + height;
+    }
   }
-  return count;
+  return { rectangles: count, coversPointer };
 }
 
-async function readUpdate(reader) {
+async function readUpdate(reader, pointer) {
   for (;;) {
     const [type] = await reader.read(1);
     switch (type) {
       case 0: { // FramebufferUpdate
         const header = await reader.read(3);
-        return readRectangles(reader, header.readUInt16BE(1));
+        return readRectangles(reader, header.readUInt16BE(1), pointer);
       }
       case 1: { // SetColorMapEntries
         const header = await reader.read(5);
@@ -256,7 +280,7 @@ function median(numbers) {
   return numbers.length % 2 ? numbers[middle] : (numbers[middle - 1] + numbers[middle]) / 2;
 }
 
-async function benchmark({ url, headers, password, seconds }) {
+async function benchmark({ url, headers, password, seconds, control }) {
   let vncAuthResponse;
   if (password !== undefined) {
     const { tsImport } = await import('tsx/esm/api');
@@ -291,10 +315,10 @@ async function benchmark({ url, headers, password, seconds }) {
   let timer = setTimeout(() => reader.stop(new Error('Timed out waiting for the first framebuffer.')), FIRST_FRAME_TIMEOUT_MS);
   try {
     const size = await handshake(reader, send, password, vncAuthResponse);
-    configureFramebuffer(send);
+    configureFramebuffer(send, control);
     do {
       requestFramebuffer(send, size, false);
-    } while (await readUpdate(reader) === 0);
+    } while ((await readUpdate(reader)).rectangles === 0);
     const firstFrameTime = performance.now();
     const firstFrameMs = firstFrameTime - started;
 
@@ -302,20 +326,39 @@ async function benchmark({ url, headers, password, seconds }) {
     deadline = firstFrameTime + seconds * 1000;
     timer = setTimeout(() => reader.stop(done), seconds * 1000);
     const counts = [];
+    const latencies = [];
+    let pointer;
+    let inputTime;
     try {
       while (performance.now() < deadline) {
+        if (control && !pointer) {
+          const far = latencies.length % 2 === 0;
+          pointer = { x: far ? size.width - 1 : 0, y: far ? size.height - 1 : 0 };
+          inputTime = performance.now();
+          movePointer(send, pointer);
+        }
         requestFramebuffer(send, size, true);
-        const rectangles = await readUpdate(reader);
-        if (performance.now() < deadline) counts.push(rectangles);
+        const { rectangles, coversPointer } = await readUpdate(reader, pointer);
+        const received = performance.now();
+        if (received >= deadline) break;
+        counts.push(rectangles);
+        if (coversPointer) {
+          latencies.push(received - inputTime);
+          if (latencies.length === CONTROL_TRIALS) break;
+          pointer = undefined;
+        }
       }
     } catch (error) {
       if (error !== done) throw error;
     }
+    const elapsedSeconds = Math.min(seconds, (performance.now() - firstFrameTime) / 1000);
+    const rateSeconds = control ? elapsedSeconds : seconds;
     return {
       firstFrameMs,
-      updatesPerSecond: counts.length / seconds,
-      bytesPerSecond: measuredBytes / seconds,
+      updatesPerSecond: counts.length / rateSeconds,
+      bytesPerSecond: measuredBytes / rateSeconds,
       medianRects: median(counts),
+      ...(control && { inputLatencyMs: median(latencies) }),
     };
   } finally {
     clearTimeout(timer);

@@ -52,9 +52,18 @@ Export credentials in the shell environment before running either command.
 - `medianRects` is the median rectangle count per incremental update, or `null`
   when no incremental updates arrive.
 
-The benchmark measures RFB delivery without rendering. It advertises CopyRect,
-Tight, Raw and LastRect, with Tight quality 6 and compression 2. The first
-frame must arrive within 15 seconds.
+Add `--control` to either command to measure input latency. After the first
+frame, the benchmark moves the remote pointer between two corners without
+clicking. `inputLatencyMs` is the median time from sending input to receiving a
+complete update with a rectangle covering the destination. The run ends after
+20 samples or when `--seconds` expires, and reports `null` if no sample
+completes. The rate metrics use the elapsed sampling time in control mode.
+
+The benchmark measures RFB delivery before browser decoding and rendering. It
+advertises CopyRect, Tight, Raw and LastRect, with Tight quality 6 and
+compression 2 in watch mode or 1 in control mode. The first frame must arrive
+within 15 seconds. Use a quiet desktop for control measurements because other
+updates covering the destination can also count toward input latency.
 
 For before-and-after measurements, use the same endpoint, sample length and
 desktop activity on both runs.
