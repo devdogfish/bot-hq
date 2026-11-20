@@ -20,6 +20,7 @@ import { configApi } from './routes-config.js';
 import { secureInputApi } from './routes-secure-input.js';
 import { mcpApi } from './mcp.js';
 import { meetingApi } from './meeting/routes.js';
+import { closeInterruptedMeetings } from './voice/index.js';
 import { hooksApi } from './routes-hooks.js';
 import { enqueueEvent, resumeEventRoutines } from './events.js';
 import { initEngines } from './engine.js';
@@ -32,6 +33,7 @@ initSubagents();
 initRooms();
 // Approvals wait in memory; whatever was still open when the last process stopped can no longer be answered.
 expireStaleApprovals();
+closeInterruptedMeetings();
 
 const app = new Hono();
 app.get('/api/health', (c) => c.json({ ok: true, engine: 'hermes' }));

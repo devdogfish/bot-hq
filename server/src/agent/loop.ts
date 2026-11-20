@@ -35,6 +35,7 @@ type RoutineTrigger = { type: 'routine'; routineId: string; name: string; prompt
 
 export type Trigger =
   | { type: 'user'; text: string; chatRow?: { generation: number; seq: number }; draftOnly?: boolean }
+  | { type: 'meeting'; text: string }
   | RoutineTrigger
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'secure-input' }
@@ -171,6 +172,7 @@ export function enqueueBotMessage(fromBotId: string, toBotId: string, text: stri
 function triggerText(t: Trigger): string {
   switch (t.type) {
     case 'user': return t.text;
+    case 'meeting': return `[Meeting: The Owner approved this participant's request for this turn. Use the usual permissions and approvals. Post the outcome in Bot HQ chat.]\n${t.text}`;
     case 'routine': return `[Routine "${t.name}" is running now. Do this:]\n${t.prompt}`;
     case 'bot': return `[Message from ${t.fromName}, another Bot on the team. Reply to them with send_to_bot if they asked you something.]\n${t.text}`;
     case 'secure-input': return '';
@@ -683,6 +685,14 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
   if (routine && runRevision !== undefined && !isRoutineRunCurrent(routine.routineId, runRevision)) return;
   const userId: string = bot.user_id;
   const personal = isPersonalAssistant(botId);
+  if (trigger.type === 'meeting') {
+    if (personal) return;
+    const decision = await requestApproval({ userId, botId }, trigger.text, async () => {}, null, {
+      title: `Allow ${bot.name} to handle this meeting request?`, tool: 'Meeting request',
+    });
+    if (decision !== 'allow' || isBotResetting(botId) || activePauseRevision(botId) !== pauseRevision ||
+        getBotRow(botId)?.generation !== bot.generation) return;
+  }
   const personalEvent = personal && routine?.eventSchedule?.startsWith('event:');
   const draftOnly = trigger.type === 'user' && trigger.draftOnly === true;
   const secureNotices = !personal && !draftOnly ? secureInputNotices(botId, bot.generation) : [];
@@ -965,7 +975,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
           if (!prompt.choices.length) throw new Error('Hermes returned an approval without choices.');
           const send = (choice: ApprovalChoice) => run.approve(prompt, choice);
           const decide = async () => {
-            if (trigger.type !== 'user') {
+            if (trigger.type !== 'user' && trigger.type !== 'meeting') {
               await send('deny');
               appendRow(botId, 'notice', { type: 'notice', text: 'Hermes requested approval during an unattended turn. The command was denied.', tone: 'info' });
               return;

@@ -99,13 +99,15 @@ export function appendRow(botId: string, kind: RowKind, body: RowBody): Row {
 }
 
 /** Rewrite an existing row's body (e.g. streaming text, card status). */
-export function updateRow(botId: string, seq: number, body: RowBody): Row | null {
+export function updateRow(botId: string, seq: number, body: RowBody, generation?: number): Row | null {
   const tx = db.transaction(() => {
     const b = db.prepare('SELECT user_id, generation FROM bots WHERE id=?').get(botId) as any;
-    const existing = db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND seq=?').get(botId, b.generation, seq) as any;
+    if (!b) return null;
+    const rowGeneration = generation ?? b.generation;
+    const existing = db.prepare('SELECT * FROM rows WHERE bot_id=? AND generation=? AND seq=?').get(botId, rowGeneration, seq) as any;
     if (!existing) return null;
     const rev = bumpRev(botId);
-    db.prepare('UPDATE rows SET body=?, updated_seq=? WHERE bot_id=? AND generation=? AND seq=?').run(JSON.stringify(body), rev, botId, b.generation, seq);
+    db.prepare('UPDATE rows SET body=?, updated_seq=? WHERE bot_id=? AND generation=? AND seq=?').run(JSON.stringify(body), rev, botId, rowGeneration, seq);
     return { userId: b.user_id as string, row: { ...toRow(existing), body, updatedSeq: rev } as Row };
   });
   const res = tx();

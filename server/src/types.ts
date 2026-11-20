@@ -162,6 +162,7 @@ export interface EventBody {
 
 export interface VoiceCallRecord {
   id: string;
+  mode?: 'meeting';
   phase: 'started' | 'ended';
   durationMs?: number;
   summary?: string;

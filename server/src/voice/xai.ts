@@ -39,6 +39,7 @@ export async function startXaiSession(
 ) {
   const r = await fetch(`${XAI}/realtime/client_secrets`, {
     method: 'POST',
+    redirect: 'error',
     headers: { ...xaiHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ expires_after: { seconds: 300 } }),
     signal: AbortSignal.timeout(15_000),
@@ -48,7 +49,9 @@ export async function startXaiSession(
     return null;
   }
   const secret = await r.json().catch(() => null) as { value?: string; expires_at: number } | null;
-  if (typeof secret?.value !== 'string' || !secret.value) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (typeof secret?.value !== 'string' || !secret.value || secret.value === env.xaiKey ||
+      !Number.isInteger(secret.expires_at) || secret.expires_at <= now || secret.expires_at > now + 360) return null;
 
   const tools = mode === 'meeting' ? MEETING_TOOLS : VOICE_TOOLS;
 
