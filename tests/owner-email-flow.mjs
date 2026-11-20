@@ -316,7 +316,7 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   assert.deepEqual(await readRows(), [], 'an old SES result rewrote a row in the fresh generation');
 });
 
-test('Email send approval cards never expose Always allow', async () => {
+test('Approval cards show chat scope and keep Always allow off email cards', async () => {
   const webRequire = createRequire(new URL('../web/package.json', import.meta.url));
   const { createServer } = await import(webRequire.resolve('vite'));
   const vite = await createServer({
@@ -329,13 +329,20 @@ test('Email send approval cards never expose Always allow', async () => {
     const body = {
       type: 'card', card: 'approval', approvalId: 'fixture',
       title: 'Approve this action?', args: {}, status: 'pending',
-      choices: ['once', 'deny', 'always'],
+      choices: ['once', 'deny', 'session', 'always'],
     };
     const render = (tool) => renderToStaticMarkup(createElement(ApprovalCard, {
       body: { ...body, tool },
     }));
-    assert.match(render('terminal'), /More approval options/);
-    for (const tool of ['send_owner_email', 'stage_personal_reply']) {
+    const terminal = render('terminal');
+    assert.match(terminal, /Allow for this chat/);
+    assert.match(terminal, /More approval options/);
+    assert.doesNotMatch(terminal, /Always allow/);
+    const resolved = renderToStaticMarkup(createElement(ApprovalCard, {
+      body: { ...body, tool: 'terminal', status: 'session' },
+    }));
+    assert.match(resolved, /Allowed for this chat/);
+    for (const tool of ['send_owner_email', 'mcp__hq__stage_personal_reply', 'GMAIL_SEND_EMAIL']) {
       const markup = render(tool);
       assert.match(markup, /Allow once/);
       assert.doesNotMatch(markup, /Always allow|More approval options/);

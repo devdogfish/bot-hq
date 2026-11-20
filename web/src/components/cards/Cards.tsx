@@ -25,7 +25,7 @@ export const humanizeToolkit = (slug: string) => KNOWN[slug.toLowerCase()] ?? sl
 
 // ---------------- approval ----------------
 
-const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', session: 'Allowed for this run', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired', unconfirmed: 'Decision unconfirmed' };
+const APPROVAL_OUTCOME: Record<string, string> = { allowed: 'Allowed once', session: 'Allowed for this chat', always: 'Always allowed', denied: 'Not allowed', expired: 'Expired', unconfirmed: 'Decision unconfirmed' };
 const LEGACY_APPROVAL_CHOICES: ApprovalChoice[] = ['deny', 'once'];
 const EMAIL_SEND_TOOL = /(?:^|__)(?:send_owner_email|stage_personal_reply|gmail_send_email)$/i;
 
@@ -51,7 +51,7 @@ export function ApprovalCard({ body }: { body: Card<'approval'> }) {
         <div className="card__actions">
           {choices.includes('deny') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('deny')}>Don't allow</button>}
           {choices.includes('once') && <button type="button" className="btn btn--primary" disabled={!!busy} onClick={() => decide('once')}>Allow once</button>}
-          {choices.includes('session') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('session')}>Allow for this run</button>}
+          {choices.includes('session') && <button type="button" className="btn btn--secondary" disabled={!!busy} onClick={() => decide('session')}>Allow for this chat</button>}
           {canAlwaysAllow && (
             <div className="approval-card__menu">
               <button type="button" className="btn btn--secondary" aria-label="More approval options" aria-haspopup="menu" aria-expanded={menuOpen} disabled={!!busy} onClick={() => setMenuOpen(true)}>

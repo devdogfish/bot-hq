@@ -799,9 +799,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
             promptId: d.prompt_id, generation: d.execution_generation,
             command: typeof d.command === 'string' ? d.command : '',
             description: typeof d.description === 'string' ? d.description : '',
-            // Pinned Hermes authority events use the conversation route for session grants.
-            // Until Hermes scopes those grants to the run, do not offer them as run-only consent.
-            choices: d.kind === 'approval' ? choices.filter((choice: ApprovalChoice) => choice !== 'session') : choices,
+            choices,
             patternKey, patternKeys,
           };
           if (typeof prompt.promptId !== 'string' || !Number.isInteger(prompt.generation)) {

@@ -88,9 +88,9 @@ test('Hermes passes through approval choices, rejects unoffered choices, and res
   await until(() => stream, 'Hermes event stream did not start');
   try {
     const choices = ['once', 'session', 'always', 'deny'];
-    const prompt = (id, pattern, offered, keys, kind) => emit('approval.request', {
+    const prompt = (id, pattern, offered, keys) => emit('approval.request', {
       prompt_id: id, execution_generation: 3, command: id,
-      pattern_key: pattern, pattern_keys: keys, choices: offered, kind,
+      pattern_key: pattern, pattern_keys: keys, choices: offered,
     });
     prompt('first', 'shared', choices);
     prompt('sibling', 'shared', choices);
@@ -150,14 +150,25 @@ test('Hermes passes through approval choices, rejects unoffered choices, and res
     assert.equal(decisions.length, count + 1, 'unconfirmed primary must not resolve another prompt');
     assert.equal((await cards()).at(-1).status, 'pending');
 
-    prompt('authority', undefined, choices, undefined, 'approval');
-    const authority = await until(async () => {
+    const authorityChoices = ['once', 'deny', 'session', 'always'];
+    for (const id of ['authority', 'unkeyed-sibling']) {
+      emit('approval.request', {
+        kind: 'approval', prompt_id: id, execution_generation: 3,
+        command: 'same command', description: 'same rule', choices: authorityChoices,
+      });
+    }
+    const [authority, unkeyedSibling] = await until(async () => {
       const rows = await cards();
-      if (rows.length === 9) return rows.at(-1);
-    }, 'expected an approval from the session authority');
-    assert.deepEqual(authority.choices, ['once', 'always', 'deny']);
-    await decide(authority, 'session', 409);
-    assert.equal(decisions.length, count + 1, 'conversation-scoped session choice must not reach Hermes');
+      if (rows.length === 10) return rows.slice(-2);
+    }, 'expected two approvals from the session authority');
+    assert.deepEqual(authority.choices, authorityChoices);
+    await decide(authority, 'session');
+    assert.deepEqual(decisions.slice(count + 1), [
+      { request_id: 'authority', execution_generation: 3, choice: 'session' },
+    ]);
+    assert.deepEqual((await cards()).slice(-2).map(({ status }) => status), ['session', 'pending']);
+    await decide(unkeyedSibling, 'always');
+    assert.deepEqual(decisions.at(-1), { request_id: 'unkeyed-sibling', execution_generation: 3, choice: 'always' });
   } finally {
     emit('run.completed');
     stream.close();
