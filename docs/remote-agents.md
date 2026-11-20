@@ -23,6 +23,41 @@ VNC relay uses the password on the server. Watch mode filters mouse, keyboard,
 clipboard and screen resize input. **Take control** enables input and **Hand
 back** tells the Agent to inspect the screen again on its next turn.
 
+## Benchmark the screen
+
+From the Bot HQ checkout, install dependencies with `npm ci`. Set
+`OWNER_SESSION_COOKIE` to the full Owner cookie header value
+(`grokbot_session=<value>`), then measure the Bot HQ watch endpoint:
+
+```sh
+node scripts/screen-bench.mjs --hq-url https://hq.example.com --bot-id "$BOT_ID" --seconds 10
+```
+
+If the Agent's websockify endpoint is reachable directly, set `VNC_PASSWORD`
+in the environment and run:
+
+```sh
+node scripts/screen-bench.mjs --agent-url ws://agent:6080/websockify --seconds 10
+```
+
+Export credentials in the shell environment before running either command.
+`--seconds` defaults to 10. The script prints one JSON object:
+
+- `firstFrameMs` measures the time from connection start until the initial full
+  framebuffer update arrives.
+- `updatesPerSecond` counts complete incremental framebuffer updates per second.
+- `bytesPerSecond` counts incoming binary RFB payload bytes per second during
+  incremental sampling.
+- `medianRects` is the median rectangle count per incremental update, or `null`
+  when no incremental updates arrive.
+
+The benchmark measures RFB delivery without rendering. It advertises CopyRect,
+Tight, Raw and LastRect, with Tight quality 6 and compression 2. The first
+frame must arrive within 15 seconds.
+
+For before-and-after measurements, use the same endpoint, sample length and
+desktop activity on both runs.
+
 ## Paths and compatibility
 
 - `HQ_DATA_DIR` defaults to `data` in the app directory. Override the database
