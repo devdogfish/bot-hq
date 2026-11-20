@@ -82,6 +82,8 @@ export interface ToolCallBody {
   screenshot?: string;
 }
 
+export type ApprovalChoice = 'once' | 'session' | 'always' | 'deny';
+
 export type CardBody =
   | {
       type: 'card';
@@ -94,7 +96,8 @@ export type CardBody =
       toolkitName?: string;
       logo?: string;
       args: unknown;
-      status: 'pending' | 'allowed' | 'always' | 'denied' | 'expired' | 'unconfirmed';
+      choices?: ApprovalChoice[];
+      status: 'pending' | 'allowed' | 'session' | 'always' | 'denied' | 'expired' | 'unconfirmed';
     }
   | {
       type: 'card';

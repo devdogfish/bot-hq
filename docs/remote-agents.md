@@ -154,8 +154,12 @@ A transport failure is reported as an error.
 With `smart` and a guardian escalation, `/v1/responses` attempted to send the
 prompt through the API platform's unsupported outbound messaging path. The
 Runs stream emits `approval.request` with the prompt identity while the run
-waits. Bot HQ shows the returned command and reason with **Allow once** and
-**Don't allow**. The same prompt identity and generation go back to Hermes.
+waits. Bot HQ shows the returned command, reason, and offered choices.
+**Allow for this chat** grants permission for the Hermes conversation.
+It and **Always allow** also resolve pending prompts in the same run when the
+events share a `pattern_key`, offer that choice, and require no additional
+approval rules. Prompts without a key are handled individually. Each decision
+goes back to Hermes with its prompt identity and generation.
 Unattended turns deny prompts that require a human decision and post a
 notice. The guardian can still independently approve commands under
 `smart`. See the [Hermes Runs API](https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server#runs-api-streaming-friendly-alternative).

@@ -7,6 +7,7 @@ import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
 import { createSession, destroySession, isOwnerKey, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { allLive, appendRow, clearConversation, emitBot, getBot, getBotRow, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
+import { isApprovalChoice } from './agent/hermes-run.js';
 import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, setBotPaused } from './agent/loop.js';
 import { computerState } from './computer.js';
 import { assignEngine, provisionEngine, removeEngine, syncPersona } from './engine.js';
@@ -253,8 +254,9 @@ api.post('/bots/:id/fresh', async (c) => {
 });
 
 api.post('/approvals/:id', async (c) => {
-  const { decision } = await c.req.json<{ decision: string }>().catch(() => ({ decision: '' }));
-  if (decision !== 'allow' && decision !== 'deny') return c.json({ error: 'Invalid approval decision.' }, 400);
+  const body = await c.req.json<{ decision?: unknown } | null>().catch(() => null);
+  const decision = body?.decision === 'allow' ? 'once' : body?.decision;
+  if (!isApprovalChoice(decision)) return c.json({ error: 'Invalid approval decision.' }, 400);
   const error = await resolveApproval(c.get('user').id, c.req.param('id'), decision);
   if (error) return c.json({ error }, error === 'not found' ? 404 : 409);
   return c.json({ ok: true });

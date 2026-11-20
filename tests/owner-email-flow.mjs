@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import { Hono } from 'hono';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const recipients = ['owner@example.net', 'updates@example.net', 'inbox@example.net'];
 const wrapReceipt = (receipt, tool = 'mcp__hq__send_owner_email') => [
@@ -211,6 +215,8 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   finish();
   const { body: card } = await until(pendingCard, 'Tyler must show an approval card even for a direct request');
   assert.equal(card.detail, `From: tyler@example.org\nTo: ${recipients.join(', ')}\nSubject: ${fields.subject}\n\n${fields.body}`);
+  assert.deepEqual(new Set(card.choices), new Set(['once', 'deny']));
+  await apiRequest('/approvals/' + card.approvalId, 'POST', { decision: 'always' }, 409);
   assert.equal(attempted.length, 1);
   await apiRequest('/approvals/' + card.approvalId, 'POST', { decision: 'allow' });
   await notice('Email accepted by SES. Receipt fixture-2');
@@ -308,4 +314,40 @@ test('Owner chat sends once, approval shows the exact mail, and other turns cann
   await reset;
   await idle();
   assert.deepEqual(await readRows(), [], 'an old SES result rewrote a row in the fresh generation');
+});
+
+test('Approval cards show chat scope and keep Always allow off email cards', async () => {
+  const webRequire = createRequire(new URL('../web/package.json', import.meta.url));
+  const { createServer } = await import(webRequire.resolve('vite'));
+  const vite = await createServer({
+    root: fileURLToPath(new URL('../web', import.meta.url)),
+    server: { middlewareMode: true, ws: false },
+    optimizeDeps: { noDiscovery: true, include: [] },
+  });
+  try {
+    const { ApprovalCard } = await vite.ssrLoadModule('/src/components/cards/Cards.tsx');
+    const body = {
+      type: 'card', card: 'approval', approvalId: 'fixture',
+      title: 'Approve this action?', args: {}, status: 'pending',
+      choices: ['once', 'deny', 'session', 'always'],
+    };
+    const render = (tool) => renderToStaticMarkup(createElement(ApprovalCard, {
+      body: { ...body, tool },
+    }));
+    const terminal = render('terminal');
+    assert.match(terminal, /Allow for this chat/);
+    assert.match(terminal, /More approval options/);
+    assert.doesNotMatch(terminal, /Always allow/);
+    const resolved = renderToStaticMarkup(createElement(ApprovalCard, {
+      body: { ...body, tool: 'terminal', status: 'session' },
+    }));
+    assert.match(resolved, /Allowed for this chat/);
+    for (const tool of ['send_owner_email', 'mcp__hq__stage_personal_reply', 'GMAIL_SEND_EMAIL']) {
+      const markup = render(tool);
+      assert.match(markup, /Allow once/);
+      assert.doesNotMatch(markup, /Always allow|More approval options/);
+    }
+  } finally {
+    await vite.close();
+  }
 });
