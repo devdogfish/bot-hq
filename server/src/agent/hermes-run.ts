@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Engine } from '../engine.js';
+import type { ApprovalChoice } from '../types.js';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const OWNER_EMAIL_TRANSCRIPT_TOOL = 'mcp__hq__send_owner_email';
@@ -12,6 +13,12 @@ export interface ApprovalPrompt {
   generation: number;
   command: string;
   description: string;
+  choices: ApprovalChoice[];
+  patternKey?: string;
+}
+
+export function isApprovalChoice(value: unknown): value is ApprovalChoice {
+  return value === 'once' || value === 'session' || value === 'always' || value === 'deny';
 }
 
 export class HermesRun {
@@ -81,8 +88,9 @@ export class HermesRun {
     })();
   }
 
-  async approve(prompt: ApprovalPrompt, choice: 'once' | 'deny') {
+  async approve(prompt: ApprovalPrompt, choice: ApprovalChoice) {
     if (!this.runId || this.stopRequested) throw new Error('This turn is stopping.');
+    if (!prompt.choices.includes(choice)) throw new Error('This approval did not offer that choice.');
     const res = await this.request(`/v1/runs/${this.runId}/approval`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

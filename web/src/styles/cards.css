@@ -53,3 +53,7 @@
 .draft-card__actions { display: flex; gap: 8px; padding: 10px 16px 16px; }
 
 .approval-card .card__body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-card .card__actions { flex-wrap: wrap; }
+.approval-card .card__actions > .btn { flex-basis: auto; }
+.approval-card__menu { position: relative; display: flex; margin-left: auto; }
+.approval-card__menu .menu { min-width: 116px; }

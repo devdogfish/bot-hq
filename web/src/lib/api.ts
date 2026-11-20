@@ -1,4 +1,4 @@
-import type { Bot, ComputerState, LiveState, Routine, Row, User } from '@shared/types';
+import type { ApprovalChoice, Bot, ComputerState, LiveState, Routine, Row, User } from '@shared/types';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) { super(message); }
@@ -37,7 +37,7 @@ export const api = {
   setPaused: (id: string, paused: boolean) => req<{ paused: boolean }>('PATCH', `/bots/${id}/pause`, { paused }),
   fresh: (id: string) => req<{ ok: true }>('POST', `/bots/${id}/fresh`),
 
-  approve: (approvalId: string, decision: 'allow' | 'deny') => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
+  approve: (approvalId: string, decision: ApprovalChoice) => req<{ ok: true }>('POST', `/approvals/${approvalId}`, { decision }),
   answer: (id: string, seq: number, answer: string) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/answer`, { answer }),
   dismiss: (id: string, seq: number) => req<{ ok: true }>('POST', `/bots/${id}/cards/${seq}/dismiss`),
 

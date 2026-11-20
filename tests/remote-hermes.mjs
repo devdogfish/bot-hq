@@ -142,7 +142,7 @@ try {
     const runId = captured.at(-1);
     assert.match(card.detail, /recursive delete/);
     assert(await exists('hq-approval-marker'), 'command ran before a decision');
-    await api('/approvals/' + card.approvalId, 'POST', { decision: 'always' }, 400);
+    await api('/approvals/' + card.approvalId, 'POST', { decision: 'forever' }, 400);
     if (decision === 'allow') {
       const ack = gate();
       const approvalCount = approvalRequests.length;
