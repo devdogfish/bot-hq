@@ -25,7 +25,10 @@ class FakeSubscription extends EventEmitter {
   publish(historyId, emailAddress = mailbox) {
     return new Promise(resolve => {
       assert.equal(this.emit('message', {
-        data: Buffer.from(JSON.stringify({ emailAddress, historyId })),
+        // Gmail publishes historyId as a JSON number.
+        data: Buffer.from(typeof historyId === 'string' && /^\d+$/u.test(historyId)
+          ? `{"emailAddress":${JSON.stringify(emailAddress)},"historyId":${historyId}}`
+          : JSON.stringify({ emailAddress, historyId })),
         ack: () => resolve('ack'),
         nack: () => resolve('nack'),
       }), true, 'worker is pulling messages');
