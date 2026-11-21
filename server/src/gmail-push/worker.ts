@@ -47,7 +47,10 @@ function newer(candidate: string, cursor: string) {
 function notificationId(message: Notification, mailbox: string): string | undefined {
   if (message.data.length > 4096) return;
   try {
-    const { emailAddress, historyId } = JSON.parse(message.data.toString());
+    const text = message.data.toString();
+    const { emailAddress } = JSON.parse(text);
+    // Gmail sends historyId as a JSON number; read its digits from the raw text so large IDs keep full precision.
+    const historyId = /"historyId"\s*:\s*"?(\d{1,20})"?\s*[,}]/u.exec(text)?.[1];
     if (typeof emailAddress === 'string' && emailAddress.toLowerCase() === mailbox && isHistoryId(historyId)) {
       return historyId;
     }
