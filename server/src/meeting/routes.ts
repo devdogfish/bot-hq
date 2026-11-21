@@ -48,6 +48,8 @@ const gateRequest = callRequest.extend({
 const toolRequest = callRequest.extend({
   name: z.string().min(1).max(64),
   arguments: z.record(z.string(), z.unknown()),
+  /** One-to-one calls: the bridge reports whether the person on the call is the verified host. */
+  host: z.boolean().optional(),
 });
 const GUEST_HANDOFF_REFUSED = 'Not handed off: only the meeting host can give you work. Tell the speaker kindly that the host can ask you for it. Do not retry.';
 const endRequest = callRequest.extend({ transcript: z.array(turn).max(10_000) });
@@ -192,14 +194,16 @@ meetingApi.post('/gate', ...meetingRequest(512 * 1024, 120), (c) => {
 meetingApi.post('/tool', ...meetingRequest(16 * 1024, 12), (c) => {
   const request = toolRequest.safeParse(c.get('body'));
   if (!request.success) return c.json({ error: 'Invalid tool request' }, 400);
-  const { call_id, name, arguments: args } = request.data;
+  const { call_id, name, arguments: args, host } = request.data;
   const bot = c.get('bot');
   const call = meetingCall(bot, call_id);
   if (!call) return c.json({ error: 'Call not found' }, 404);
   if (bot.archived_at != null) return c.json({ error: 'Bot unavailable' }, 409);
   if (!MEETING_TOOLS.some((tool) => tool.name === name)) return c.json({ error: 'Tool unavailable in meetings' }, 403);
   call.lastActivityAt = Date.now();
-  if (name === 'send_task' && !call.hostHasFloor) return c.json({ output: GUEST_HANDOFF_REFUSED });
+  // The bridge is the source of the host role either way: it marks gated turns, and in a one-to-one
+  // call (where xAI replies without a gate round trip) it marks the tool call itself.
+  if (name === 'send_task' && !call.hostHasFloor && host !== true) return c.json({ output: GUEST_HANDOFF_REFUSED });
   return c.json(relayVoiceTool(bot, name, args, call));
 });
 

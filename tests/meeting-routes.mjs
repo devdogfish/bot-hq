@@ -220,6 +220,8 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   await meetingPost('gate', gate(call_id, [{ ...say('Priya', 'Stacy, check the rollout.'), host: false }]));
   assert.match((await meetingPost('tool', tool)).output, /only the meeting host/);
   assert.ok(!listRows('stacy').some(({ body }) => body.text === tool.arguments.request));
+  // One-to-one: the bridge vouches for the host on the tool call itself.
+  assert.match((await meetingPost('tool', { ...tool, host: false })).output, /only the meeting host/);
 
   await meetingPost('gate', gate(call_id, [{ ...say('Host', 'Stacy, check the rollout.'), host: true }]));
   const start = requests.length;
