@@ -39,4 +39,18 @@ export const MEETING_TOOLS = VOICE_TOOLS.filter((tool) => tool.name === 'send_ta
   .map((tool) => ({
     ...tool,
     description: 'How you get things done during the meeting: share your screen, open or look something up, check who on your team should take something, message a teammate, draft, email or schedule. Use it for anything beyond what you can answer from the conversation. Include who asked and enough context to do it. Returns at once; you then do the work.',
-  }));
+  })).concat([
+    {
+      type: 'function', name: 'mute_yourself',
+      description: 'Mute your microphone in this meeting when the host asks. Say a short "Muting now" first. You stay in the call and can be unmuted by the host in the meeting.',
+      parameters: obj({}),
+    },
+    {
+      type: 'function', name: 'leave_meeting',
+      description: 'Leave this meeting when the host asks you to. Say a brief goodbye first, then call this.',
+      parameters: obj({}),
+    },
+  ]);
+
+/** Meeting tools the Agent's own meeting bridge carries out, never relayed to Bot HQ. */
+export const MEETING_BRIDGE_TOOLS = new Set(['mute_yourself', 'leave_meeting']);

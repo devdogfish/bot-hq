@@ -144,7 +144,9 @@ test('meeting auth accepts the existing MCP bearer and binds the session to its 
   assert.match(session.instructions, /Stacy.*meeting/);
   assert.match(session.instructions, /only when the turn gate.*floor/);
   assert.doesNotMatch(JSON.stringify(session), /Private Stacy|Jo Tester|test-xai-key|invite/);
-  assert.deepEqual(session.tools.map((tool) => tool.name), ['send_task']);
+  assert.deepEqual(session.tools.map((tool) => tool.name), ['send_task', 'mute_yourself', 'leave_meeting']);
+  assert.match(session.instructions, /Never mention agents, handoffs/);
+  assert.match(session.instructions, /Be open and candid/);
   assert.ok(listRows('stacy').some((row) => row.body.call?.id === session.call_id && row.body.call.phase === 'started'));
   assert.ok(!listRows('alex').some((row) => row.body.call?.id === session.call_id));
   await meetingPost('end', { call_id: session.call_id, transcript: [] });
@@ -220,6 +222,13 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   await meetingPost('gate', gate(call_id, [{ ...say('Priya', 'Stacy, check the rollout.'), host: false }]));
   assert.match((await meetingPost('tool', tool)).output, /only the meeting host/);
   assert.ok(!listRows('stacy').some(({ body }) => body.text === tool.arguments.request));
+  // Mute and leave are carried out by the Agent's own bridge, never relayed.
+  await meetingPost('tool', { call_id, name: 'leave_meeting', arguments: {} }, bearer('stacy'), 400);
+  // Finished meeting work waits for the bridge to pick it up, once.
+  const { pushLanded } = await import('../server/src/meeting/landed.ts');
+  pushLanded(call_id, 'Canva is open and my screen is shared.');
+  assert.deepEqual((await meetingPost('updates', { call_id })).notes, ['Canva is open and my screen is shared.']);
+  assert.deepEqual((await meetingPost('updates', { call_id })).notes, []);
   // One-to-one: the bridge vouches for the host on the tool call itself.
   assert.match((await meetingPost('tool', { ...tool, host: false })).output, /only the meeting host/);
 
@@ -232,6 +241,13 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   await waitFor(() => requests.slice(start).some(({ url }) => url === 'https://hermes.meeting.test/v1/responses'));
   await waitFor(() => !isBotBusy('stacy'));
   assert.ok(!listRows('stacy').some(({ body }) => body.card === 'approval'));
+  // The finished task waits for the meeting voice to report it, like a voice call's [work_landed] note.
+  let landed = [];
+  for (let tries = 0; tries < 50 && !landed.length; tries++) {
+    landed = (await meetingPost('updates', { call_id })).notes;
+    if (!landed.length) await delay(10);
+  }
+  assert.deepEqual(landed, ['Rollout checked.']);
   const row = listRows('stacy').find((row) => row.seq === handedOff.taskSeq);
   assert.equal(row.body.text, tool.arguments.request);
   assert.equal(row.body.from.id, call_id);

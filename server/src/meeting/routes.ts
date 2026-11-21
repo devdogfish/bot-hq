@@ -9,7 +9,8 @@ import { getBotRow } from '../store.js';
 import { beginCall, finishMeeting, ownCall, relayVoiceTool, voiceInstructions } from '../voice/index.js';
 import { defaultVoiceFor } from '../voice/providers.js';
 import { settingsOf } from '../voice/settings.js';
-import { MEETING_TOOLS } from '../voice/tools.js';
+import { MEETING_BRIDGE_TOOLS, MEETING_TOOLS } from '../voice/tools.js';
+import { takeLanded } from './landed.js';
 import { startXaiSession, xaiProvider } from '../voice/xai.js';
 import { decideTurn } from './gate.js';
 
@@ -200,11 +201,22 @@ meetingApi.post('/tool', ...meetingRequest(16 * 1024, 12), (c) => {
   if (!call) return c.json({ error: 'Call not found' }, 404);
   if (bot.archived_at != null) return c.json({ error: 'Bot unavailable' }, 409);
   if (!MEETING_TOOLS.some((tool) => tool.name === name)) return c.json({ error: 'Tool unavailable in meetings' }, 403);
+  if (MEETING_BRIDGE_TOOLS.has(name)) return c.json({ error: 'The meeting bridge handles this tool' }, 400);
   call.lastActivityAt = Date.now();
   // The bridge is the source of the host role either way: it marks gated turns, and in a one-to-one
   // call (where xAI replies without a gate round trip) it marks the tool call itself.
   if (name === 'send_task' && !call.hostHasFloor && host !== true) return c.json({ output: GUEST_HANDOFF_REFUSED });
   return c.json(relayVoiceTool(bot, name, args, call));
+});
+
+// Finished work the Agent started from this meeting, for its voice to report.
+meetingApi.post('/updates', ...meetingRequest(2 * 1024, 40), (c) => {
+  const request = callRequest.safeParse(c.get('body'));
+  if (!request.success) return c.json({ error: 'Invalid updates request' }, 400);
+  const call = meetingCall(c.get('bot'), request.data.call_id);
+  if (!call) return c.json({ error: 'Call not found' }, 404);
+  call.lastActivityAt = Date.now();
+  return c.json({ notes: takeLanded(call.id) });
 });
 
 meetingApi.post('/end', ...meetingRequest(2 * 1024 * 1024, 12), (c) => {
