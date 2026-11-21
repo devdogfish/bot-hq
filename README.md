@@ -42,7 +42,7 @@ one-time sign-in link. `scripts/pack.sh` builds an archive, and
 The [Atlas runbook](docs/atlas-deploy.md) covers the dedicated VM, release,
 tailnet grants and backup checks.
 
-## Gmail push for Tyler Personal
+## Gmail push for James (Personal Assistant)
 
 1. In the Google Cloud project that issued the existing Owner Gmail OAuth
    client, enable the Gmail and Cloud Pub/Sub APIs. Create a Pub/Sub topic and
@@ -52,7 +52,7 @@ tailnet grants and backup checks.
    backoff for retries. Create a service account with **Pub/Sub Subscriber** on
    the subscription. Save its JSON key outside the repository, readable only by
    the Bot HQ service user. Bot HQ connects outbound with streaming pull.
-3. Keep the [existing Tyler Personal pairing and Owner Gmail grant](docs/atlas-deploy.md#tylers-private-personal-assistant).
+3. Keep the [James record and Owner Gmail grant](docs/atlas-deploy.md#james-the-personal-assistant).
    Configure the following values in the Bot HQ service environment. Use short
    topic and subscription names from the same project.
 
@@ -63,7 +63,7 @@ tailnet grants and backup checks.
    HQ_GMAIL_PUSH_CREDENTIALS=/absolute/path/to/pubsub-service-account.json
    ```
 
-4. Enable Tyler Personal's event routine with the schedule
+4. Enable James's event routine with the schedule
    `event:Gmail new mail`. Restart Bot HQ and send a test message. Check for a
    single routine event with the sender, subject and Gmail message ID.
 

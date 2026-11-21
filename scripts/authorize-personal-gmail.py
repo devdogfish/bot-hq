@@ -121,8 +121,8 @@ def authorize(client_file, mailbox, output, *, mailbox_actions=False):
     if profile.get("emailAddress", "").casefold() != mailbox.casefold():
         raise ValueError("Google returned a different mailbox.")
     material = {
-        "HQ_TYLER_GMAIL_MAILBOX": mailbox, "HQ_TYLER_GMAIL_CLIENT_ID": client_id,
-        "HQ_TYLER_GMAIL_CLIENT_SECRET": client_secret, "HQ_TYLER_GMAIL_REFRESH_TOKEN": refresh,
+        "HQ_PERSONAL_GMAIL_MAILBOX": mailbox, "HQ_PERSONAL_GMAIL_CLIENT_ID": client_id,
+        "HQ_PERSONAL_GMAIL_CLIENT_SECRET": client_secret, "HQ_PERSONAL_GMAIL_REFRESH_TOKEN": refresh,
     }
     with os.fdopen(os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as private:
         for name, value in material.items():

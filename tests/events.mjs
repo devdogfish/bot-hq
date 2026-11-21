@@ -246,17 +246,17 @@ test('a full batch rejects new IDs without recording receipts', async () => {
 test('private Gmail event runs in its own session without Owner chat tool access', async (t) => {
   const privateGateway = 'https://private-event.example.test';
   Object.assign(process.env, {
-    HQ_TYLER_PERSONAL_BOT_ID: 'bot_personal',
-    HQ_TYLER_PERSONAL_GATEWAY_ORIGIN: privateGateway,
+    HQ_PERSONAL_BOT_ID: 'bot_personal',
+    HQ_PERSONAL_GATEWAY_ORIGIN: privateGateway,
     HQ_OWNER_EMAIL_TARGETS: JSON.stringify({ tyler: 'bot_business' }),
     HQ_OWNER_EMAIL_FROM_DOMAIN: 'example.test',
     HQ_OWNER_EMAIL_TO: JSON.stringify(['one@example.test', 'two@example.test', 'three@example.test']),
     BOT_HQ_EMAIL_SES_ACCESS_KEY_ID: 'test-ses-access-key',
     BOT_HQ_EMAIL_SES_SECRET_ACCESS_KEY: 'test-ses-secret-key',
-    HQ_TYLER_GMAIL_MAILBOX: 'one@example.test',
-    HQ_TYLER_GMAIL_CLIENT_ID: 'test-client',
-    HQ_TYLER_GMAIL_CLIENT_SECRET: 'test-client-secret',
-    HQ_TYLER_GMAIL_REFRESH_TOKEN: 'test-refresh-token',
+    HQ_PERSONAL_GMAIL_MAILBOX: 'one@example.test',
+    HQ_PERSONAL_GMAIL_CLIENT_ID: 'test-client',
+    HQ_PERSONAL_GMAIL_CLIENT_SECRET: 'test-client-secret',
+    HQ_PERSONAL_GMAIL_REFRESH_TOKEN: 'test-refresh-token',
   });
   db.exec(`
     INSERT INTO bots (id, user_id, name, hermes_url, hermes_key, created_at, updated_at)

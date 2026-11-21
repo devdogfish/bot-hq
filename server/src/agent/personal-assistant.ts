@@ -1,6 +1,5 @@
 import { newId, sha256 } from '../lib/ids.js';
-import { getBotRow } from '../store.js';
-import { ownerEmailRole } from './owner-email.js';
+import { countBotsWithGateway, getBotRow } from '../store.js';
 import { ownerEmailContent } from './owner-email-policy.js';
 import { PersonalGmail, type GmailReplyTarget } from './personal-gmail.js';
 
@@ -59,19 +58,24 @@ export function personalToolList() {
 }
 
 export function isPersonalAssistant(botId: string | null) {
-  return !!botId && botId === process.env.HQ_TYLER_PERSONAL_BOT_ID;
+  return !!botId && botId === process.env.HQ_PERSONAL_BOT_ID;
 }
 
+/**
+ * James, the Personal Assistant, is his own Agent (Quantself ADR 0060). His record is ready when it
+ * uses its own isolated gateway, belongs to the Owner who owns the business Agents, and is not one
+ * of them. No other Bot may share his gateway.
+ */
 export function personalAssistantPaired(botId: string) {
-  const tylerId = process.env.HQ_OWNER_EMAIL_TARGETS;
-  if (!isPersonalAssistant(botId) || !tylerId) return false;
+  const targets = process.env.HQ_OWNER_EMAIL_TARGETS;
+  if (!isPersonalAssistant(botId) || !targets) return false;
   try {
-    const tyler = JSON.parse(tylerId)?.tyler;
+    const business = Object.values(JSON.parse(targets) ?? {}).filter((id): id is string => typeof id === 'string');
     const privateBot = getBotRow(botId);
-    const origin = process.env.HQ_TYLER_PERSONAL_GATEWAY_ORIGIN;
-    return typeof tyler === 'string' && tyler !== botId && !!origin && privateBot?.hermes_url === origin &&
-      ownerEmailRole(tyler) === 'tyler' && getBotRow(tyler)?.user_id === privateBot.user_id &&
-      getBotRow(tyler)?.hermes_url !== privateBot.hermes_url;
+    const origin = process.env.HQ_PERSONAL_GATEWAY_ORIGIN;
+    if (!origin || !privateBot || privateBot.archived_at != null || privateBot.hermes_url !== origin ||
+        business.includes(botId) || !business.some(id => getBotRow(id)?.user_id === privateBot.user_id)) return false;
+    return countBotsWithGateway(origin) === 1;
   } catch {
     return false;
   }
@@ -82,12 +86,12 @@ export interface PersonalReply { target: GmailReplyTarget; body: string }
 let cached: { config: string; transport: PersonalGmail } | undefined;
 
 export function personalGmail() {
-  const mailbox = process.env.HQ_TYLER_GMAIL_MAILBOX;
-  const clientId = process.env.HQ_TYLER_GMAIL_CLIENT_ID;
-  const clientSecret = process.env.HQ_TYLER_GMAIL_CLIENT_SECRET;
-  const refreshToken = process.env.HQ_TYLER_GMAIL_REFRESH_TOKEN;
+  const mailbox = process.env.HQ_PERSONAL_GMAIL_MAILBOX;
+  const clientId = process.env.HQ_PERSONAL_GMAIL_CLIENT_ID;
+  const clientSecret = process.env.HQ_PERSONAL_GMAIL_CLIENT_SECRET;
+  const refreshToken = process.env.HQ_PERSONAL_GMAIL_REFRESH_TOKEN;
   if (!mailbox || !clientId || !clientSecret || !refreshToken) return undefined;
-  const mailboxActions = process.env.HQ_TYLER_GMAIL_MAILBOX_ACTIONS === '1';
+  const mailboxActions = process.env.HQ_PERSONAL_GMAIL_MAILBOX_ACTIONS === '1';
   const config = JSON.stringify([mailbox, clientId, clientSecret, refreshToken, mailboxActions]);
   try {
     if (cached?.config !== config) cached = { config, transport: new PersonalGmail({ mailbox, clientId, clientSecret, refreshToken, mailboxActions }) };
@@ -219,8 +223,8 @@ export async function callPersonalTool(
 }
 
 async function capturePersonalAction(input: object, current: () => boolean) {
-  const origin = process.env.HQ_TYLER_QUANTSELF_ORIGIN;
-  const key = process.env.HQ_TYLER_QUANTSELF_KEY;
+  const origin = process.env.HQ_PERSONAL_QUANTSELF_ORIGIN;
+  const key = process.env.HQ_PERSONAL_QUANTSELF_KEY;
   if (!origin || !key || !current()) return { status: 'unavailable' };
   const url = new URL(origin);
   if (url.protocol !== 'https:' || url.origin !== origin) return { status: 'unavailable' };

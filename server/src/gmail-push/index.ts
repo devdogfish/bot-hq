@@ -11,11 +11,11 @@ export function gmailPushConfig() {
   const subscriptionName = process.env.HQ_GMAIL_PUSH_SUBSCRIPTION;
   const keyFilename = process.env.HQ_GMAIL_PUSH_CREDENTIALS;
   if (!projectId && !topic && !subscriptionName && !keyFilename) return;
-  const botId = process.env.HQ_TYLER_PERSONAL_BOT_ID;
-  const mailbox = process.env.HQ_TYLER_GMAIL_MAILBOX;
+  const botId = process.env.HQ_PERSONAL_BOT_ID;
+  const mailbox = process.env.HQ_PERSONAL_GMAIL_MAILBOX;
   const gmail = personalGmail();
   if (!projectId || !topic || !subscriptionName || !keyFilename || !botId || !mailbox || !gmail) {
-    console.error('[gmail-push] Missing Pub/Sub settings, Tyler Personal bot ID, or Owner Gmail grant.');
+    console.error('[gmail-push] Missing Pub/Sub settings, Personal Assistant bot ID, or Owner Gmail grant.');
     return;
   }
   return { projectId, topicName: `projects/${projectId}/topics/${topic}`, subscriptionName, keyFilename, botId, mailbox, gmail };
