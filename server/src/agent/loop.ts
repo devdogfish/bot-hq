@@ -1,4 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
+import { pushLanded } from '../meeting/landed.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
@@ -35,7 +36,7 @@ type RoutineTrigger = { type: 'routine'; routineId: string; name: string; prompt
 
 export type Trigger =
   | { type: 'user'; text: string; chatRow?: { generation: number; seq: number }; draftOnly?: boolean }
-  | { type: 'meeting'; text: string }
+  | { type: 'meeting'; text: string; callId?: string }
   | RoutineTrigger
   | { type: 'bot'; fromBotId: string; fromName: string; text: string; depth: number }
   | { type: 'secure-input' }
@@ -721,6 +722,7 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
     }
   }
   if (!draftOnly) turns.set(botId, turn);
+  const turnStartedAt = now();
   setLive(botId, { isRunning: true, activity: { kind: 'thinking', since: now() }, awaiting: null, startedAt: now(), caption: null, steps: 0 });
 
   // The assistant message being written right now.
@@ -1136,6 +1138,14 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       remoteRuns.delete(botId);
     }
     closeMessage();
+    if (trigger.type === 'meeting' && trigger.callId) {
+      // Let the meeting voice tell the host how the work went, as a voice call's [work_landed] note does.
+      const last = db.prepare("SELECT body FROM rows WHERE bot_id=? AND kind='message' AND created_at>=? ORDER BY seq DESC LIMIT 1")
+        .get(botId, turnStartedAt) as { body: string } | undefined;
+      const body = last ? JSON.parse(last.body) : null;
+      const result = body?.role === 'assistant' && typeof body.text === 'string' ? body.text : failed ? 'It did not finish.' : '';
+      if (result) pushLanded(trigger.callId, result);
+    }
     for (const ref of turn.tools) {
       if (ref.done) continue;
       const row = getRow(botId, ref.seq);
