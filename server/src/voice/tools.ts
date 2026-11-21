@@ -38,5 +38,5 @@ export const VOICE_TOOLS = [
 export const MEETING_TOOLS = VOICE_TOOLS.filter((tool) => tool.name === 'send_task')
   .map((tool) => ({
     ...tool,
-    description: 'Hand work requested by the meeting to your main Agent. Include who asked and enough context to do the work. The result will be posted in Bot HQ chat.',
+    description: 'How you get things done during the meeting: share your screen, open or look something up, check who on your team should take something, message a teammate, draft, email or schedule. Use it for anything beyond what you can answer from the conversation. Include who asked and enough context to do it. Returns at once; you then do the work.',
   }));
