@@ -226,7 +226,8 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   await meetingPost('gate', gate(call_id, [{ ...say('Host', 'Stacy, check the rollout.'), host: true }]));
   const start = requests.length;
   const handedOff = await meetingPost('tool', { ...tool, bot_id: 'alex' });
-  assert.match(handedOff.output, /Handed off/);
+  assert.match(handedOff.output, /You are doing it now/);
+  assert.doesNotMatch(handedOff.output, /^Handed off/);
   // Meeting requests run straight away, like chat requests; no approval card.
   await waitFor(() => requests.slice(start).some(({ url }) => url === 'https://hermes.meeting.test/v1/responses'));
   await waitFor(() => !isBotBusy('stacy'));
