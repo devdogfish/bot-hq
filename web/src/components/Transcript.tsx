@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { reactionKey, isLiveReaction } from '../lib/liveReactions';
+import { arrivalKey, isArrival } from '../lib/arrivals';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { isWaitingForYou } from '../lib/phrases';
 import { clock, dividerLabel, duration } from '../lib/time';
@@ -121,6 +122,7 @@ const Bubble = memo(function Bubble({ row, side, pos, onActions }: { row: Row; s
   const press = useRef<{ timer: number; x: number; y: number } | null>(null);
   const cancelPress = () => { if (press.current) { clearTimeout(press.current.timer); press.current = null; } };
   const actionable = !b.streaming && !!b.text;
+  const [arriving] = useState(() => side === 'left' && isArrival(arrivalKey(row.botId, row.seq)));
   const open = (el: HTMLElement, mode: ActionsMode) => { if (actionable) onActions(row, el, mode); };
   // A message just sent from the composer rises from the input into its place.
   useLayoutEffect(() => {
@@ -142,7 +144,7 @@ const Bubble = memo(function Bubble({ row, side, pos, onActions }: { row: Row; s
   return (
     <div ref={wrap} className={`bubble-wrap is-${side}`}>
       <div
-        className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}
+        className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}${arriving ? ' is-arriving' : ''}`}
         tabIndex={actionable ? 0 : undefined}
         aria-label={actionable ? 'Message. Press Shift+F10 for actions.' : undefined}
         onContextMenu={(e) => { if (!actionable) return; e.preventDefault(); open(e.currentTarget, 'menu'); }}
@@ -284,13 +286,18 @@ function SystemRow({ row }: { row: Row }) {
   return null;
 }
 
-interface Props { bot: Bot; rows: Row[]; loaded: boolean }
+interface Props { bot: Bot; rows: Row[]; loaded: boolean; running: boolean }
 
-export function Transcript({ bot, rows, loaded }: Props) {
+export function Transcript({ bot, rows, loaded, running }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
-  const items = useMemo(() => buildItems(rows), [rows]);
+  // Replies arrive in one go: while the turn runs, a message still being written stays out of the list
+  // (the header says "Thinking..."). Once the turn has ended, any text left is shown, finished or not.
+  const shown = useMemo(() => running
+    ? rows.filter((r) => !(r.body.type === 'message' && r.body.role === 'assistant' && r.body.streaming))
+    : rows, [rows, running]);
+  const items = useMemo(() => buildItems(shown), [shown]);
   const receipt = useMemo(() => readReceipt(rows), [rows]);
   const [actions, setActions] = useState<{ row: Row; anchor: HTMLElement; mode: ActionsMode } | null>(null);
   const openActions = useCallback<OpenActions>((row, anchor, mode) => setActions({ row, anchor, mode }), []);
