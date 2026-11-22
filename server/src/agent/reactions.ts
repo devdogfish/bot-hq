@@ -1,13 +1,13 @@
 import { db } from '../db.js';
 import { getBotRow, updateRow } from '../store.js';
-import { REACTION_KINDS, type MessageBody, type ReactionKind } from '../types.js';
+import { parseReaction, REACTION_KINDS, type MessageBody } from '../types.js';
 
 export const REACT_TOOL = 'react_to_message';
-export const REACT_TOOL_DESCRIPTION = "Put an iMessage-style tapback on one of the Owner's messages, when a quick reaction says it better than words (thanks, approval, a joke, a surprise). One reaction per message; a new one replaces the old, and 'none' removes it. Targets the Owner's latest message unless message_text picks an earlier one. A reaction does not replace a reply the Owner needs.";
+export const REACT_TOOL_DESCRIPTION = "Put an iMessage-style reaction on one of the Owner's messages, when a quick reaction says it better than words (thanks, approval, a joke, a surprise). Use a tapback (heart, thumbs_up, thumbs_down, haha, emphasis, question) or any single emoji such as 🤩. One reaction per message; a new one replaces the old, and 'none' removes it. Targets the Owner's latest message unless message_text picks an earlier one. A reaction does not replace a reply the Owner needs.";
 export const REACT_TOOL_PARAMETERS = {
   type: 'object',
   properties: {
-    reaction: { type: 'string', enum: [...REACTION_KINDS, 'none'] },
+    reaction: { type: 'string', description: `One of ${REACTION_KINDS.join(', ')}; any single emoji, e.g. 🤩; or none to remove it.` },
     message_text: { type: 'string', description: "A few words from the Owner's message to react to. Leave out for their latest message." },
   },
   required: ['reaction'],
@@ -25,10 +25,9 @@ const isOwnerMessage = (b: any): b is MessageBody =>
  * the Owner's latest message; otherwise the newest one whose text contains it.
  */
 export function reactToMessage(botId: string, reaction: string, messageText?: string): { ok: true; summary: string } | { ok: false; error: string } {
-  const clear = reaction === 'none';
-  if (!clear && !(REACTION_KINDS as readonly string[]).includes(reaction)) {
-    return { ok: false, error: `Unknown reaction. Use one of: ${REACTION_KINDS.join(', ')}, or none.` };
-  }
+  const parsed = parseReaction(reaction);
+  if (!parsed) return { ok: false, error: `Unknown reaction. Use one of: ${REACTION_KINDS.join(', ')}, a single emoji, or none.` };
+  const clear = parsed === 'none';
   const bot = getBotRow(botId);
   if (!bot) return { ok: false, error: 'No such Agent.' };
   const rows = db.prepare('SELECT seq, body FROM rows WHERE bot_id=? AND generation=? AND kind=? ORDER BY seq DESC LIMIT ?')
@@ -40,7 +39,7 @@ export function reactToMessage(botId: string, reaction: string, messageText?: st
     if (needle && !body.text.toLowerCase().includes(needle)) continue;
     const next: MessageBody = { ...body };
     if (clear) delete next.reaction;
-    else next.reaction = { kind: reaction as ReactionKind, at: Date.now() };
+    else next.reaction = { ...parsed, at: Date.now() };
     updateRow(botId, r.seq, next, bot.generation);
     const preview = body.text.length > 40 ? `${body.text.slice(0, 40)}…` : body.text;
     return { ok: true, summary: clear ? `Removed the reaction on “${preview}”` : `Reacted ${reaction} to “${preview}”` };

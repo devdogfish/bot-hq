@@ -13,6 +13,7 @@ Object.assign(process.env, {
 const { api } = await import('../server/dist/routes.js');
 const { db } = await import('../server/dist/db.js');
 const { appendRow } = await import('../server/dist/store.js');
+const { reactToMessage } = await import('../server/dist/agent/reactions.js');
 const { initSubagents } = await import('../server/dist/agent/subagents.js');
 const { initRooms } = await import('../server/dist/agent/rooms.js');
 initSubagents();
@@ -46,8 +47,21 @@ test('the Owner reacts to Agent messages and forwards messages, keeping James ap
   assert.equal(r.json.row.body.reaction.kind, 'thumbs_up');
   assert.equal((await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: 'wink' })).status, 400);
   assert.equal((await request(`/bots/${trevor.id}/rows/${owner.seq}/reaction`, 'PATCH', { reaction: 'heart' })).status, 400);
+  // Any single emoji works too; two emoji or plain text do not.
+  r = await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: '🤩' });
+  assert.equal(r.status, 200);
+  assert.deepEqual({ kind: r.json.row.body.reaction.kind, emoji: r.json.row.body.reaction.emoji }, { kind: 'emoji', emoji: '🤩' });
+  assert.equal((await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: '🤩🤩' })).status, 400);
+  assert.equal((await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: 'ok' })).status, 400);
+  r = await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: '👍🏽' });
+  assert.equal(r.json.row.body.reaction.emoji, '👍🏽', 'a skin-tone emoji is one emoji');
   r = await request(`/bots/${trevor.id}/rows/${agent.seq}/reaction`, 'PATCH', { reaction: 'none' });
   assert.equal(r.json.row.body.reaction, undefined);
+
+  // The Agent's tool takes a tapback or a single emoji on the Owner's latest message.
+  assert.deepEqual(reactToMessage(trevor.id, '💓'), { ok: true, summary: 'Reacted 💓 to “Ship it?”' });
+  assert.equal((await request(`/bots/${trevor.id}/rows`)).json.rows.find((x) => x.seq === owner.seq).body.reaction.emoji, '💓');
+  assert.equal(reactToMessage(trevor.id, 'sparkles').ok, false);
 
   // Forwarding: lands in the other Agent's chat as the Owner's message, with where it came from.
   r = await request(`/bots/${trevor.id}/rows/${agent.seq}/forward`, 'POST', { toBotId: sam.id });

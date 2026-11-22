@@ -269,31 +269,23 @@
   font-size: 13px; line-height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
 
-/* ---------- tapbacks and read receipt: measured from Messages on macOS ---------- */
+/* ---------- reactions and read receipt: copies the Messages reaction pill ---------- */
 .bubble { position: relative; }
-.bubble:has(> .tapback) { margin-top: 14px; }
+/* Room under a reacted bubble so the pill never touches the next message. */
+.bubble:has(> .tapback) { margin-bottom: 12px; }
 .bubble:focus { outline: none; }
 .bubble:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 2px; }
-/* 24px badge centred just past the bubble's top corner, with the two-dot tail Messages draws toward it.
-   The Agent's reaction sits top-left on the Owner's bubble (grey); the Owner's sits top-right on an Agent's
-   bubble, in the Owner's bubble colour. */
+/* A small dark pill with one emoji, half over the bubble's bottom edge: bottom-right on the Owner's bubble,
+   bottom-left on an Agent's. */
 .tapback {
-  --tapback-bg: #E9E9EB; --tapback-fg: #3C3C43;
-  position: absolute; top: -20px; left: -16px; z-index: 1;
-  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
-  background: var(--tapback-bg); color: var(--tapback-fg); box-shadow: 0 0 0 2px var(--color-bg-chrome);
+  position: absolute; bottom: -11px; right: 8px; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 22px; padding: 0 6px;
+  border-radius: 11px; background: #E9E9EB; box-shadow: 0 0 0 1.5px var(--color-bg-chrome), 0 1px 2px #00000026;
   user-select: none;
 }
-.tapback::before, .tapback::after { content: ''; position: absolute; border-radius: 50%; background: var(--tapback-bg); box-shadow: 0 0 0 2px var(--color-bg-chrome); }
-.tapback::before { width: 7px; height: 7px; right: -1px; bottom: -2px; z-index: -1; }
-.tapback::after { width: 3.5px; height: 3.5px; right: -5px; bottom: -6px; box-shadow: 0 0 0 1.5px var(--color-bg-chrome); }
-:root[data-theme='dark'] .tapback { --tapback-bg: #3A3A3C; --tapback-fg: #EBEBF5; }
-.tapback.is-heart { color: #FF375F; }
-.bubble.is-agent > .tapback { left: auto; right: -16px; --tapback-bg: var(--bot-bubble, var(--color-bubble-user)); color: #FFFFFF; }
-.bubble.is-agent > .tapback::before { right: auto; left: -1px; }
-.bubble.is-agent > .tapback::after { right: auto; left: -5px; }
-.tapback__text { font-size: 10px; font-weight: 800; line-height: 1; letter-spacing: -0.2px; }
-.tapback__text.is-haha { font-size: 6.5px; line-height: 6.5px; text-align: center; letter-spacing: 0; }
+:root[data-theme='dark'] .tapback { background: #1C1C1E; box-shadow: 0 0 0 1.5px var(--color-bg-chrome), 0 0 0 2px #FFFFFF0F; }
+.bubble.is-agent > .tapback { right: auto; left: 8px; }
+.tapback__emoji { font-size: 13px; line-height: 1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
 /* A reaction that just arrived pops in on a spring. */
 .tapback.is-new { animation: tapback-pop 520ms cubic-bezier(0.2, 0.9, 0.3, 1) both; }
 @keyframes tapback-pop {
@@ -306,9 +298,8 @@
 .msg-actions__scrim { position: absolute; inset: 0; background: #0000002E; -webkit-backdrop-filter: blur(1.5px); backdrop-filter: blur(1.5px); animation: scrim-in 180ms var(--ease-out) both; }
 :root[data-theme='dark'] .msg-actions__scrim { background: #00000073; }
 @keyframes scrim-in { from { opacity: 0; } }
-.msg-actions__lift { position: fixed; pointer-events: none; border-radius: var(--radius-bubble); background: var(--color-bg-chrome); animation: bubble-lift 320ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-.msg-actions__lift > .bubble { margin: 0; width: 100%; max-width: none; box-shadow: var(--bubble-ring), 0 14px 34px -10px #00000059; }
-@keyframes bubble-lift { from { transform: none; } to { transform: translateY(-2px) scale(1.035); } }
+.msg-actions__lift { position: fixed; pointer-events: none; border-radius: var(--radius-bubble); background: var(--color-bg-chrome); }
+.msg-actions__lift > .bubble { margin: 0; width: 100%; max-width: none; }
 .tapback-picker {
   position: fixed; display: flex; align-items: center; gap: 2px; height: 44px; padding: 4px; border-radius: 22px;
   background: var(--color-bg-pane); box-shadow: var(--shadow-popover), 0 10px 28px -8px #0000004D;
@@ -322,11 +313,9 @@
   transition: background-color 120ms, color 120ms;
 }
 .tapback-picker__item:hover, .tapback-picker__item:focus-visible { background: var(--color-bg-hover); outline: none; }
-.tapback-picker__item.is-heart { color: #FF375F; }
 .tapback-picker__item.is-on { background: var(--bot-bubble, var(--color-bubble-user)); color: #FFFFFF; }
 .tapback-picker__item.is-picked { animation: chip-bounce 280ms cubic-bezier(0.2, 0.9, 0.3, 1.4) both; }
-.tapback-picker .tapback__text { font-size: 17px; }
-.tapback-picker .tapback__text.is-haha { font-size: 9.5px; line-height: 9.5px; }
+.tapback-picker .tapback__emoji { font-size: 20px; }
 @keyframes chip-in { from { opacity: 0; transform: scale(0.3) translateY(10px); } }
 @keyframes chip-bounce { 0% { transform: scale(1); } 45% { transform: scale(1.35); } 100% { transform: scale(1.1); } }
 /* Copies the macOS context menu: compact rows, blue highlight, hairline separators, translucent surface. */
@@ -349,6 +338,6 @@
 .msg-menu__error { color: var(--color-danger-text); }
 .msg-menu__error.is-solo { padding: 8px 12px; }
 @media (prefers-reduced-motion: reduce) {
-  .tapback.is-new, .msg-actions__scrim, .msg-actions__lift, .tapback-picker, .tapback-picker__item, .tapback-picker__item.is-picked, .msg-menu { animation: none; }
+  .tapback.is-new, .msg-actions__scrim, .tapback-picker, .tapback-picker__item, .tapback-picker__item.is-picked, .msg-menu { animation: none; }
 }
 .read-receipt { align-self: flex-end; padding: 0 4px; font-size: 11px; font-weight: 600; line-height: 14px; letter-spacing: 0.1px; color: var(--color-text-tertiary); }

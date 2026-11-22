@@ -10,7 +10,7 @@ import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
 import { ArrowDown } from 'lucide-react';
-import { REACTION_LABEL, TapbackGlyph } from './tapbacks';
+import { reactionEmoji, reactionLabel } from './tapbacks';
 import { MessageActions, type ActionsMode } from './MessageActions';
 
 type Item =
@@ -100,8 +100,8 @@ function cornerClass(i: number, n: number) {
 function Tapback({ reaction, liveKey }: { reaction: NonNullable<MessageBody['reaction']>; liveKey: string }) {
   const [fresh] = useState(() => isLiveReaction(liveKey));
   return (
-    <span className={`tapback is-${reaction.kind}${fresh ? ' is-new' : ''}`} role="img" aria-label={REACTION_LABEL[reaction.kind]} title={REACTION_LABEL[reaction.kind]}>
-      <TapbackGlyph kind={reaction.kind} />
+    <span className={`tapback${fresh ? ' is-new' : ''}`} role="img" aria-label={reactionLabel(reaction)} title={reactionLabel(reaction)}>
+      <span className="tapback__emoji" aria-hidden>{reactionEmoji(reaction)}</span>
     </span>
   );
 }

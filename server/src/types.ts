@@ -80,11 +80,26 @@ export interface MessageBody {
   from?: { kind: 'bot' | 'routine' | 'voice'; id: string; name: string };
   citations?: { url: string; title?: string }[];
   /** The Agent's tapback on one of the Owner's messages (one per message, like iMessage). */
-  reaction?: { kind: ReactionKind; at: number };
+  /** One of the six tapbacks, or any single emoji (kind 'emoji'). */
+  reaction?: { kind: ReactionKind | 'emoji'; emoji?: string; at: number };
 }
 
 export const REACTION_KINDS = ['heart', 'thumbs_up', 'thumbs_down', 'haha', 'emphasis', 'question'] as const;
 export type ReactionKind = typeof REACTION_KINDS[number];
+/** The emoji each tapback shows as. */
+export const REACTION_EMOJI: Record<ReactionKind, string> = {
+  heart: '❤️', thumbs_up: '👍', thumbs_down: '👎', haha: '😂', emphasis: '‼️', question: '❓',
+};
+
+/** A tapback name, 'none', or exactly one emoji (one grapheme with an emoji in it). */
+export function parseReaction(raw: unknown): { kind: ReactionKind } | { kind: 'emoji'; emoji: string } | 'none' | null {
+  const value = typeof raw === 'string' ? raw.trim() : '';
+  if (value === 'none') return 'none';
+  if ((REACTION_KINDS as readonly string[]).includes(value)) return { kind: value as ReactionKind };
+  if (!value || value.length > 16) return null;
+  const graphemes = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)];
+  return graphemes.length === 1 && /\p{Extended_Pictographic}/u.test(value) ? { kind: 'emoji', emoji: value } : null;
+}
 
 export interface ToolCallBody {
   type: 'tool-call';
