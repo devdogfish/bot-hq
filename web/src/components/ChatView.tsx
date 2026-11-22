@@ -63,7 +63,7 @@ export function ChatView() {
       <header className="chat__header">
         <span className="chat__pill-anchor">
           <button ref={menuButton} type="button" className={`chat__pill${working ? ' is-working' : ''}${waiting ? ' is-waiting' : ''}`} onClick={() => { setStepsOpen(false); setMenu(!menu); }} aria-haspopup="menu" aria-expanded={menu} aria-label={displayName(bot)}>
-            <BotAvatarFor bot={bot} size={60} />
+            <BotAvatarFor bot={bot} size={60} depth />
             <span className="chat__pill-text">
               <span className="chat__pill-name">{firstName(bot.name)}</span>
               <span className="chat__pill-status" role="status" aria-live="polite">{bot.kind === 'room' && !working && !waiting ? '' : headerStatus}</span>
