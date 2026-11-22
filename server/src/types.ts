@@ -8,7 +8,7 @@ export type AvatarShape =
 export type AvatarColor =
   | 'black' | 'brown' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'violet' | 'magenta' | 'gray';
 
-export const SOUND_SETS = ['glass', 'pluck', 'tick', 'tap', 'none'] as const;
+export const SOUND_SETS = ['imessage', 'none'] as const;
 export type SoundSet = typeof SOUND_SETS[number];
 export interface User { id: string; email: string; name: string; avatarUrl: string | null; soundSet: SoundSet }
 
