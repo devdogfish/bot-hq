@@ -105,9 +105,11 @@ export function MessageActions({ bot, row, anchor, mode, onClose }: {
 
   // Tapback row above the bubble, the menu under it; either flips when the window edge is near.
   const vw = window.innerWidth, vh = window.innerHeight;
-  const rowTop = rect.top - ROW_H - MARGIN >= MARGIN ? rect.top - ROW_H - MARGIN : rect.bottom + MARGIN;
+  // A reaction pill hangs about 12px under the bubble; keep the menu clear of it.
+  const below = rect.bottom + (b.reaction ? 12 : 0);
+  const rowTop = rect.top - ROW_H - MARGIN >= MARGIN ? rect.top - ROW_H - MARGIN : below + MARGIN;
   const rowBelow = rowTop > rect.top;
-  const menuTop = rowBelow ? rect.bottom + ROW_H + MARGIN * 2 : rect.bottom + MARGIN;
+  const menuTop = rowBelow ? below + ROW_H + MARGIN * 2 : below + MARGIN;
   const menuFlip = menuTop + 220 > vh;
   const align = side === 'right'
     ? { right: Math.max(MARGIN, vw - rect.right) }
@@ -126,7 +128,7 @@ export function MessageActions({ bot, row, anchor, mode, onClose }: {
               <button key={kind} type="button" role="menuitemradio" aria-checked={on} aria-label={REACTION_LABEL[kind].replace(/ at$/, '')}
                 className={`tapback-picker__item is-${kind}${on ? ' is-on' : ''}${picked === kind ? ' is-picked' : ''}`}
                 style={{ animationDelay: `${i * 35}ms` }} onClick={() => react(kind)}>
-                <TapbackGlyph kind={kind} size={18} />
+                <TapbackGlyph kind={kind} />
               </button>
             );
           })}

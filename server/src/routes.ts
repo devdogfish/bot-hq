@@ -17,7 +17,7 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
 import type { AvatarColor, AvatarShape } from './types.js';
-import { REACTION_KINDS, SOUND_SETS, type ReactionKind } from './types.js';
+import { parseReaction, SOUND_SETS } from './types.js';
 import { isSharingSecureInput } from './secure-input.js';
 
 export const api = new Hono<AuthVars>();
@@ -303,13 +303,14 @@ api.patch('/bots/:id/rows/:seq/reaction', async (c) => {
   const b = ownBot(c.get('user').id, c.req.param('id'));
   if (!b) return c.json({ error: 'not found' }, 404);
   const { reaction } = await c.req.json<{ reaction?: string }>().catch(() => ({ reaction: undefined }));
-  const clear = reaction === 'none';
-  if (!clear && !(REACTION_KINDS as readonly string[]).includes(String(reaction))) return c.json({ error: 'Unknown reaction.' }, 400);
+  const parsed = parseReaction(reaction);
+  if (!parsed) return c.json({ error: 'Unknown reaction.' }, 400);
+  const clear = parsed === 'none';
   const row = getRow(b.id, Number(c.req.param('seq')));
   if (!row || row.body.type !== 'message' || row.body.role !== 'assistant') return c.json({ error: 'Only an Agent message can take your reaction.' }, 400);
   const body = { ...row.body };
   if (clear) delete body.reaction;
-  else body.reaction = { kind: reaction as ReactionKind, at: Date.now() };
+  else body.reaction = { ...parsed, at: Date.now() };
   return c.json({ row: updateRow(b.id, row.seq, body, row.generation) });
 });
 
