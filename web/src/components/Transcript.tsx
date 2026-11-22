@@ -1,6 +1,5 @@
-import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Bot, LiveState, MessageBody, ReactionKind, Row, ToolCallBody } from '@shared/types';
-import { Heart, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
 import { reactionKey, isLiveReaction } from '../lib/liveReactions';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { isWaitingForYou } from '../lib/phrases';
@@ -10,6 +9,9 @@ import { takeFlight } from '../lib/sendFlight';
 import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
+import { ArrowDown } from 'lucide-react';
+import { REACTION_LABEL, TapbackGlyph } from './tapbacks';
+import { MessageActions, type ActionsMode } from './MessageActions';
 
 type Item =
   | { kind: 'divider'; key: string; ts: number }
@@ -94,21 +96,6 @@ function cornerClass(i: number, n: number) {
 }
 
 
-function TapbackGlyph({ kind }: { kind: ReactionKind }) {
-  switch (kind) {
-    case 'heart': return <Heart size={12} strokeWidth={0} fill="currentColor" aria-hidden />;
-    case 'thumbs_up': return <ThumbsUp size={12} strokeWidth={2.25} aria-hidden />;
-    case 'thumbs_down': return <ThumbsDown size={12} strokeWidth={2.25} aria-hidden />;
-    case 'haha': return <span className="tapback__text is-haha" aria-hidden>HA<br />HA</span>;
-    case 'emphasis': return <span className="tapback__text" aria-hidden>!!</span>;
-    case 'question': return <span className="tapback__text" aria-hidden>?</span>;
-  }
-}
-
-const REACTION_LABEL: Record<ReactionKind, string> = {
-  heart: 'Loved', thumbs_up: 'Liked', thumbs_down: 'Disliked', haha: 'Laughed at', emphasis: 'Emphasized', question: 'Questioned',
-};
-
 /** The Agent's iMessage-style tapback on the corner of the Owner's bubble. */
 function Tapback({ reaction, liveKey }: { reaction: NonNullable<MessageBody['reaction']>; liveKey: string }) {
   const [fresh] = useState(() => isLiveReaction(liveKey));
@@ -123,9 +110,18 @@ function Tapback({ reaction, liveKey }: { reaction: NonNullable<MessageBody['rea
 const FLIGHT_EASING = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
 const FLIGHT_MS = 420;
 
-const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left' | 'right'; pos: string }) {
+/** How long a touch must rest on a bubble to open its actions, like a press-and-hold in Messages. */
+const LONG_PRESS_MS = 450;
+
+type OpenActions = (row: Row, anchor: HTMLElement, mode: ActionsMode) => void;
+
+const Bubble = memo(function Bubble({ row, side, pos, onActions }: { row: Row; side: 'left' | 'right'; pos: string; onActions: OpenActions }) {
   const b = row.body as MessageBody;
   const wrap = useRef<HTMLDivElement>(null);
+  const press = useRef<{ timer: number; x: number; y: number } | null>(null);
+  const cancelPress = () => { if (press.current) { clearTimeout(press.current.timer); press.current = null; } };
+  const actionable = !b.streaming && !!b.text;
+  const open = (el: HTMLElement, mode: ActionsMode) => { if (actionable) onActions(row, el, mode); };
   // A message just sent from the composer rises from the input into its place.
   useLayoutEffect(() => {
     const el = wrap.current?.firstElementChild as HTMLElement | null;
@@ -145,7 +141,22 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={wrap} className={`bubble-wrap is-${side}`}>
-      <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}>
+      <div
+        className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}
+        tabIndex={actionable ? 0 : undefined}
+        aria-label={actionable ? 'Message. Press Shift+F10 for actions.' : undefined}
+        onContextMenu={(e) => { if (!actionable) return; e.preventDefault(); open(e.currentTarget, 'menu'); }}
+        onDoubleClick={(e) => { if (side === 'left' && !(e.target as HTMLElement).closest('a')) { window.getSelection()?.removeAllRanges(); open(e.currentTarget, 'picker'); } }}
+        onKeyDown={(e) => { if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) { e.preventDefault(); open(e.currentTarget, 'menu'); } }}
+        onPointerDown={(e) => {
+          if (e.pointerType !== 'touch' || !actionable) return;
+          const el = e.currentTarget;
+          press.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press.current = null; open(el, 'menu'); }, LONG_PRESS_MS) };
+        }}
+        onPointerMove={(e) => { if (press.current && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) > 8) cancelPress(); }}
+        onPointerUp={cancelPress}
+        onPointerCancel={cancelPress}
+      >
         {b.reaction && <Tapback key={`${b.reaction.kind}:${b.reaction.at}`} reaction={b.reaction} liveKey={reactionKey(row.botId, row.seq, b.reaction.at)} />}
         {b.draftOnly && <span className="bubble__draft">Draft only</span>}
         {side === 'right' || b.draftOnly ? <div className="bubble__plain">{b.text}</div> : <Markdown text={b.text || ' '} />}
@@ -281,6 +292,9 @@ export function Transcript({ bot, rows, loaded }: Props) {
   const [showJump, setShowJump] = useState(false);
   const items = useMemo(() => buildItems(rows), [rows]);
   const receipt = useMemo(() => readReceipt(rows), [rows]);
+  const [actions, setActions] = useState<{ row: Row; anchor: HTMLElement; mode: ActionsMode } | null>(null);
+  const openActions = useCallback<OpenActions>((row, anchor, mode) => setActions({ row, anchor, mode }), []);
+  const closeActions = useCallback(() => setActions(null), []);
 
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.
   useLayoutEffect(() => {
@@ -326,7 +340,7 @@ export function Transcript({ bot, rows, loaded }: Props) {
                 <div key={it.key} className={`group is-${it.side}`}>
                   {it.from && <SenderLabel from={it.from} />}
                   {it.rows.map((r, i) => (
-                    <Fragment key={r.seq}><Bubble row={r} side={it.side} pos={cornerClass(i, it.rows.length)} /></Fragment>
+                    <Fragment key={r.seq}><Bubble row={r} side={it.side} pos={cornerClass(i, it.rows.length)} onActions={openActions} /></Fragment>
                   ))}
                   {receipt && it.rows.some((r) => r.seq === receipt.seq) && (
                     <div className="read-receipt" aria-live="polite">Read {clock(receipt.at)}</div>
@@ -337,9 +351,10 @@ export function Transcript({ bot, rows, loaded }: Props) {
         })}
       </div>
     </div>
+      {actions && <MessageActions bot={bot} row={rows.find((r) => r.seq === actions.row.seq) ?? actions.row} anchor={actions.anchor} mode={actions.mode} onClose={closeActions} />}
       {showJump && (
         <button type="button" className="jump-btn" onClick={jump} aria-label="Scroll to bottom">
-          <Icon name="arrow_down" size={16} />
+          <ArrowDown size={18} strokeWidth={2} aria-hidden />
         </button>
       )}
     </div>
