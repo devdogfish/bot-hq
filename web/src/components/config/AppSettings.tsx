@@ -125,7 +125,7 @@ function SoundsSection() {
         ))}
       </div>
       <div className="cfg-field__hint">Sounds play only while Bot HQ is on screen, and never with Reduce motion on.</div>
-      <div className="cfg-field__hint">Sounds: <a href="https://notificationsounds.com/sound-effects/hollow-582" target="_blank" rel="noreferrer noopener">notificationsounds.com</a> (CC BY 4.0) and Pixabay.</div>
+      <div className="cfg-field__hint">Sounds: <a href="https://notificationsounds.com/" target="_blank" rel="noreferrer noopener">notificationsounds.com</a> (Hollow, Accomplished; CC BY 4.0) and Pixabay.</div>
     </section>
   );
 }

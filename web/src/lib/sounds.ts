@@ -2,19 +2,37 @@ import type { SoundSet } from '@shared/types';
 import { useStore } from '../store';
 
 /**
- * Two short sounds (web/public/sounds/README.md): "Hollow" when an Agent's reply arrives and a bubble pop
- * when a tapback lands. Sending is silent. They play quietly, only while the tab is visible, never under
- * prefers-reduced-motion, and never when the Owner picked None.
+ * Short sounds (web/public/sounds/README.md): "Hollow" when an Agent's reply arrives, "Accomplished"
+ * instead when that reply ends a long piece of work, and a bubble pop when a tapback lands. Sending is
+ * silent. They play quietly, only while the tab is visible, never under prefers-reduced-motion, and never
+ * when the Owner picked None.
  */
-export type SoundRole = 'receive' | 'reaction';
+export type SoundRole = 'receive' | 'done' | 'reaction';
+
+/** A turn that has worked this long has finished something worth a small celebration. */
+export const LONG_TURN_MS = 60_000;
+const celebrated = new Map<string, number>();
+
+/**
+ * Which sound an Agent's reply gets: Accomplished for the first reply of a turn that ran a minute or
+ * more, nothing for later replies of that same turn, Hollow otherwise.
+ */
+export function replySound(botId: string, startedAt: number | null | undefined, now = Date.now()): SoundRole | null {
+  if (startedAt && celebrated.get(botId) === startedAt) return null;
+  if (startedAt && now - startedAt >= LONG_TURN_MS) {
+    celebrated.set(botId, startedAt);
+    return 'done';
+  }
+  return 'receive';
+}
 
 export const SOUND_SET_OPTIONS: { id: SoundSet; label: string; hint: string }[] = [
-  { id: 'hollow_bubble', label: 'Hollow + Bubble', hint: 'A soft chime for replies, a pop for reactions' },
+  { id: 'hollow_bubble', label: 'Hollow + Bubble', hint: 'Chimes for replies and finished work, a pop for reactions' },
   { id: 'none', label: 'None', hint: 'No sounds' },
 ];
 
 /** The file for each moment. */
-const FILES: Record<SoundRole, string> = { receive: 'hollow/receive', reaction: 'bubble/pop' };
+const FILES: Record<SoundRole, string> = { receive: 'hollow/receive', done: 'accomplished/done', reaction: 'bubble/pop' };
 
 /** AAC where the browser plays it (Safari, Chrome, Edge), MP3 everywhere else. */
 const EXT = typeof Audio !== 'undefined' && new Audio().canPlayType('audio/mp4; codecs="mp4a.40.2"') ? 'm4a' : 'mp3';
@@ -44,8 +62,9 @@ export function playSound(role: SoundRole) {
   play(useStore.getState().user?.soundSet ?? 'hollow_bubble', role);
 }
 
-/** Settings preview: the reply chime, then the reaction pop, regardless of visibility rules. */
+/** Settings preview: the reply chime, the finished-work chime, then the reaction pop, regardless of visibility rules. */
 export function previewSoundSet(set: SoundSet) {
   play(set, 'receive');
-  setTimeout(() => play(set, 'reaction'), 900);
+  setTimeout(() => play(set, 'done'), 900);
+  setTimeout(() => play(set, 'reaction'), 2000);
 }
