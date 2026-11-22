@@ -1,13 +1,16 @@
 # Sounds
 
-One sound, `bubble/pop`, plays when an Agent's reply arrives and when a tapback lands. Sending is silent.
-It comes as AAC (`.m4a`) with an MP3 fallback, 64 kbps mono, trimmed to 0.18 s with a short fade, and
-peak-normalized to −6 dBFS. The app plays it at volume 0.35, only while the tab is visible, and never
-with Reduce motion turned on.
+Sounds: [notificationsounds.com](https://notificationsounds.com/) ("Hollow", CC BY 4.0) and Pixabay ("Bubble Pop 06").
 
-| File | Source | Author |
-|---|---|---|
-| `bubble/pop` | [Bubble Pop 06](https://pixabay.com/sound-effects/film-special-effects-bubble-pop-06-351337/) | Universfield |
+Bot HQ plays two short sounds. "Hollow" plays when an Agent's reply arrives, and the bubble pop plays when
+a tapback lands. Sending is silent. Each comes as AAC (`.m4a`) with an MP3 fallback, 64 kbps mono, with
+leading silence trimmed, a short fade, and a −6 dBFS peak. The app plays them at volume 0.35, only while
+the tab is visible, and never with Reduce motion turned on.
 
-License: [Pixabay Content License](https://pixabay.com/service/license-summary/). Free to use in this app,
-with no attribution required. Don't sell or redistribute the file on its own, outside Bot HQ.
+| File | Plays on | Source | Author | Licence | Trim |
+|---|---|---|---|---|---|
+| `hollow/receive` | Agent reply | [Hollow](https://notificationsounds.com/sound-effects/hollow-582) | NotificationSounds.com | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), credit required | 0.75 s |
+| `bubble/pop` | Tapback | [Bubble Pop 06](https://pixabay.com/sound-effects/film-special-effects-bubble-pop-06-351337/) | Universfield | [Pixabay Content License](https://pixabay.com/service/license-summary/) | 0.18 s |
+
+The credit also appears under Settings → Sounds. The Pixabay file must not be sold or redistributed on
+its own, outside Bot HQ.
