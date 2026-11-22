@@ -49,7 +49,7 @@ after(() => { globalThis.fetch = realFetch; });
 const { db } = await import('../server/src/db.ts');
 const { mcpToken } = await import('../server/src/engine.ts');
 const { appendRow, clearConversation, listRows } = await import('../server/src/store.ts');
-const { isBotBusy } = await import('../server/src/agent/loop.ts');
+const { isBotBusy, enqueueBotMessage } = await import('../server/src/agent/loop.ts');
 const { closeInterruptedMeetings } = await import('../server/src/voice/index.ts');
 const { initRooms } = await import('../server/src/agent/rooms.ts');
 const { initSubagents } = await import('../server/src/agent/subagents.ts');
@@ -256,7 +256,26 @@ test('tool relay queues work only for the bound bot and rejects cross-mode call 
   assert.match(runs[0].payload.input, /\[Meeting: Asked for in a live meeting with the Owner\..*\]\nCheck the rollout\./);
   assert.match(runs[0].payload.conversation, /^hq-stacy-/);
   assert.ok(!listRows('alex').some((row) => row.body.text === tool.arguments.request));
+
+  // A teammate's later answer reaches the meeting too, as it does a voice call.
+  assert.ok(enqueueBotMessage('alex', 'stacy', 'The rollout is done on my side.', 1));
+  await waitFor(() => requests.slice(start).filter(({ url }) => url === 'https://hermes.meeting.test/v1/responses').length === 2);
+  await waitFor(() => !isBotBusy('stacy'));
+  let late = [];
+  for (let tries = 0; tries < 50 && !late.length; tries++) {
+    late = (await meetingPost('updates', { call_id })).notes;
+    if (!late.length) await delay(10);
+  }
+  assert.deepEqual(late, ['Rollout checked.']);
   await meetingPost('end', { call_id, transcript: [] });
+
+  // With no meeting going on, a teammate's answer is not queued for any call.
+  assert.ok(enqueueBotMessage('alex', 'stacy', 'One more thing.', 1));
+  await waitFor(() => requests.slice(start).filter(({ url }) => url === 'https://hermes.meeting.test/v1/responses').length === 3);
+  await waitFor(() => !isBotBusy('stacy'));
+  const { activeMeetingFor, takeLanded } = await import('../server/src/meeting/landed.ts');
+  assert.equal(activeMeetingFor('stacy'), undefined);
+  assert.deepEqual(takeLanded(call_id), []);
 });
 
 test('session rejects the long-lived API key even if returned by the mint endpoint', async (t) => {

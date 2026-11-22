@@ -74,6 +74,8 @@ class VoiceCall {
   private inflight = new Map<string, { name: string; promise: Promise<ToolResult> }>();
   private handledCalls = new Set<string>();
   private tasks: PendingTask[] = [];
+  /** Highest transcript row already told to the call (or there before it started). */
+  private seenSeq = 0;
   private notes: string[] = [];
   private flushWaiting = false;
   private unsubStore: (() => void) | null = null;
@@ -274,8 +276,8 @@ class VoiceCall {
   }
 
   private watchTranscript() {
+    this.seenSeq = maxSeq(sortedRows(useStore.getState().transcripts[this.botId]));
     this.unsubStore = useStore.subscribe((s, prev) => {
-      if (!this.tasks.length) return;
       if (s.live[this.botId] !== prev.live[this.botId] || s.transcripts[this.botId] !== prev.transcripts[this.botId]) {
         if (s.live[this.botId]?.isRunning) for (const t of this.tasks) t.sawRunning = true;
         this.scheduleCheck(400);
@@ -289,7 +291,8 @@ class VoiceCall {
   }
 
   private checkTasks() {
-    if (this.ended || !this.tasks.length) return;
+    if (this.ended) return;
+    if (!this.tasks.length) return this.checkLateReplies();
     const st = useStore.getState();
     const live = st.live[this.botId];
     const rows = sortedRows(st.transcripts[this.botId]);
@@ -316,10 +319,25 @@ class VoiceCall {
       if (task.doneSince === null) { task.doneSince = now; recheck = true; continue; }
       if (now - task.doneSince < 1200) { recheck = true; continue; }
       this.tasks = this.tasks.filter((t) => t !== task);
+      this.seenSeq = Math.max(this.seenSeq, maxSeq(after));
       this.queueNote(landedNote(task.request, replies, after));
     }
     this.syncWorking();
     if (recheck) this.scheduleCheck(700);
+  }
+
+  /**
+   * Replies the text agent posts after the handed-off work already landed, such as relaying a
+   * teammate's answer that came back later. Wait until it is idle so the message is complete.
+   */
+  private checkLateReplies() {
+    const st = useStore.getState();
+    const live = st.live[this.botId];
+    const after = sortedRows(st.transcripts[this.botId]).filter((r) => r.seq > this.seenSeq);
+    if (!after.length || live?.isRunning || after.some((r) => r.body.type === 'message' && r.body.streaming)) return;
+    this.seenSeq = maxSeq(after);
+    const text = after.map((r) => (r.body.type === 'message' && r.body.role === 'assistant' ? r.body.text : '')).filter(Boolean).join('\n\n').trim();
+    if (text) this.queueNote(`A new reply just came in from your text agent, for example a teammate answering something you asked earlier:\n"""\n${clip(text, 1800)}\n"""`);
   }
 
   private firstName() {
@@ -370,6 +388,8 @@ class VoiceCall {
     }
   }
 }
+
+const maxSeq = (rows: Row[]) => rows.reduce((m, r) => Math.max(m, r.seq), 0);
 
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 

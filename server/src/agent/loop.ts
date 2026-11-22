@@ -1,5 +1,5 @@
 import { setTimeout as delay } from 'node:timers/promises';
-import { pushLanded } from '../meeting/landed.js';
+import { activeMeetingFor, pushLanded } from '../meeting/landed.js';
 import { db, now } from '../db.js';
 import { newId } from '../lib/ids.js';
 import { hub } from '../lib/hub.js';
@@ -1138,13 +1138,15 @@ async function runTurn(botId: string, trigger: Trigger, pauseRevision: number) {
       remoteRuns.delete(botId);
     }
     closeMessage();
-    if (trigger.type === 'meeting' && trigger.callId) {
+    // A teammate's answer that arrives while the Bot is in a meeting reaches the meeting too, as it does a voice call.
+    const landedCall = trigger.type === 'meeting' ? trigger.callId : trigger.type === 'bot' ? activeMeetingFor(botId) : undefined;
+    if (landedCall) {
       // Let the meeting voice tell the host how the work went, as a voice call's [work_landed] note does.
       const last = db.prepare("SELECT body FROM rows WHERE bot_id=? AND kind='message' AND created_at>=? ORDER BY seq DESC LIMIT 1")
         .get(botId, turnStartedAt) as { body: string } | undefined;
       const body = last ? JSON.parse(last.body) : null;
       const result = body?.role === 'assistant' && typeof body.text === 'string' ? body.text : failed ? 'It did not finish.' : '';
-      if (result) pushLanded(trigger.callId, result);
+      if (result) pushLanded(landedCall, result);
     }
     for (const ref of turn.tools) {
       if (ref.done) continue;
