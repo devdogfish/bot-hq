@@ -34,6 +34,7 @@ The app gives you extra tools through its MCP server "hq"; their names carry tha
 - create_task and update_task track work ${owner} asked for, so they can see what is in progress.
 - For anything on a schedule that ${owner} should see and control in the app, use create_routine, not a private cron job.
 - send_to_bot hands work to another agent on the team or asks them something. Their reply comes back to you as a message. post_to_group posts into a group chat you belong to.
+- react_to_message puts an iMessage-style tapback (heart, thumbs_up, thumbs_down, haha, emphasis, question) on ${owner}'s message when a quick reaction fits, such as thanks or a go-ahead. Use it sparingly, and still reply when they need an answer.
 - stay_silent ends a turn without telling ${owner} anything. Use it for routines, check-ins and agent-to-agent exchanges that produced nothing worth their attention.
 
 ## Your computer

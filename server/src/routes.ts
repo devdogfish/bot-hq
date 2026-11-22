@@ -17,6 +17,7 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
 import type { AvatarColor, AvatarShape } from './types.js';
+import { SOUND_SETS } from './types.js';
 import { isSharingSecureInput } from './secure-input.js';
 
 export const api = new Hono<AuthVars>();
@@ -115,6 +116,15 @@ api.post('/auth/logout', (c) => { destroySession(c); return c.json({ ok: true })
 api.use('/*', async (c, next) => {
   if (c.req.path.startsWith('/api/auth/') || c.req.path === '/api/health') return next();
   return requireUser(c, next);
+});
+
+// ---------- the Owner's own preferences ----------
+
+api.patch('/me/sound', async (c) => {
+  const { soundSet } = await c.req.json<{ soundSet?: string }>().catch(() => ({ soundSet: undefined }));
+  if (!(SOUND_SETS as readonly string[]).includes(String(soundSet))) return c.json({ error: `soundSet must be one of ${SOUND_SETS.join(', ')}` }, 400);
+  db.prepare('UPDATE users SET sound_set=? WHERE id=?').run(soundSet, c.get('user').id);
+  return c.json({ soundSet });
 });
 
 // ---------- events (SSE) ----------

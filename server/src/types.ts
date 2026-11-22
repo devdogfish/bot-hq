@@ -8,7 +8,9 @@ export type AvatarShape =
 export type AvatarColor =
   | 'black' | 'brown' | 'red' | 'orange' | 'yellow' | 'green' | 'cyan' | 'blue' | 'violet' | 'magenta' | 'gray';
 
-export interface User { id: string; email: string; name: string; avatarUrl: string | null }
+export const SOUND_SETS = ['glass', 'pluck', 'tick', 'tap', 'none'] as const;
+export type SoundSet = typeof SOUND_SETS[number];
+export interface User { id: string; email: string; name: string; avatarUrl: string | null; soundSet: SoundSet }
 
 export interface Bot {
   id: string;
@@ -75,7 +77,12 @@ export interface MessageBody {
   /** Set when a message came from another bot, a routine or a voice call rather than the user typing. */
   from?: { kind: 'bot' | 'routine' | 'voice'; id: string; name: string };
   citations?: { url: string; title?: string }[];
+  /** The Agent's tapback on one of the Owner's messages (one per message, like iMessage). */
+  reaction?: { kind: ReactionKind; at: number };
 }
+
+export const REACTION_KINDS = ['heart', 'thumbs_up', 'thumbs_down', 'haha', 'emphasis', 'question'] as const;
+export type ReactionKind = typeof REACTION_KINDS[number];
 
 export interface ToolCallBody {
   type: 'tool-call';

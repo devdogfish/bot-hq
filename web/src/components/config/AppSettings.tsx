@@ -6,6 +6,8 @@ import { useConfigUI, type AppSection, type Theme } from '../../configStore';
 import { isArchived, useStore } from '../../store';
 import { Icon } from '../Icon';
 import { Glyph } from './glyphs';
+import { Play } from 'lucide-react';
+import { previewSoundSet, SOUND_SET_OPTIONS } from '../../lib/sounds';
 
 const SECTIONS: { id: AppSection; label: string }[] = [
   { id: 'general', label: 'General' },
@@ -88,7 +90,42 @@ function GeneralSection() {
         </div>
         <div className="cfg-field__hint">System follows your device’s light or dark setting.</div>
       </section>
+      <SoundsSection />
     </>
+  );
+}
+
+/** Sound set for send, receive and reactions. Saved to the Owner's account. */
+function SoundsSection() {
+  const current = useStore((s) => s.user?.soundSet ?? 'glass');
+  const setSoundSet = useStore((s) => s.setSoundSet);
+  const [error, setError] = useState<string | null>(null);
+  const pick = (id: typeof current) => {
+    setError(null);
+    setSoundSet(id).catch((e: Error) => setError(`Couldn’t save the sound choice. ${e.message}`));
+  };
+  return (
+    <section className="cfg-section">
+      <div className="cfg-section__label">Sounds</div>
+      {error && <div className="cfg-error" role="alert">{error}</div>}
+      <div className="cfg-card sound-sets" role="radiogroup" aria-label="Sounds">
+        {SOUND_SET_OPTIONS.map((o) => (
+          <div key={o.id} className={`cfg-row sound-set${current === o.id ? ' is-active' : ''}`}>
+            <button type="button" role="radio" aria-checked={current === o.id} className="sound-set__pick" onClick={() => pick(o.id)}>
+              <span className="sound-set__radio" aria-hidden />
+              <span className="sound-set__label">{o.label}</span>
+              <span className="sound-set__hint">{o.hint}</span>
+            </button>
+            {o.id !== 'none' && (
+              <button type="button" className="sound-set__play icon-btn icon-btn--plain" onClick={() => previewSoundSet(o.id)} aria-label={`Play ${o.label}`} title="Play send, receive and reaction">
+                <Play size={14} strokeWidth={2} aria-hidden />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="cfg-field__hint">Sounds play only while Bot HQ is on screen, and never with Reduce motion on.</div>
+    </section>
   );
 }
 

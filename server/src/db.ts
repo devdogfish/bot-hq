@@ -182,6 +182,7 @@ function addColumn(table: string, col: string, ddl: string) {
   if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
 }
 addColumn('bots', 'voice', "TEXT NOT NULL DEFAULT 'luna'");
+addColumn('users', 'sound_set', "TEXT NOT NULL DEFAULT 'glass'");
 addColumn('bots', 'voice_speed', 'REAL NOT NULL DEFAULT 1');
 addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
 addColumn('bots', 'voice_provider', "TEXT NOT NULL DEFAULT 'xai'");
