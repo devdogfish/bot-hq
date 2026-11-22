@@ -214,3 +214,12 @@
 
 /* knob contrasts with the "on" track (matters for black bots in dark mode) */
 .toggle.is-on .toggle__knob { background: var(--bot-on-action, #FFFFFF); }
+
+/* ---------- sound sets ---------- */
+.sound-set { min-height: 44px; padding: 4px 6px 4px 10px; }
+.sound-set__pick { display: flex; align-items: center; gap: 10px; flex: 1 1 0; min-width: 0; height: 36px; text-align: left; }
+.sound-set__radio { width: 16px; height: 16px; flex-shrink: 0; border-radius: 50%; box-shadow: var(--color-border-primary) 0 0 0 1px inset; transition: box-shadow 120ms; }
+.sound-set.is-active .sound-set__radio { box-shadow: var(--color-ink) 0 0 0 5px inset; }
+.sound-set__label { flex-shrink: 0; font-size: 14px; line-height: 20px; color: var(--color-ink); }
+.sound-set__hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--color-text-tertiary); }
+.sound-set__play { flex-shrink: 0; }

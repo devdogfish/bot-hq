@@ -1,5 +1,7 @@
 import { Fragment, memo, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { Bot, LiveState, MessageBody, Row, ToolCallBody } from '@shared/types';
+import type { Bot, LiveState, MessageBody, ReactionKind, Row, ToolCallBody } from '@shared/types';
+import { Heart, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { reactionKey, isLiveReaction } from '../lib/liveReactions';
 import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { isWaitingForYou } from '../lib/phrases';
 import { clock, dividerLabel, duration } from '../lib/time';
@@ -91,6 +93,32 @@ function cornerClass(i: number, n: number) {
   return ' is-mid';
 }
 
+
+function TapbackGlyph({ kind }: { kind: ReactionKind }) {
+  switch (kind) {
+    case 'heart': return <Heart size={12} strokeWidth={0} fill="currentColor" aria-hidden />;
+    case 'thumbs_up': return <ThumbsUp size={12} strokeWidth={2.25} aria-hidden />;
+    case 'thumbs_down': return <ThumbsDown size={12} strokeWidth={2.25} aria-hidden />;
+    case 'haha': return <span className="tapback__text is-haha" aria-hidden>HA<br />HA</span>;
+    case 'emphasis': return <span className="tapback__text" aria-hidden>!!</span>;
+    case 'question': return <span className="tapback__text" aria-hidden>?</span>;
+  }
+}
+
+const REACTION_LABEL: Record<ReactionKind, string> = {
+  heart: 'Loved', thumbs_up: 'Liked', thumbs_down: 'Disliked', haha: 'Laughed at', emphasis: 'Emphasized', question: 'Questioned',
+};
+
+/** The Agent's iMessage-style tapback on the corner of the Owner's bubble. */
+function Tapback({ reaction, liveKey }: { reaction: NonNullable<MessageBody['reaction']>; liveKey: string }) {
+  const [fresh] = useState(() => isLiveReaction(liveKey));
+  return (
+    <span className={`tapback is-${reaction.kind}${fresh ? ' is-new' : ''}`} role="img" aria-label={REACTION_LABEL[reaction.kind]} title={REACTION_LABEL[reaction.kind]}>
+      <TapbackGlyph kind={reaction.kind} />
+    </span>
+  );
+}
+
 /** iMessage's send curve: a quick rise that settles softly. */
 const FLIGHT_EASING = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
 const FLIGHT_MS = 420;
@@ -118,6 +146,7 @@ const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left'
   return (
     <div ref={wrap} className={`bubble-wrap is-${side}`}>
       <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}>
+        {b.reaction && <Tapback key={`${b.reaction.kind}:${b.reaction.at}`} reaction={b.reaction} liveKey={reactionKey(row.botId, row.seq, b.reaction.at)} />}
         {b.draftOnly && <span className="bubble__draft">Draft only</span>}
         {side === 'right' || b.draftOnly ? <div className="bubble__plain">{b.text}</div> : <Markdown text={b.text || ' '} />}
         {b.citations && b.citations.length > 0 && (
@@ -251,6 +280,7 @@ export function Transcript({ bot, rows, loaded }: Props) {
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const items = useMemo(() => buildItems(rows), [rows]);
+  const receipt = useMemo(() => readReceipt(rows), [rows]);
 
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.
   useLayoutEffect(() => {
@@ -298,6 +328,9 @@ export function Transcript({ bot, rows, loaded }: Props) {
                   {it.rows.map((r, i) => (
                     <Fragment key={r.seq}><Bubble row={r} side={it.side} pos={cornerClass(i, it.rows.length)} /></Fragment>
                   ))}
+                  {receipt && it.rows.some((r) => r.seq === receipt.seq) && (
+                    <div className="read-receipt" aria-live="polite">Read {clock(receipt.at)}</div>
+                  )}
                 </div>
               );
           }
@@ -353,4 +386,24 @@ export function StepsHistory({ rows, live }: { rows: Row[]; live: LiveState | un
       ))}
     </div>
   );
+}
+
+/**
+ * "Read <time>" under the Owner's latest message, like iMessage: the time the Agent first answered it
+ * (a reply, a step or a tapback). Nothing while the Agent has not picked it up yet.
+ */
+function readReceipt(rows: Row[]): { seq: number; at: number } | null {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const b = rows[i].body;
+    if (b.type !== 'message' || b.role !== 'user' || (b.from && b.from.kind !== 'voice')) continue;
+    const read = b.reaction?.at;
+    for (let j = i + 1; j < rows.length; j++) {
+      const n = rows[j].body;
+      if ((n.type === 'message' && n.role === 'assistant') || n.type === 'tool-call') {
+        return { seq: rows[i].seq, at: read ? Math.min(read, rows[j].createdAt) : rows[j].createdAt };
+      }
+    }
+    return read ? { seq: rows[i].seq, at: read } : null;
+  }
+  return null;
 }

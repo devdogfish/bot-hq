@@ -39,6 +39,7 @@ type SecureInputDecision =
 export const api = {
   me: () => req<{ user: User | null; devLogin: boolean }>('GET', '/auth/me'),
   devLogin: (email: string, name?: string) => req<{ ok: true }>('POST', '/auth/dev', { email, name }),
+  setSoundSet: (soundSet: string) => req<{ soundSet: string }>('PATCH', '/me/sound', { soundSet }),
   logout: () => req<{ ok: true }>('POST', '/auth/logout'),
 
   bots: () => req<{ bots: Bot[]; live: LiveState[] }>('GET', '/bots'),

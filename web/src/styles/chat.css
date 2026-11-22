@@ -248,3 +248,23 @@
   max-width: 960px; margin: 0 auto 8px; padding: 6px 12px; border-radius: 12px; background: var(--color-danger-bg); color: var(--color-danger-text);
   font-size: 13px; line-height: 18px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
 }
+
+/* ---------- tapbacks and read receipt: measured from Messages on macOS ---------- */
+.bubble { position: relative; }
+.bubble:has(> .tapback) { margin-top: 14px; }
+.tapback {
+  --tapback-bg: #E9E9EB; --tapback-fg: #3C3C43;
+  position: absolute; top: -20px; left: -16px; z-index: 1;
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%;
+  background: var(--tapback-bg); color: var(--tapback-fg); box-shadow: 0 0 0 2px var(--color-bg-chrome);
+  pointer-events: auto; user-select: none;
+}
+.bubble.is-agent > .tapback { left: auto; right: -16px; }
+:root[data-theme='dark'] .tapback { --tapback-bg: #3A3A3C; --tapback-fg: #EBEBF5; }
+.tapback.is-heart { color: #FF375F; }
+.tapback__text { font-size: 10px; font-weight: 800; line-height: 1; letter-spacing: -0.2px; }
+.tapback__text.is-haha { font-size: 6.5px; line-height: 6.5px; text-align: center; letter-spacing: 0; }
+.tapback.is-new { animation: tapback-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes tapback-in { 0% { transform: scale(0); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
+.read-receipt { align-self: flex-end; padding: 0 4px; font-size: 11px; font-weight: 600; line-height: 14px; letter-spacing: 0.1px; color: var(--color-text-tertiary); }
+@media (prefers-reduced-motion: reduce) { .tapback.is-new { animation: none; } }

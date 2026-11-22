@@ -1,5 +1,7 @@
 import { create } from 'zustand';
-import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, User } from '@shared/types';
+import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, SoundSet, User } from '@shared/types';
+import { playSound } from './lib/sounds';
+import { noteLiveReaction, reactionKey } from './lib/liveReactions';
 import { ApiError, api } from './lib/api';
 
 export type ModalKind = 'create' | 'search' | 'group' | null;
@@ -40,7 +42,8 @@ interface State {
   loadRows(id: string): Promise<void>;
   loadRoutines(id: string): Promise<void>;
   loadComputer(): Promise<void>;
-  upsertRows(botId: string, generation: number, rows: Row[]): void;
+  upsertRows(botId: string, generation: number, rows: Row[], live?: boolean): void;
+  setSoundSet(soundSet: SoundSet): Promise<void>;
   handleEvent(ev: ServerEvent): void;
   setModal(m: ModalKind): void;
   set(p: Partial<State>): void;
@@ -196,7 +199,9 @@ export const useStore = create<State>((set, get) => ({
     set({ computer });
   },
 
-  upsertRows(botId, generation, rows) {
+  upsertRows(botId, generation, rows, live = false) {
+    let receive = false;
+    let reacted = false;
     set((s) => {
       const prev = s.transcripts[botId];
       if (prev && generation < prev.generation) return {};
@@ -204,10 +209,30 @@ export const useStore = create<State>((set, get) => ({
       const bySeq = { ...base.bySeq };
       for (const r of rows) {
         const cur = bySeq[r.seq];
+        // A new reply from the Agent in the open chat gets the receive sound (live events only, not loads).
+        if (!cur && live && botId === s.selectedBotId && r.body.type === 'message' && r.body.role === 'assistant') receive = true;
+        // A tapback that just landed animates in, and sounds in the open chat.
+        const reaction = r.body.type === 'message' ? r.body.reaction : undefined;
+        const before = cur?.body.type === 'message' ? cur.body.reaction : undefined;
+        if (live && reaction && reaction.at !== before?.at) {
+          noteLiveReaction(reactionKey(botId, r.seq, reaction.at));
+          if (botId === s.selectedBotId) reacted = true;
+        }
         if (!cur || r.updatedSeq >= cur.updatedSeq) bySeq[r.seq] = r;
       }
       return { transcripts: { ...s.transcripts, [botId]: { ...base, generation, bySeq } } };
     });
+    if (receive) playSound('receive');
+    if (reacted) playSound('reaction');
+  },
+
+  async setSoundSet(soundSet) {
+    const before = get().user?.soundSet;
+    set((st) => (st.user ? { user: { ...st.user, soundSet } } : {}));
+    try { await api.setSoundSet(soundSet); } catch (e) {
+      set((st) => (st.user && before ? { user: { ...st.user, soundSet: before } } : {}));
+      throw e;
+    }
   },
 
   handleEvent(ev) {
@@ -217,7 +242,7 @@ export const useStore = create<State>((set, get) => ({
       case 'ping':
         return;
       case 'rows':
-        s.upsertRows(ev.botId, ev.generation, ev.rows);
+        s.upsertRows(ev.botId, ev.generation, ev.rows, true);
         return;
       case 'cleared':
         set((st) => ({ transcripts: { ...st.transcripts, [ev.botId]: { generation: ev.generation, bySeq: {}, loaded: true } } }));
