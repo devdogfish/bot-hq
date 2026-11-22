@@ -118,30 +118,34 @@
 
 /* ---------- tool-call steps: one chip per run, expands to the list ---------- */
 .steps { display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; }
+/* Copies the Claude.ai "Thought for 12s" disclosure: plain text and a chevron, then the steps on a left rule. */
 .steps__toggle {
-  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 26px; padding: 0 8px 0 10px; border-radius: var(--radius-full);
-  background: var(--color-bg-pane); box-shadow: var(--color-border-secondary) 0 0 0 0.5px inset;
-  font-size: 12px; line-height: 16px; letter-spacing: 0.12px; color: var(--color-text-secondary);
-  transition: background-color 120ms, color 120ms;
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 24px; padding: 0; margin: 0 2px;
+  background: transparent; font-size: 13px; line-height: 18px; letter-spacing: 0.1px; color: var(--color-text-tertiary);
+  transition: color 120ms;
 }
-.steps__toggle:hover { background: var(--color-bg-elevated-hover); color: var(--color-text-primary); }
-.steps__now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-primary); animation: caption-in 240ms var(--ease-out) both; }
+.steps__toggle:hover, .steps.is-open .steps__toggle { color: var(--color-text-primary); }
+.steps__now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); animation: caption-in 240ms var(--ease-out) both; }
 .steps__worked { white-space: nowrap; }
-.steps__sep { color: var(--color-text-quaternary); }
-.steps__count { flex-shrink: 0; font-family: var(--font-mono-stack); font-size: 11px; letter-spacing: 0; color: var(--color-text-tertiary); white-space: nowrap; }
+.steps__sep { color: inherit; opacity: 0.6; }
+.steps__count { flex-shrink: 0; white-space: nowrap; }
 .steps__flag { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--color-danger); }
 .steps__flag.is-waiting { background: var(--color-warn); }
-.steps__chev { transition: transform 160ms var(--ease-out); }
-.steps.is-open .steps__chev { transform: rotate(90deg); }
-.steps__list { list-style: none; margin: 6px 0 2px; padding: 0; display: flex; flex-direction: column; gap: 1px; max-width: min(100%, 640px); animation: rise 160ms var(--ease-out); }
-.step { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; font-size: 13px; line-height: 18px; letter-spacing: 0.195px; color: var(--color-text-primary); }
-.step__row { display: flex; align-items: baseline; gap: 8px; max-width: 100%; padding: 3px 8px 3px 6px; border-radius: 8px; text-align: left; font: inherit; color: inherit; }
+.steps__chev { flex-shrink: 0; transform: rotate(90deg); transition: transform 160ms var(--ease-out); }
+.steps.is-open .steps__chev { transform: rotate(-90deg); }
+.steps__list {
+  position: relative; list-style: none; margin: 6px 0 4px 2px; padding: 0; display: flex; flex-direction: column; gap: 0;
+  max-width: min(100%, 640px); animation: rise 160ms var(--ease-out);
+}
+.steps__list::before { content: ''; position: absolute; left: 5.5px; top: 10px; bottom: 10px; width: 1px; background: var(--color-border-secondary); }
+.step { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; font-size: 13px; line-height: 18px; letter-spacing: 0.1px; color: var(--color-text-secondary); }
+.step__row { display: flex; align-items: baseline; gap: 10px; max-width: 100%; padding: 4px 8px 4px 0; border-radius: 6px; text-align: left; font: inherit; color: inherit; }
 .step__row.is-clickable { cursor: pointer; }
-.step__row.is-clickable:hover { background: var(--color-bg-hover); }
-.step__mark { display: inline-flex; align-items: center; justify-content: center; align-self: center; width: 12px; height: 12px; flex-shrink: 0; }
-.step__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-success); }
-.step.is-error .step__dot, .step.is-denied .step__dot { background: var(--color-danger); }
-.step.is-awaiting-approval .step__dot { background: var(--color-warn); }
+.step__row.is-clickable:hover { color: var(--color-text-primary); }
+.step__mark { position: relative; display: inline-flex; align-items: center; justify-content: center; align-self: center; width: 12px; height: 12px; flex-shrink: 0; }
+.step__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-bg-chrome); box-shadow: var(--color-text-quaternary) 0 0 0 1px inset; }
+.step.is-error .step__dot, .step.is-denied .step__dot { background: var(--color-danger); box-shadow: none; }
+.step.is-awaiting-approval .step__dot { background: var(--color-warn); box-shadow: none; }
 .step__spin {
   display: inline-block; width: 10px; height: 10px; flex-shrink: 0; border-radius: 50%;
   border: 1.5px solid var(--color-border-secondary); border-top-color: var(--color-text-secondary);
@@ -152,11 +156,11 @@
 .step__note { flex-shrink: 0; font-size: 12px; color: var(--color-danger-text); }
 .step.is-awaiting-approval .step__note { color: var(--color-warn-text); }
 .step__args {
-  align-self: stretch; margin: 2px 0 6px 26px; padding: 8px 10px; border-radius: 8px; max-height: 180px; overflow: auto; scrollbar-width: thin;
+  align-self: stretch; margin: 2px 0 6px 22px; padding: 8px 10px; border-radius: 8px; max-height: 180px; overflow: auto; scrollbar-width: thin;
   background: var(--color-bg-tertiary); color: var(--color-text-secondary);
   font-family: var(--font-mono-stack); font-size: 11.5px; line-height: 16px; letter-spacing: 0; white-space: pre-wrap; word-break: break-word;
 }
-.step__shot { max-width: 240px; margin: 2px 0 6px 26px; border-radius: 6px; box-shadow: var(--color-border-tertiary) 0 0 0 0.5px; }
+.step__shot { max-width: 240px; margin: 2px 0 6px 22px; border-radius: 6px; box-shadow: var(--color-border-tertiary) 0 0 0 0.5px; }
 @keyframes step-spin { to { transform: rotate(360deg); } }
 
 /* ---------- live thinking block: mascot on a dark pill, caption, timer ---------- */
@@ -219,36 +223,45 @@
 
 /* ---------- composer ---------- */
 .composer-area { flex-shrink: 0; padding: 0 16px 16px; position: relative; }
+/* Copies the Claude.ai composer: input on top, a toolbar row under it, 8px-radius ghost controls. */
 .composer {
-  display: flex; align-items: flex-end; justify-content: space-between; gap: 8px;
-  max-width: 960px; min-height: 44px; margin: 0 auto; padding: 0 8px;
-  background: var(--color-bg-pane); border: 0.5px solid var(--color-border-secondary); border-radius: var(--radius-composer);
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 960px; margin: 0 auto; padding: 12px 12px 10px;
+  background: var(--color-bg-pane); border: 0.5px solid var(--color-border-secondary); border-radius: 20px;
   box-shadow: var(--shadow-composer);
-  transition: border-color 120ms;
+  transition: border-color 120ms, box-shadow 120ms;
 }
-.composer:focus-within { border-color: var(--color-border-primary); }
-.composer__left { display: flex; align-items: flex-end; gap: 8px; flex: 1 1 0; min-width: 0; }
-.composer__right { display: flex; align-items: center; gap: 8px; padding: 8px 0; }
-.composer__plus-anchor { position: relative; display: inline-flex; padding: 8px 0; }
-.composer__btn {
-  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%;
-  background: var(--color-bg-tertiary); box-shadow: var(--color-border-tertiary) 0 0 0 0.5px inset; flex-shrink: 0; color: var(--color-text-primary);
-}
-.composer__btn:hover:not(:disabled) { background: var(--color-bg-secondary-hover); }
-.composer__draft { width: auto; padding: 0 8px; border-radius: 14px; font-size: 12px; white-space: nowrap; }
-.composer__draft:disabled { opacity: 0.5; }
-.composer-model { display: inline-flex; min-width: 0; }
-.composer__model { display: inline-flex; align-items: center; gap: 4px; max-width: 180px; color: var(--color-text-secondary); }
-.composer__model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.composer__model.is-override { color: var(--color-ink); }
+.composer:hover, .composer:focus-within { border-color: var(--color-border-primary); }
 .composer__input {
-  flex: 1 1 0; min-width: 0; border: 0; outline: none; resize: none; background: transparent;
-  padding: 12px 0; margin: 0; font-size: 14px; line-height: 20px; letter-spacing: 0.14px; color: var(--color-ink);
+  width: 100%; min-width: 0; border: 0; outline: none; resize: none; background: transparent;
+  padding: 2px 4px; margin: 0; font-size: 15px; line-height: 22px; letter-spacing: 0.1px; color: var(--color-ink);
   max-height: 200px; display: block;
 }
-.composer__input::placeholder { color: var(--color-text-quaternary); opacity: 1; }
+.composer__input::placeholder { color: var(--color-text-tertiary); opacity: 1; }
+.composer__bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.composer__right { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.composer__plus-anchor { position: relative; display: inline-flex; flex-shrink: 0; }
+.composer__btn {
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px;
+  background: transparent; flex-shrink: 0; color: var(--color-text-primary); transition: background-color 120ms, border-color 120ms;
+}
+.composer__btn--outline { box-shadow: var(--color-border-secondary) 0 0 0 0.5px inset; }
+.composer__btn:hover:not(:disabled), .composer__btn[aria-expanded='true'] { background: var(--color-bg-hover); }
+.composer__btn:disabled { opacity: 0.5; }
+.composer__chip {
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;
+  background: transparent; font-size: 13px; line-height: 18px; letter-spacing: 0.1px; white-space: nowrap; color: var(--color-text-secondary);
+  transition: background-color 120ms, color 120ms;
+}
+.composer__chip:hover:not(:disabled), .composer__chip[aria-expanded='true'] { background: var(--color-bg-hover); color: var(--color-text-primary); }
+.composer__chip:disabled { opacity: 0.5; }
+.composer__draft { flex-shrink: 0; box-shadow: var(--color-border-secondary) 0 0 0 0.5px inset; }
+.composer-model { display: inline-flex; min-width: 0; }
+.composer__model { max-width: 180px; padding: 0 8px; }
+.composer__model > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.composer__model.is-override { color: var(--color-ink); }
 .composer__cta {
-  display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; margin-left: 4px; border-radius: 8px;
   background: var(--bot-action, var(--color-primary)); color: var(--bot-on-action, #FFFFFF); flex-shrink: 0; transition: background-color 120ms, transform 120ms;
 }
 .composer__cta:hover:not(:disabled) { background: var(--bot-action-hover, var(--color-bg-primary-hover)); }

@@ -28,7 +28,7 @@ export function ComposerModel({ bot, onError }: { bot: Bot; onError: (message: s
         onPick={(m) => save({ chatProvider: m.provider, chatModel: m.model })}
         actions={chat.model ? [{ label: 'Set as production model', onSelect: () => save({ provider: chat.provider, model: chat.model, chatProvider: null, chatModel: null }) }] : []}
         trigger={({ toggle, ref, open: _open, ...aria }) => (
-          <button ref={ref} type="button" className={`composer__btn composer__draft composer__model${chat.model ? ' is-override' : ''}`} onClick={toggle} title={chat.model ? 'Chat model (differs from production)' : 'Chat model'} {...aria}>
+          <button ref={ref} type="button" className={`composer__chip composer__model${chat.model ? ' is-override' : ''}`} onClick={toggle} title={chat.model ? 'Chat model (differs from production)' : 'Chat model'} {...aria}>
             <span>{shown ?? 'Model'}</span>
             <Icon name="chev_down" size={10} opacity={0.56} />
           </button>

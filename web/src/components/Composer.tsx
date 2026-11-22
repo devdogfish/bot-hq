@@ -76,16 +76,27 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
   const inCall = useVoice((s) => isCallActive(s) && s.botId === bot.id);
 
   const hasText = text.trim().length > 0;
-  const multiline = text.includes('\n') || (ref.current?.scrollHeight ?? 0) > 30;
 
   return (
     <div className="composer-area">
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
-      <div className={`composer${multiline ? ' is-multiline' : ''}`}>
-        <div className="composer__left">
+      <div className="composer">
+        <textarea
+          ref={ref}
+          className="composer__input"
+          rows={1}
+          value={text}
+          placeholder={`Message ${displayName(bot)}`}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
+          }}
+          aria-label={`Message ${bot.name}`}
+        />
+        <div className="composer__bar">
           <span className="composer__plus-anchor">
-            <button type="button" className="composer__btn" onClick={() => setMenu(!menu)} aria-label="More actions" aria-expanded={menu}>
-              <Icon name="composer_plus" opacity={0.56} />
+            <button type="button" className="composer__btn composer__btn--outline" onClick={() => setMenu(!menu)} aria-label="More actions" aria-expanded={menu}>
+              <Icon name="composer_plus" opacity={0.72} />
             </button>
             {menu && (
               <Menu
@@ -97,25 +108,12 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
               />
             )}
           </span>
-          <textarea
-            ref={ref}
-            className="composer__input"
-            rows={1}
-            value={text}
-            placeholder={`Message ${displayName(bot)}`}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
-            }}
-            aria-label={`Message ${bot.name}`}
-          />
-        </div>
         <div className="composer__right">
           {bot.kind !== 'room' && <ComposerModel bot={bot} onError={setError} />}
           {bot.draftOnlyAvailable && (
             <button
               type="button"
-              className="composer__btn composer__draft"
+              className="composer__chip composer__draft"
               onClick={() => send('draft')}
               disabled={!hasText || sending || blocked}
               title="Draft a text response without tools"
@@ -135,7 +133,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
             onKeyDown={dictation.onKeyDown}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <Icon name="mic" opacity={0.56} />
+            <Icon name="mic" opacity={0.72} />
           </button>
           {inCall && !hasText ? (
             <button type="button" className="composer__cta is-in-call" onClick={endCall} aria-label="End voice call" title="End voice call">
@@ -157,6 +155,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
               <Icon name={hasText ? 'arrow_up' : 'voice_a'} size={16} />
             </button>
           )}
+        </div>
         </div>
       </div>
     </div>
