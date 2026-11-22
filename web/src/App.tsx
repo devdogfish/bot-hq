@@ -15,6 +15,9 @@ import { useConfigUI } from './configStore';
 
 function Shell() {
   const detailsOpen = useStore((s) => s.detailsOpen);
+  const phone = useStore((s) => s.phone);
+  const mobileOpen = useStore((s) => s.mobileOpen);
+  const phoneDetails = useStore((s) => s.phoneDetails);
   const modal = useStore((s) => s.modal);
   const viewerOpen = useStore((s) => s.viewerOpen);
   const collapsed = useStore((s) => s.sidebarCollapsed);
@@ -28,6 +31,15 @@ function Shell() {
     return startEvents();
   }, []);
 
+  // Phone layout follows the screen width.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 760px)');
+    const sync = () => useStore.setState({ phone: mq.matches });
+    sync();
+    mq.addEventListener('change', sync);
+    return () => mq.removeEventListener('change', sync);
+  }, []);
+
   // Global shortcuts: ⌘K search, ⌘B sidebar, ⇧⌘, details, ⌘N new bot.
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
@@ -37,7 +49,7 @@ function Shell() {
       const key = e.key.toLowerCase();
       if (key === 'k') { e.preventDefault(); st.setModal(st.modal === 'search' ? null : 'search'); }
       else if (key === 'b') { e.preventDefault(); st.set({ sidebarCollapsed: !st.sidebarCollapsed }); }
-      else if (e.shiftKey && (key === ',' || key === '<')) { e.preventDefault(); st.set({ detailsOpen: !st.detailsOpen }); }
+      else if (e.shiftKey && (key === ',' || key === '<')) { e.preventDefault(); st.showDetails(!(st.phone ? st.phoneDetails : st.detailsOpen)); }
       else if (key === ',') { e.preventDefault(); useConfigUI.getState().openAppSettings(); }
     };
     window.addEventListener('keydown', k);
@@ -45,10 +57,10 @@ function Shell() {
   }, []);
 
   const showComputer = !!botId && view === 'chat' && viewerOpen;
-  const showDetails = !!botId && view === 'chat' && detailsOpen && !showComputer;
+  const showDetails = !!botId && view === 'chat' && (phone ? phoneDetails : detailsOpen) && !showComputer;
 
   return (
-    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${showDetails ? ' has-details' : ''}`}>
+    <div className={`app${collapsed ? ' is-sidebar-collapsed' : ''}${showDetails ? ' has-details' : ''}${phone ? ' is-phone' : ''}${mobileOpen ? ' is-mobile-open' : ''}`}>
       <Sidebar />
       {view === 'tasks' ? <TasksView /> : <ChatView />}
       {showDetails && <DetailsPanel />}

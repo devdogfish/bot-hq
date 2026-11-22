@@ -1,0 +1,96 @@
+/* ---------- phone layout (mobile first: one pane at a time) ----------
+   The Bot list is home. A chat (or Tasks) opens full-screen with a back button; details and the
+   computer open as full-screen sheets; dialogs rise from the bottom. Safe areas are respected. */
+
+.phone-back { display: none; }
+
+/* Touch: hold a message to react without the browser's text-selection popup getting in first. */
+@media (hover: none) {
+  .bubble { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .bubble-wrap .bubble__time { display: none; }
+  button, a, [role='button'] { -webkit-tap-highlight-color: transparent; }
+}
+
+@media (max-width: 760px) {
+  html, body, #root { height: 100dvh; }
+  body { overscroll-behavior: none; }
+  .app { height: 100dvh; }
+
+  .traffic-lights { display: none; }
+  input, textarea, select { font-size: max(16px, 1em); } /* iOS zooms into anything smaller on focus */
+
+  /* Panes */
+  .sidebar, .sidebar.is-collapsed { width: 100%; border-right: 0; padding-top: env(safe-area-inset-top); }
+  .sidebar__titlebar .icon-btn[aria-label$='sidebar'] { display: none; }
+  .sidebar.is-collapsed .pinned__tile { width: 95px; padding: 6px 8px 4px; }
+  .sidebar__footer { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .bot-row { height: 64px; }
+  .app:not(.is-mobile-open) > .chat { display: none; }
+  .app.is-mobile-open > .sidebar { display: none; }
+  .chat { min-width: 0; width: 100%; }
+
+  /* Chat header: back, the Agent, call and details. */
+  .phone-back { display: inline-flex; position: absolute; left: 6px; top: calc(12px + env(safe-area-inset-top)); pointer-events: auto; width: 40px; height: 40px; }
+  .chat__header { padding-top: calc(8px + env(safe-area-inset-top)); }
+  .chat__pill-anchor { max-width: calc(100% - 200px); }
+  .chat__header-right { top: calc(12px + env(safe-area-inset-top)); right: 8px; }
+  .chat__header-right .share-btn { display: none; }
+  .chat__header-right .icon-btn { width: 40px; height: 40px; }
+
+  /* Transcript and composer */
+  .transcript { padding: calc(104px + env(safe-area-inset-top)) 12px 32px; }
+  .bubble { max-width: min(82vw, 560px); }
+  .question-card, .card { width: 100%; }
+  .composer-area { padding: 0 8px calc(8px + env(safe-area-inset-bottom)); }
+  .composer__input { font-size: 16px; } /* 16px keeps iOS from zooming in on focus */
+  .composer__btn { width: 40px; height: 40px; }
+
+  /* Tasks view */
+  .tasks-view__header { padding: calc(12px + env(safe-area-inset-top)) 12px 12px 4px; height: auto; flex-wrap: wrap; }
+  .tasks-view .phone-back { position: static; }
+  .tasks-view__inner { padding: 12px 12px calc(32px + env(safe-area-inset-bottom)); }
+
+  /* Details and the computer: full-screen sheets over the chat. */
+  .details {
+    position: fixed; inset: 0; z-index: 40; width: 100%; border-left: 0;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+    animation: phone-sheet-in 240ms var(--ease-out) both;
+  }
+  .viewer { position: fixed; inset: 0; z-index: 45; flex: none; width: 100%; border-left: 0; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+  .viewer__stage { padding: 8px; }
+
+  /* Dialogs rise from the bottom as sheets. */
+  .modal-root { padding: 0; align-items: flex-end; }
+  .modal-root > .modal {
+    width: 100% !important; max-width: 100% !important; max-height: 92dvh; margin-top: 0 !important;
+    border-radius: 16px 16px 0 0; padding-bottom: env(safe-area-inset-bottom);
+    animation: phone-sheet-up 260ms var(--ease-out) both;
+  }
+  .bot-settings { height: 92dvh; }
+  .bot-settings__body { flex-direction: column; }
+  .cfg-nav {
+    flex-direction: row; width: 100%; overflow-x: auto; padding: 8px; gap: 4px; scrollbar-width: none;
+    border-right: 0; border-bottom: 0.5px solid var(--color-border-tertiary);
+  }
+  .cfg-nav::-webkit-scrollbar { display: none; }
+  .cfg-nav__item { width: auto; flex-shrink: 0; white-space: nowrap; }
+
+  /* Menus and message actions stay on screen. */
+  .menu { max-width: calc(100vw - 16px); }
+  .msg-menu { max-width: calc(100vw - 16px); }
+  .tapback-picker { max-width: calc(100vw - 16px); }
+
+  /* Call card */
+  .vcard.is-full { top: calc(8px + env(safe-area-inset-top)); width: calc(100% - 16px); }
+  .vcard.is-mini { top: calc(104px + env(safe-area-inset-top)); left: 12px; }
+}
+
+/* Tablet and small laptop: the details panel floats over the chat instead of squeezing it. */
+@media (min-width: 761px) and (max-width: 1180px) {
+  .chat { min-width: 0; }
+  .details { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; box-shadow: -12px 0 32px -12px #00000059; }
+}
+
+@keyframes phone-sheet-in { from { opacity: 0; transform: translateX(24px); } }
+@keyframes phone-sheet-up { from { transform: translateY(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .details, .modal-root > .modal { animation: none; } }

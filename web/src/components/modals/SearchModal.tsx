@@ -26,7 +26,7 @@ export function SearchModal() {
     listRef.current?.querySelector<HTMLElement>(`[data-idx="${active}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [active]);
 
-  const open = (id: string) => { selectBot(id); close(); };
+  const open = (id: string) => { selectBot(id); useStore.setState({ mobileOpen: true }); close(); };
 
   return (
     <Modal onClose={close} className="search-modal" label="Search">
