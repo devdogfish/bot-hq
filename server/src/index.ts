@@ -54,6 +54,14 @@ app.all('/api/*', (c) => c.json({ error: 'not found' }, 404));
 // Serve the built web app in production.
 const webDist = fileURLToPath(new URL('../../web/dist', import.meta.url));
 if (fs.existsSync(webDist)) {
+  // The page must be revalidated on every load so a deploy shows at once; the hashed bundles never change,
+  // so they can be cached for good. Without this, browsers kept serving the previous release's page.
+  app.use('/*', async (c, next) => {
+    await next();
+    if (c.req.path.startsWith('/api/') || c.req.path.startsWith('/hooks/')) return;
+    if (c.req.path.startsWith('/assets/')) c.header('Cache-Control', 'public, max-age=31536000, immutable');
+    else if (c.res.headers.get('content-type')?.includes('text/html')) c.header('Cache-Control', 'no-cache');
+  });
   app.use('/*', serveStatic({ root: path.relative(process.cwd(), webDist) }));
   app.get('*', (c) => c.html(fs.readFileSync(path.join(webDist, 'index.html'), 'utf8')));
 }
