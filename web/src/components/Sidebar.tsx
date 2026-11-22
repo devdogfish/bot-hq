@@ -56,11 +56,12 @@ export function Sidebar() {
   const inTasks = useConfigUI((s) => s.view === 'tasks');
   const selectedBotId = inTasks ? null : storeSelectedBotId; // nothing highlighted while the Tasks view is open
   const user = useStore((s) => s.user);
-  const collapsed = useStore((s) => s.sidebarCollapsed);
+  // A phone shows the full list; the collapsed rail is a desktop idea.
+  const collapsed = useStore((s) => s.sidebarCollapsed && !s.phone);
   const set = useStore((s) => s.set);
   const storeSelectBot = useStore((s) => s.selectBot);
   // Picking a bot (even the one already selected) leaves the Tasks view.
-  const selectBot = useCallback((id: string) => { useConfigUI.getState().setView('chat'); storeSelectBot(id); }, [storeSelectBot]);
+  const selectBot = useCallback((id: string) => { useConfigUI.getState().setView('chat'); storeSelectBot(id); useStore.setState({ mobileOpen: true }); }, [storeSelectBot]);
   const setModal = useStore((s) => s.setModal);
   const [accountMenu, setAccountMenu] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());

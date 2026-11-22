@@ -27,6 +27,12 @@ interface State {
   sseConnected: boolean;
 
   detailsOpen: boolean;
+  /** Phone layout (narrow screen): one pane at a time. */
+  phone: boolean;
+  /** On a phone: the open pane is a chat (or Tasks) rather than the Bot list. */
+  mobileOpen: boolean;
+  /** On a phone the details panel is a full-screen sheet; it never opens by itself from the desktop setting. */
+  phoneDetails: boolean;
   sidebarCollapsed: boolean;
   modal: ModalKind;
   viewerOpen: boolean;
@@ -48,6 +54,8 @@ interface State {
   handleEvent(ev: ServerEvent): void;
   setModal(m: ModalKind): void;
   set(p: Partial<State>): void;
+  /** Show or hide the details panel in whichever way this screen uses. */
+  showDetails(open: boolean): void;
 }
 
 const LS_SELECTED = 'bothq.selectedBot';
@@ -74,6 +82,9 @@ export const useStore = create<State>((set, get) => ({
   computer: null,
   sseConnected: false,
   detailsOpen: lsGet(LS_DETAILS) !== '0',
+  phone: typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches,
+  mobileOpen: false,
+  phoneDetails: false,
   sidebarCollapsed: lsGet(LS_SIDEBAR) === '1',
   modal: null,
   viewerOpen: false,
@@ -286,6 +297,11 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setModal(modal) { set({ modal }); },
+
+  showDetails(open) {
+    if (get().phone) set({ phoneDetails: open });
+    else get().set({ detailsOpen: open });
+  },
 
   set(p) {
     if (p.detailsOpen !== undefined) lsSet(LS_DETAILS, p.detailsOpen ? '1' : '0');

@@ -26,7 +26,7 @@ export function CreateGroupModal() {
       const { bots: all } = await api.bots();
       const st = useStore.getState();
       st.set({ bots: all });
-      st.selectBot(id);
+      st.selectBot(id); st.set({ mobileOpen: true });
       close();
     } catch (e) {
       setError((e as Error).message);

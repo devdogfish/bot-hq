@@ -5,6 +5,7 @@ import { configApi } from '../../lib/configApi';
 import { relativeShort } from '../../lib/time';
 import { useConfigUI, useVersion } from '../../configStore';
 import { useStore } from '../../store';
+import { ChevronLeft } from 'lucide-react';
 import { Glyph } from './glyphs';
 import './ui';
 
@@ -19,7 +20,7 @@ function when(t: Task): string {
 }
 
 function TaskRow({ t, bot, showBot }: { t: Task; bot?: Bot; showBot: boolean }) {
-  const open = () => { if (bot) { useStore.getState().selectBot(bot.id); useConfigUI.getState().setView('chat'); } };
+  const open = () => { if (bot) { useStore.getState().selectBot(bot.id); useConfigUI.getState().setView('chat'); useStore.setState({ mobileOpen: true }); } };
   return (
     <button type="button" className={`task-row is-${t.state}`} onClick={open} disabled={!bot} title={bot ? `Open ${bot.name}` : undefined}>
       <span className={`task-row__check is-${t.state}`} aria-hidden>{t.state === 'done' ? <Glyph name="check_circle" size={18} /> : <span className="task-row__ring" />}</span>
@@ -64,6 +65,7 @@ export function TasksView() {
   return (
     <main className="chat tasks-view">
       <header className="tasks-view__header">
+        <button type="button" className="icon-btn icon-btn--plain phone-back" onClick={() => useStore.setState({ mobileOpen: false })} aria-label="Back"><ChevronLeft size={22} strokeWidth={2} aria-hidden /></button>
         <div className="tasks-view__title">Tasks</div>
         <div className="segmented" role="tablist" aria-label="Filter tasks">
           {([['open', `In progress${counts.open ? ` ${counts.open}` : ''}`], ['done', 'Done'], ['all', 'All']] as [Filter, string][]).map(([f, label]) => (
@@ -94,7 +96,7 @@ export function TasksIsland() {
   const tasks = useTasks();
   const waiting = tasks?.filter((t) => t.state === 'needs_input').length ?? 0;
   return (
-    <button type="button" className={`sidebar-island${view === 'tasks' ? ' is-active' : ''}`} onClick={() => useConfigUI.getState().setView(view === 'tasks' ? 'chat' : 'tasks')} title="Tasks" aria-pressed={view === 'tasks'}>
+    <button type="button" className={`sidebar-island${view === 'tasks' ? ' is-active' : ''}`} onClick={() => { const next = view === 'tasks' ? 'chat' : 'tasks'; useConfigUI.getState().setView(next); useStore.setState({ mobileOpen: next === 'tasks' }); }} title="Tasks" aria-pressed={view === 'tasks'}>
       <span className="sidebar-island__icon"><Glyph name="tasks" size={18} /></span>
       <span className="sidebar-island__label">Tasks</span>
       {waiting > 0 && <span className="sidebar-island__count" aria-label={`${waiting} waiting on you`}>{waiting}</span>}
@@ -111,7 +113,7 @@ export function BotTasks({ bot }: { bot: Bot }) {
       <section>
         <div className="section-label section-label--row">
           <span>Tasks</span>
-          <button type="button" className="link-btn link-btn--small" onClick={() => useConfigUI.getState().setView('tasks')}>See all</button>
+          <button type="button" className="link-btn link-btn--small" onClick={() => { useConfigUI.getState().setView('tasks'); useStore.setState({ mobileOpen: true }); }}>See all</button>
         </div>
         {tasks === null ? <div className="panel-card"><div className="panel-empty">Loading…</div></div> : sorted.length === 0 ? (
           <div className="panel-card"><div className="panel-empty">No tasks yet. Ask {bot.name} for a few things at once and they’ll be tracked here.</div></div>

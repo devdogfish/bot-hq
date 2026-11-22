@@ -145,7 +145,7 @@ const Bubble = memo(function Bubble({ row, side, pos, onActions }: { row: Row; s
         onPointerDown={(e) => {
           if (e.pointerType !== 'touch' || !actionable) return;
           const el = e.currentTarget;
-          press.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press.current = null; open(el, 'menu'); }, LONG_PRESS_MS) };
+          press.current = { x: e.clientX, y: e.clientY, timer: window.setTimeout(() => { press.current = null; navigator.vibrate?.(10); open(el, 'menu'); }, LONG_PRESS_MS) };
         }}
         onPointerMove={(e) => { if (press.current && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) > 8) cancelPress(); }}
         onPointerUp={cancelPress}

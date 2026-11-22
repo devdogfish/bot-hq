@@ -58,7 +58,7 @@ export function DetailsPanel() {
         <button type="button" className="icon-btn icon-btn--bordered details__gear" onClick={() => useConfigUI.getState().openBotSettings(bot.id)} aria-label="Bot settings" title="Bot settings">
           <Glyph name="gear" size={16} opacity={0.7} />
         </button>
-        <button type="button" className="icon-btn icon-btn--bordered" onClick={() => set({ detailsOpen: false })} aria-label="Close details">
+        <button type="button" className="icon-btn icon-btn--bordered" onClick={() => useStore.getState().showDetails(false)} aria-label="Close details">
           <Icon name="close" opacity={0.92} />
         </button>
       </div>

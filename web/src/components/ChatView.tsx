@@ -10,7 +10,7 @@ import { Menu } from './Menu';
 import { StepsHistory, Transcript } from './Transcript';
 import { isWaitingForYou } from '../lib/phrases';
 import { VoiceCallBar } from './VoiceCallBar';
-import { Phone } from 'lucide-react';
+import { ChevronLeft, Phone } from 'lucide-react';
 import { isCallActive, startCall, useVoice } from '../voice/call';
 
 /** The Alfred header shows only the first name: "James", not "James Diaz · Personal Assistant". */
@@ -22,7 +22,8 @@ export function ChatView() {
   const live = useStore((s) => (bot ? s.live[bot.id] : undefined));
   const pendingPause = useStore((s) => (bot ? s.pendingPause[bot.id] : undefined));
   const setBotPaused = useStore((s) => s.setBotPaused);
-  const detailsOpen = useStore((s) => s.detailsOpen);
+  const detailsOpen = useStore((s) => (s.phone ? s.phoneDetails : s.detailsOpen));
+  const showDetails = useStore((s) => s.showDetails);
   const set = useStore((s) => s.set);
   const [menu, setMenu] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
@@ -64,6 +65,7 @@ export function ChatView() {
       <VoiceCallBar />
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} pausePending={pendingPause !== undefined} />
       <header className="chat__header">
+        <button type="button" className="icon-btn icon-btn--plain phone-back" onClick={() => set({ mobileOpen: false })} aria-label="Back to chats"><ChevronLeft size={22} strokeWidth={2} aria-hidden /></button>
         <span className="chat__pill-anchor">
           <button ref={menuButton} type="button" className={`chat__pill${working ? ' is-working' : ''}${waiting ? ' is-waiting' : ''}`} onClick={() => { setStepsOpen(false); setMenu(!menu); }} aria-haspopup="menu" aria-expanded={menu} aria-label={displayName(bot)}>
             <BotAvatarFor bot={bot} size={60} depth />
@@ -78,7 +80,7 @@ export function ChatView() {
               onClose={() => setMenu(false)}
               items={[
                 ...(hasSteps || working ? [{ label: 'Show steps', onSelect: () => setStepsOpen(true) }] : []),
-                { label: detailsOpen ? 'Hide details' : 'Show details', hint: '⇧⌘,', onSelect: () => set({ detailsOpen: !detailsOpen }) },
+                { label: detailsOpen ? 'Hide details' : 'Show details', hint: '⇧⌘,', onSelect: () => showDetails(!detailsOpen) },
                 { label: 'Open computer', onSelect: () => set({ viewerOpen: true, viewerMode: 'watch', viewerHint: null }) },
                 { label: 'New conversation', onSelect: () => api.fresh(bot.id).then(() => flash('Started a new conversation')).catch((e) => flash(e.message)) },
                 ...(bot.kind === 'room' ? [] : [{
@@ -100,7 +102,7 @@ export function ChatView() {
         </span>
         <div className="chat__header-right">
           {!detailsOpen && (
-            <button type="button" className="icon-btn icon-btn--bordered" onClick={() => set({ detailsOpen: true })} aria-label="Show details" title="Show details">
+            <button type="button" className="icon-btn icon-btn--bordered" onClick={() => showDetails(true)} aria-label="Show details" title="Show details">
               <Icon name="sidebar" opacity={0.66} style={{ transform: 'scaleX(-1)' }} />
             </button>
           )}

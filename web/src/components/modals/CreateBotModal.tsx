@@ -28,7 +28,7 @@ export function CreateBotModal() {
       const { bot } = await api.createBot({ name: name.trim(), avatarShape: shape, avatarColor: color, mode });
       const st = useStore.getState();
       st.set({ bots: st.bots.some((b) => b.id === bot.id) ? st.bots : [...st.bots, bot] });
-      st.selectBot(bot.id);
+      st.selectBot(bot.id); st.set({ mobileOpen: true });
       close();
     } catch (e) {
       setError((e as Error).message);
