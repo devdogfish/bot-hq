@@ -243,10 +243,10 @@
 .composer__plus-anchor { position: relative; display: inline-flex; flex-shrink: 0; }
 .composer__btn {
   display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px;
-  background: transparent; flex-shrink: 0; color: var(--color-text-primary); transition: background-color 120ms, border-color 120ms;
+  background: transparent; flex-shrink: 0; color: var(--color-text-secondary); transition: background-color 120ms, color 120ms;
 }
 .composer__btn--outline { box-shadow: var(--color-border-secondary) 0 0 0 0.5px inset; }
-.composer__btn:hover:not(:disabled), .composer__btn[aria-expanded='true'] { background: var(--color-bg-hover); }
+.composer__btn:hover:not(:disabled), .composer__btn[aria-expanded='true'] { background: var(--color-bg-hover); color: var(--color-text-primary); }
 .composer__btn:disabled { opacity: 0.5; }
 .composer__chip {
   display: inline-flex; align-items: center; gap: 4px; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px;

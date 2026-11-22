@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Bot } from '@shared/types';
 import { api } from '../lib/api';
 import { displayName } from '../store';
-import { Icon } from './Icon';
+import { ArrowUp, AudioLines, Mic, Plus, Square } from 'lucide-react';
 import { ComposerModel } from './ComposerModel';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
@@ -96,7 +96,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
         <div className="composer__bar">
           <span className="composer__plus-anchor">
             <button type="button" className="composer__btn composer__btn--outline" onClick={() => setMenu(!menu)} aria-label="More actions" aria-expanded={menu}>
-              <Icon name="composer_plus" opacity={0.72} />
+              <Plus size={18} strokeWidth={1.75} aria-hidden />
             </button>
             {menu && (
               <Menu
@@ -133,15 +133,15 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
             onKeyDown={dictation.onKeyDown}
             onContextMenu={(e) => e.preventDefault()}
           >
-            <Icon name="mic" opacity={0.72} />
+            <Mic size={18} strokeWidth={1.75} aria-hidden />
           </button>
           {inCall && !hasText ? (
             <button type="button" className="composer__cta is-in-call" onClick={endCall} aria-label="End voice call" title="End voice call">
-              <Icon name="voice_a" size={16} />
+              <AudioLines size={18} strokeWidth={1.75} aria-hidden />
             </button>
           ) : running && !hasText ? (
             <button type="button" className="composer__cta" onClick={stop} aria-label="Stop" title="Stop">
-              <Icon name="stop" size={14} />
+              <Square size={12} strokeWidth={0} fill="currentColor" aria-hidden />
             </button>
           ) : (
             <button
@@ -152,7 +152,7 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
               aria-label={hasText ? 'Send' : `Start voice chat with ${bot.name}`}
               title={hasText ? 'Send (Enter)' : 'Start voice chat'}
             >
-              <Icon name={hasText ? 'arrow_up' : 'voice_a'} size={16} />
+              {hasText ? <ArrowUp size={18} strokeWidth={2} aria-hidden /> : <AudioLines size={18} strokeWidth={1.75} aria-hidden />}
             </button>
           )}
         </div>

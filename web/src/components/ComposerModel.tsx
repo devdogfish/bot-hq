@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { Bot } from '@shared/types';
 import { saveEngineModels, useProviders } from '../lib/engineModels';
-import { Icon } from './Icon';
+import { ChevronDown } from 'lucide-react';
 import { ModelPicker } from './ModelPicker';
 
 /**
@@ -30,7 +30,7 @@ export function ComposerModel({ bot, onError }: { bot: Bot; onError: (message: s
         trigger={({ toggle, ref, open: _open, ...aria }) => (
           <button ref={ref} type="button" className={`composer__chip composer__model${chat.model ? ' is-override' : ''}`} onClick={toggle} title={chat.model ? 'Chat model (differs from production)' : 'Chat model'} {...aria}>
             <span>{shown ?? 'Model'}</span>
-            <Icon name="chev_down" size={10} opacity={0.56} />
+            <ChevronDown size={14} strokeWidth={1.75} aria-hidden />
           </button>
         )}
       />
