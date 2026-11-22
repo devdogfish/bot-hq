@@ -18,6 +18,7 @@ export function toBot(r: any): Bot {
   }
   return {
     id: r.id,
+    isPersonal: r.id === process.env.HQ_PERSONAL_BOT_ID,
     name: r.name,
     label: r.label,
     description: r.description,

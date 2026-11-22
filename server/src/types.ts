@@ -26,6 +26,8 @@ export interface Bot {
   archivedAt: number | null;
   paused: boolean;
   draftOnlyAvailable?: boolean;
+  /** The Personal Assistant (James). Kept apart from the business Agents (Quantself ADR 0060). */
+  isPersonal?: boolean;
   /** 'room' = group chat (members answer instead of the bot itself). */
   kind?: 'agent' | 'room';
   pinned: boolean;

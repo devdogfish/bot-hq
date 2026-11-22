@@ -17,7 +17,7 @@ import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
 import type { AvatarColor, AvatarShape } from './types.js';
-import { SOUND_SETS } from './types.js';
+import { REACTION_KINDS, SOUND_SETS, type ReactionKind } from './types.js';
 import { isSharingSecureInput } from './secure-input.js';
 
 export const api = new Hono<AuthVars>();
@@ -284,12 +284,54 @@ api.post('/bots/:id/messages', async (c) => {
   if (mode !== undefined && mode !== 'draft') return c.json({ error: 'Invalid message mode.' }, 400);
   const draftOnly = mode === 'draft';
   if (draftOnly && !draftEngineFor(b)) return c.json({ error: 'Draft only is unavailable for this bot.' }, 409);
-  const input = text.trim();
+  return c.json({ row: postOwnerMessage(b, text.trim(), draftOnly) });
+});
+
+/** The Owner's message into a chat: saved, then dispatched to the Bot (or a group's members). */
+function postOwnerMessage(b: any, input: string, draftOnly = false) {
   const row = appendRow(b.id, 'message', { type: 'message', role: 'user', text: input, ...(draftOnly ? { draftOnly } : {}) });
   // Group chats dispatch to their member Bots instead of running their own loop.
   if (b.kind === 'room') dispatchRoomMessage(b.id, input, enqueue);
   else enqueue(b.id, { type: 'user', text: input, chatRow: { generation: row.generation, seq: row.seq }, draftOnly });
-  return c.json({ row });
+  return row;
+}
+
+const isPersonalBot = (id: string) => id === process.env.HQ_PERSONAL_BOT_ID;
+
+/** The Owner's tapback on one of an Agent's messages (one per message; 'none' clears it). */
+api.patch('/bots/:id/rows/:seq/reaction', async (c) => {
+  const b = ownBot(c.get('user').id, c.req.param('id'));
+  if (!b) return c.json({ error: 'not found' }, 404);
+  const { reaction } = await c.req.json<{ reaction?: string }>().catch(() => ({ reaction: undefined }));
+  const clear = reaction === 'none';
+  if (!clear && !(REACTION_KINDS as readonly string[]).includes(String(reaction))) return c.json({ error: 'Unknown reaction.' }, 400);
+  const row = getRow(b.id, Number(c.req.param('seq')));
+  if (!row || row.body.type !== 'message' || row.body.role !== 'assistant') return c.json({ error: 'Only an Agent message can take your reaction.' }, 400);
+  const body = { ...row.body };
+  if (clear) delete body.reaction;
+  else body.reaction = { kind: reaction as ReactionKind, at: Date.now() };
+  return c.json({ row: updateRow(b.id, row.seq, body, row.generation) });
+});
+
+/**
+ * Forward one message from a chat into another Agent's chat, as the Owner's message. The Personal
+ * Assistant stays apart from the business Agents both ways (Quantself ADR 0060).
+ */
+api.post('/bots/:id/rows/:seq/forward', async (c) => {
+  const userId = c.get('user').id;
+  const from = ownBot(userId, c.req.param('id'));
+  const { toBotId } = await c.req.json<{ toBotId?: string }>().catch(() => ({ toBotId: undefined }));
+  const to = typeof toBotId === 'string' ? ownBot(userId, toBotId) : null;
+  if (!from || !to) return c.json({ error: 'not found' }, 404);
+  if (from.id === to.id) return c.json({ error: 'Pick another Agent.' }, 400);
+  if (isPersonalBot(from.id) !== isPersonalBot(to.id)) return c.json({ error: 'The Personal Assistant is kept apart from the business Agents.' }, 403);
+  if (to.archived_at != null) return c.json({ error: 'That Agent is archived.' }, 409);
+  if (to.paused) return c.json({ error: 'That Agent is paused.' }, 409);
+  if (isBotResetting(to.id)) return c.json({ error: 'Bot maintenance is already in progress.' }, 409);
+  const row = getRow(from.id, Number(c.req.param('seq')));
+  if (!row || row.body.type !== 'message' || !row.body.text.trim()) return c.json({ error: 'Only a message can be forwarded.' }, 400);
+  const source = row.body.role === 'user' ? `my chat with ${from.name}` : from.name;
+  return c.json({ row: postOwnerMessage(to, `Forwarded from ${source}:\n\n${row.body.text.trim()}`) });
 });
 
 api.post('/bots/:id/interrupt', (c) => {

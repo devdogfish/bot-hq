@@ -37,6 +37,19 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     else if (text.includes('\n') || el.scrollHeight > 40) setStacked(true);
   }, [text, stacked]);
 
+  // Reply from a message's context menu: quote it at the top of the draft, Messages-style, and focus.
+  useEffect(() => {
+    const quote = (e: Event) => {
+      const { botId, text: quoted } = (e as CustomEvent<{ botId: string; text: string }>).detail;
+      if (botId !== bot.id) return;
+      const block = quoted.trim().split('\n').map((line) => `> ${line}`).join('\n');
+      setText((cur) => `${block}\n\n${cur.replace(/^\s+/, '')}`);
+      requestAnimationFrame(() => { const el = ref.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } });
+    };
+    window.addEventListener('bothq:quote', quote);
+    return () => window.removeEventListener('bothq:quote', quote);
+  }, [bot.id]);
+
   // ⌘I focuses the prompt.
   useEffect(() => {
     const k = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); ref.current?.focus(); } };
