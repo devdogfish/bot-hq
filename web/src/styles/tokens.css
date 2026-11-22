@@ -57,6 +57,7 @@
   --color-danger: #E72E3B;
   --shadow-pill: #1C1C1C14 0px 4px 12px -1px, #1C1C1C0A 0px 1px 2px;
   --shadow-composer: #0000000D 0px 2px 8px -1px, #00000008 0px 1px 2px, #E4E4E40A 0px 0px 0px 1px;
+  --shadow-composer-soft: #0000001A 0px 8px 28px -10px, #0000000A 0px 2px 6px -1px;
   --shadow-card: #1C1C1C1F 0px 0px 0px 0.5px, #1C1C1C09 0px 2px 8px;
   --shadow-modal: #1C1C1C1A 0px 20px 32px -5px, #1C1C1C1A 0px 8px 12px -6px;
   --bubble-ring: #FFFFFF29 0px 0.5px 0px inset, #FFFFFF29 0px -0.5px 0px inset, #1C1C1C0F 0px 0px 0px 0.5px inset;
@@ -111,6 +112,7 @@
   --color-danger: #CF2B35;
   --shadow-pill: #F5F5F51A 0 0 0 0.5px;
   --shadow-composer: #F5F5F51A 0 0 0 0.5px;
+  --shadow-composer-soft: #00000066 0px 8px 28px -10px;
   --shadow-card: #F5F5F51A 0 0 0 0.5px;
   --shadow-modal: #000000 0 0 0 0;
   --shadow-popover: #F5F5F51A 0 0 0 0.5px;

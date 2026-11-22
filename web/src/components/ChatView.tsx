@@ -7,7 +7,8 @@ import { useConfigUI } from '../configStore';
 import { Composer } from './Composer';
 import { Icon } from './Icon';
 import { Menu } from './Menu';
-import { Transcript } from './Transcript';
+import { StepsHistory, Transcript } from './Transcript';
+import { isWaitingForYou } from '../lib/phrases';
 import { VoiceCallBar } from './VoiceCallBar';
 
 export function ChatView() {
@@ -19,6 +20,7 @@ export function ChatView() {
   const detailsOpen = useStore((s) => s.detailsOpen);
   const set = useStore((s) => s.set);
   const [menu, setMenu] = useState(false);
+  const [stepsOpen, setStepsOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
   const [toast, setToast] = useState<string | null>(null);
   const rows = useMemo(() => sortedRows(transcript), [transcript]);
@@ -36,6 +38,11 @@ export function ChatView() {
     setTimeout(() => setToast((current) => current === text ? null : current), 2000);
   };
   const pauseStatus = pendingPause === undefined ? (bot.paused ? 'Paused' : '') : pendingPause ? 'Pausing…' : 'Resuming…';
+  const waiting = isWaitingForYou(live);
+  const working = !!live?.isRunning && !waiting;
+  // Alfred-style header: the Agent's name with a quieter live line under it.
+  const headerStatus = waiting ? 'Needs you' : working ? 'Thinking…' : pauseStatus;
+  const hasSteps = rows.some((r) => r.body.type === 'tool-call');
   const togglePause = () => {
     const paused = !bot.paused;
     menuButton.current?.focus();
@@ -47,21 +54,24 @@ export function ChatView() {
 
   return (
     <main className="chat" style={botVars(bot.avatarColor)}>
-      <Transcript bot={bot} rows={rows} live={live} loaded={!!transcript?.loaded} />
+      <Transcript bot={bot} rows={rows} loaded={!!transcript?.loaded} />
       <VoiceCallBar />
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} pausePending={pendingPause !== undefined} />
       <header className="chat__header">
         <span className="chat__pill-anchor">
-          <button ref={menuButton} type="button" className="chat__pill" onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}>
-            <BotAvatarFor bot={bot} size={24} />
-            <span className="chat__pill-name">{displayName(bot)}</span>
-            {bot.kind !== 'room' && <span className="chat__pill-status" role="status">{pauseStatus}</span>}
+          <button ref={menuButton} type="button" className={`chat__pill${working ? ' is-working' : ''}${waiting ? ' is-waiting' : ''}`} onClick={() => { setStepsOpen(false); setMenu(!menu); }} aria-haspopup="menu" aria-expanded={menu}>
+            <BotAvatarFor bot={bot} size={28} />
+            <span className="chat__pill-text">
+              <span className="chat__pill-name">{displayName(bot)}</span>
+              <span className="chat__pill-status" role="status" aria-live="polite">{bot.kind === 'room' && !working && !waiting ? '' : headerStatus}</span>
+            </span>
           </button>
           {menu && (
             <Menu
               align="center"
               onClose={() => setMenu(false)}
               items={[
+                ...(hasSteps || working ? [{ label: 'Show steps', onSelect: () => setStepsOpen(true) }] : []),
                 { label: detailsOpen ? 'Hide details' : 'Show details', hint: '⇧⌘,', onSelect: () => set({ detailsOpen: !detailsOpen }) },
                 { label: 'Open computer', onSelect: () => set({ viewerOpen: true, viewerMode: 'watch', viewerHint: null }) },
                 { label: 'New conversation', onSelect: () => api.fresh(bot.id).then(() => flash('Started a new conversation')).catch((e) => flash(e.message)) },
@@ -73,6 +83,13 @@ export function ChatView() {
                 { label: 'Bot settings', onSelect: () => useConfigUI.getState().openBotSettings(bot.id) },
               ]}
             />
+          )}
+          {stepsOpen && (
+            <Menu align="center" onClose={() => setStepsOpen(false)} items={[]}>
+              <div className="steps-popover" aria-label="Steps">
+                <StepsHistory rows={rows} live={live} />
+              </div>
+            </Menu>
           )}
         </span>
         <div className="chat__header-right">

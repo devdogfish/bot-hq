@@ -1,12 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { Bot } from '@shared/types';
 import { api } from '../lib/api';
-import { displayName } from '../store';
 import { ArrowUp, AudioLines, Mic, Plus, Square } from 'lucide-react';
-import { ComposerModel } from './ComposerModel';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { useDictation } from '../voice/dictation';
+import { markSent } from '../lib/sendFlight';
 
 const MAX_H = 200;
 const drafts = new Map<string, string>();
@@ -16,6 +15,8 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
+  // One row (+, input, mic, send) until the text wraps; then the input takes its own row until it is cleared.
+  const [stacked, setStacked] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const blocked = bot.paused || pausePending;
 
@@ -30,7 +31,10 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     el.style.height = '0px';
     el.style.height = `${Math.min(el.scrollHeight, MAX_H)}px`;
     el.style.overflowY = el.scrollHeight > MAX_H ? 'auto' : 'hidden';
-  }, [text]);
+    // One line is 22px plus the input's padding; anything taller has wrapped.
+    if (!text) setStacked(false);
+    else if (text.includes('\n') || el.scrollHeight > 40) setStacked(true);
+  }, [text, stacked]);
 
   // ⌘I focuses the prompt.
   useEffect(() => {
@@ -44,6 +48,8 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     if (!t || sending || blocked) return;
     setSending(true); setError(null);
     try {
+      const rect = ref.current?.getBoundingClientRect();
+      if (rect) markSent(bot.id, t, rect);
       await api.send(bot.id, t, mode);
       if (drafts.get(bot.id) === text) drafts.delete(bot.id);
       setText((current) => current === text ? '' : current);
@@ -80,13 +86,13 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
   return (
     <div className="composer-area">
       {error && <div className="composer__error">{error} <button type="button" className="link-btn" onClick={() => setError(null)}>Dismiss</button></div>}
-      <div className="composer">
+      <div className={`composer${stacked ? ' is-stacked' : ''}`}>
         <textarea
           ref={ref}
           className="composer__input"
           rows={1}
           value={text}
-          placeholder={`Message ${displayName(bot)}`}
+          placeholder="Send a message"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); }
@@ -95,8 +101,8 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
         />
         <div className="composer__bar">
           <span className="composer__plus-anchor">
-            <button type="button" className="composer__btn composer__btn--outline" onClick={() => setMenu(!menu)} aria-label="More actions" aria-expanded={menu}>
-              <Plus size={18} strokeWidth={1.75} aria-hidden />
+            <button type="button" className="composer__btn" onClick={() => setMenu(!menu)} aria-label="More actions" aria-expanded={menu}>
+              <Plus size={20} strokeWidth={1.75} aria-hidden />
             </button>
             {menu && (
               <Menu
@@ -104,13 +110,13 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
                 onClose={() => setMenu(false)}
                 items={[
                   { label: 'New conversation', onSelect: fresh },
+                  ...(inCall ? [] : [{ label: 'Start voice chat', onSelect: () => startCall(bot.id) }]),
                 ]}
               />
             )}
           </span>
         <div className="composer__right">
-          {bot.kind !== 'room' && <ComposerModel bot={bot} onError={setError} />}
-          {bot.draftOnlyAvailable && (
+          {bot.draftOnlyAvailable && hasText && (
             <button
               type="button"
               className="composer__chip composer__draft"
@@ -147,12 +153,12 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
             <button
               type="button"
               className="composer__cta"
-              onClick={hasText ? () => send() : () => startCall(bot.id)}
-              disabled={hasText && (sending || blocked)}
-              aria-label={hasText ? 'Send' : `Start voice chat with ${bot.name}`}
-              title={hasText ? 'Send (Enter)' : 'Start voice chat'}
+              onClick={() => send()}
+              disabled={!hasText || sending || blocked}
+              aria-label="Send"
+              title="Send (Enter)"
             >
-              {hasText ? <ArrowUp size={18} strokeWidth={2} aria-hidden /> : <AudioLines size={18} strokeWidth={1.75} aria-hidden />}
+              <ArrowUp size={18} strokeWidth={2.25} aria-hidden />
             </button>
           )}
         </div>
