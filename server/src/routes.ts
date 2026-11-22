@@ -5,7 +5,7 @@ import { db, now } from './db.js';
 import { env } from './env.js';
 import { newId } from './lib/ids.js';
 import { hub } from './lib/hub.js';
-import { createSession, destroySession, isOwnerKey, renewSession, requireUser, userFromCookieHeader, type AuthVars } from './lib/auth.js';
+import { createSession, destroySession, isOwnerKey, renewSession, requireUser, signInTailnetOwner, userFromCookieHeader, type AuthVars } from './lib/auth.js';
 import { appendRow, clearConversation, emitBot, getBot, getBotRow, getLive, getRow, listBots, listRoutines, listRows, listTasks, toRoutine, updateRow } from './store.js';
 import { isApprovalChoice } from './agent/hermes-run.js';
 import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, setBotPaused } from './agent/loop.js';
@@ -61,8 +61,9 @@ function findOrCreateUser(email: string, name?: string, preferId?: string) {
 // ---------- auth ----------
 
 api.get('/auth/me', (c) => {
-  const user = userFromCookieHeader(c.req.header('cookie'));
+  let user = userFromCookieHeader(c.req.header('cookie'));
   if (user) renewSession(c);
+  else user = signInTailnetOwner(c);
   return c.json({ user, devLogin: env.devLogin });
 });
 
