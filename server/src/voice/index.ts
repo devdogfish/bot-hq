@@ -10,6 +10,7 @@ import { computerState } from '../computer.js';
 import type { ActivityKind, EventBody, MessageBody, RowBody, VoiceCallRecord, VoiceOptions } from '../types.js';
 import { listMemories } from '../engine-memory.js';
 import { identity } from '../agent/identity.js';
+import { setMeetingLookup } from '../meeting/landed.js';
 
 import { LANGUAGES, SPEEDS, clampSpeed, langName, settingsOf } from './settings.js';
 import type { VoiceProvider } from './provider.js';
@@ -174,6 +175,7 @@ type ActiveCall = CallIdentity & ({ mode: 'voice' } | {
 type MeetingRow = Pick<Extract<ActiveCall, { mode: 'meeting' }>, 'id' | 'botId' | 'seq' | 'generation' | 'startedAt' | 'tasks'>;
 type CallToClose = (CallIdentity & { mode: 'voice' }) | (MeetingRow & { mode: 'meeting'; durationMs?: number });
 const calls = new Map<string, ActiveCall>();
+setMeetingLookup((botId) => [...calls.values()].find((c) => c.mode === 'meeting' && c.botId === botId)?.id);
 const CALL_TIMEOUT_MS = 2 * 3600_000;
 
 export function ownCall(userId: string, botId: string, callId: string | undefined) {
