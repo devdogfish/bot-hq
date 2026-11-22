@@ -12,7 +12,7 @@ import { enqueue, interrupt, isBotResetting, resetBotQueue, resolveApproval, set
 import { computerState } from './computer.js';
 import { assignEngine, draftEngineFor, provisionEngine, removeEngine, stopManagedEngine, syncPersona } from './engine.js';
 import { deleteMemory, listMemories, memoryBot } from './engine-memory.js';
-import { runRoutine, scheduleRoutine, setRoutineEnabled, syncBotRoutines, unscheduleRoutine } from './routines.js';
+import { runRoutine, scheduleRoutine, setRoutineEnabled, syncBotRoutines, unscheduleRoutine, validateRoutineSchedule } from './routines.js';
 import { dispatchRoomMessage } from './agent/rooms.js';
 import { voiceApi } from './voice/index.js';
 import { defaultVoiceFor, isVoiceProviderId } from './voice/providers.js';
@@ -352,13 +352,29 @@ api.get('/bots/:id/routines', (c) => {
 });
 
 api.patch('/routines/:id', async (c) => {
-  const { enabled } = await c.req.json<{ enabled: boolean }>();
+  const body = await c.req.json<{ enabled?: boolean; schedule?: string; timezone?: string }>().catch(() => null);
+  if (!body || typeof body !== 'object') return c.json({ error: 'Expected enabled, schedule or timezone.' }, 400);
+  const { enabled, schedule, timezone } = body;
+  if (enabled === undefined && schedule === undefined && timezone === undefined) return c.json({ error: 'Expected enabled, schedule or timezone.' }, 400);
+  if ((enabled !== undefined && typeof enabled !== 'boolean') || (schedule !== undefined && typeof schedule !== 'string')
+    || (timezone !== undefined && typeof timezone !== 'string')) return c.json({ error: 'Invalid routine fields.' }, 400);
   const r = db.prepare('SELECT r.*, b.archived_at FROM routines r JOIN bots b ON b.id=r.bot_id WHERE r.id=? AND b.user_id=?').get(c.req.param('id'), c.get('user').id) as any;
   if (!r) return c.json({ error: 'not found' }, 404);
   if (r.archived_at != null) return c.json({ error: 'This Bot is archived.' }, 409);
-  setRoutineEnabled(r.id, !!enabled);
+  if (schedule !== undefined || timezone !== undefined) {
+    const nextSchedule = schedule?.trim() ?? r.schedule;
+    const nextZone = timezone ?? r.timezone;
+    try { validateRoutineSchedule(nextSchedule, nextZone); } catch (e: any) { return c.json({ error: e.message || 'Invalid schedule.' }, 400); }
+    if (nextSchedule.startsWith('event:')) {
+      if (db.prepare('SELECT 1 FROM routines WHERE bot_id=? AND schedule=? AND id<>?').get(r.bot_id, nextSchedule, r.id))
+        return c.json({ error: 'Another routine already uses this event.' }, 409);
+    }
+    if (nextSchedule !== r.schedule || nextZone !== r.timezone)
+      db.prepare('UPDATE routines SET schedule=?, timezone=?, run_revision=run_revision+1 WHERE id=?').run(nextSchedule, nextZone, r.id);
+  }
+  if (enabled !== undefined) setRoutineEnabled(r.id, enabled);
   const next = toRoutine(db.prepare('SELECT * FROM routines WHERE id=?').get(r.id));
-  enabled ? scheduleRoutine(next) : unscheduleRoutine(r.id);
+  next.enabled ? scheduleRoutine(next) : unscheduleRoutine(r.id);
   hub.emit(c.get('user').id, { type: 'routines', botId: r.bot_id });
   return c.json({ routine: next });
 });
