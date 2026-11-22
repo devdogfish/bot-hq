@@ -10,6 +10,8 @@ import { Menu } from './Menu';
 import { StepsHistory, Transcript } from './Transcript';
 import { isWaitingForYou } from '../lib/phrases';
 import { VoiceCallBar } from './VoiceCallBar';
+import { Phone } from 'lucide-react';
+import { isCallActive, startCall, useVoice } from '../voice/call';
 
 /** The Alfred header shows only the first name: "James", not "James Diaz · Personal Assistant". */
 const firstName = (name: string) => name.trim().split(/\s+/)[0] || name;
@@ -27,6 +29,7 @@ export function ChatView() {
   const menuButton = useRef<HTMLButtonElement>(null);
   const [toast, setToast] = useState<string | null>(null);
   const rows = useMemo(() => sortedRows(transcript), [transcript]);
+  const inCall = useVoice((v) => isCallActive(v) && !!bot && v.botId === bot.id);
 
   if (!bot) {
     return (
@@ -99,6 +102,11 @@ export function ChatView() {
           {!detailsOpen && (
             <button type="button" className="icon-btn icon-btn--bordered" onClick={() => set({ detailsOpen: true })} aria-label="Show details" title="Show details">
               <Icon name="sidebar" opacity={0.66} style={{ transform: 'scaleX(-1)' }} />
+            </button>
+          )}
+          {!inCall && (
+            <button type="button" className="icon-btn icon-btn--bordered chat__call" onClick={() => startCall(bot.id)} aria-label={`Call ${firstName(bot.name)}`} title={`Call ${firstName(bot.name)}`}>
+              <Phone size={16} strokeWidth={1.75} aria-hidden />
             </button>
           )}
           <button type="button" className="share-btn" onClick={() => flash('Sharing isn’t available in Bot HQ yet')}>Share</button>

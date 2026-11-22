@@ -1,7 +1,7 @@
 /* ---------- chat column (screens 01/02) ---------- */
 .chat {
   position: relative; display: flex; flex-direction: column; flex: 1 1 0; min-width: 424px; height: 100%;
-  background: var(--color-bg-chrome); overflow: hidden;
+  background: var(--color-bg-chrome); overflow: hidden; container: chat / inline-size;
 }
 .chat--empty { align-items: center; justify-content: center; }
 

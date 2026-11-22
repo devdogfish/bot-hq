@@ -149,6 +149,9 @@ export class PcmPlayer {
 
   get playing() { return this.sources.size > 0; }
 
+  /** Speaker off: keep playing (so turn-taking holds) but silently. */
+  set silent(s: boolean) { this.out.gain.value = s ? 0 : 1; }
+
   push(pcm: Int16Array, rate = RATE) {
     if (!pcm.length) return;
     if (this.ctx.state === 'suspended') void this.ctx.resume().catch(() => {});

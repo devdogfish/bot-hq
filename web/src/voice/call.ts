@@ -16,6 +16,8 @@ interface VoiceState {
   botId: string | null;
   callId: string | null;
   muted: boolean;
+  /** The Agent's voice is silenced on this device (speaker off). */
+  speakerOff: boolean;
   /** Bot audio is playing. */
   speaking: boolean;
   /** Server VAD hears the user. */
@@ -30,7 +32,7 @@ interface VoiceState {
 }
 
 export const useVoice = create<VoiceState>(() => ({
-  status: 'idle', botId: null, callId: null, muted: false, speaking: false, listening: false, thinking: false,
+  status: 'idle', botId: null, callId: null, muted: false, speakerOff: false, speaking: false, listening: false, thinking: false,
   working: [], captions: [], error: null, startedAt: null,
 }));
 
@@ -50,6 +52,11 @@ export function startCall(botId: string) {
 
 export function endCall() { current?.end(); }
 export function toggleMute() { current?.setMuted(!useVoice.getState().muted); }
+export function toggleSpeaker() {
+  const off = !useVoice.getState().speakerOff;
+  if (current) current.player.silent = off;
+  setV({ speakerOff: off });
+}
 export function callLevels(): { out: number; mic: number } {
   return current && !current.ended ? { out: current.player.level(), mic: current.micLevel() } : { out: 0, mic: 0 };
 }
@@ -95,7 +102,7 @@ class VoiceCall {
   micLevel() { return useVoice.getState().muted ? 0 : this.mic?.level ?? 0; }
 
   async start() {
-    setV({ status: 'connecting', botId: this.botId, callId: null, muted: false, speaking: false, listening: false, thinking: false, working: [], captions: [], error: null, startedAt: null });
+    setV({ status: 'connecting', botId: this.botId, callId: null, muted: false, speakerOff: false, speaking: false, listening: false, thinking: false, working: [], captions: [], error: null, startedAt: null });
     window.addEventListener('pagehide', this.onUnload);
     let stream: MediaStream;
     try {
