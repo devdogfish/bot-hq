@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, SoundSet, User } from '@shared/types';
-import { playSound } from './lib/sounds';
+import { playSound, replySound } from './lib/sounds';
 import { noteLiveReaction, reactionKey } from './lib/liveReactions';
 import { ApiError, api } from './lib/api';
 
@@ -222,7 +222,10 @@ export const useStore = create<State>((set, get) => ({
       }
       return { transcripts: { ...s.transcripts, [botId]: { ...base, generation, bySeq } } };
     });
-    if (receive) playSound('receive');
+    if (receive) {
+      const role = replySound(botId, get().live[botId]?.startedAt);
+      if (role) playSound(role);
+    }
     if (reacted) playSound('reaction');
   },
 
