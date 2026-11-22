@@ -46,10 +46,11 @@ interface State {
   set(p: Partial<State>): void;
 }
 
-const LS_SELECTED = 'grokbot.selectedBot';
-const LS_DETAILS = 'grokbot.detailsOpen';
-const LS_SIDEBAR = 'grokbot.sidebarCollapsed';
-const lsGet = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+const LS_SELECTED = 'bothq.selectedBot';
+const LS_DETAILS = 'bothq.detailsOpen';
+const LS_SIDEBAR = 'bothq.sidebarCollapsed';
+/** Settings saved before the project was renamed (`grokbot.<name>`) are still read. */
+const lsGet = (k: string) => { try { return localStorage.getItem(k) ?? localStorage.getItem(k.replace(/^bothq\./, 'grokbot.')); } catch { return null; } };
 const lsSet = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
 
 export const isArchived = (bot: Bot, pending: State['pendingArchive']) => pending[bot.id] ?? (bot.archivedAt != null);
@@ -244,7 +245,7 @@ export const useStore = create<State>((set, get) => ({
       case 'tasks':
       case 'memories':
         // Picked up by configStore.ts (Tasks view, Library/Tasks tabs, bot settings).
-        window.dispatchEvent(new CustomEvent('grokbot:event', { detail: ev }));
+        window.dispatchEvent(new CustomEvent('bothq:event', { detail: ev }));
         return;
     }
   },

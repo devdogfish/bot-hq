@@ -45,7 +45,7 @@ else {
         ('eleven-bot', 'owner', 'Relay', 'Relay-only prompt', 0, 0, 'primary'),
         ('other-bot', 'other', 'Other bot', 'Other-owner prompt', 0, 0, 'primary');
   `);
-  const cookie = 'grokbot_session=voice-test';
+  const cookie = 'bothq_session=voice-test';
   const signedUrl = 'wss://api.elevenlabs.io/v1/convai/conversation?token=test-signed-token';
   const voiceId = 'fake-elevenlabs-voice';
   const pcm = Buffer.alloc(24).toString('base64');
@@ -247,7 +247,7 @@ else {
 
   test('ElevenLabs sessions and tool calls are scoped to the owner and the active bot', async (t) => {
     const calls = fakeHttp(t);
-    const otherCookie = 'grokbot_session=other-session';
+    const otherCookie = 'bothq_session=other-session';
     await configureElevenBot();
     assert.equal((await request('/api/voice/session', 'POST', { botId: 'eleven-bot' }, '')).status, 401);
     assert.equal((await request('/api/voice/session', 'POST', { botId: 'eleven-bot' }, otherCookie)).status, 404);

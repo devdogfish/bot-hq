@@ -5,7 +5,7 @@ import { appendRow } from '../store.js';
 import type { EnqueueTurn } from './loop.js';
 
 /**
- * Group chats ("rooms"; Grok Bot: GrokBotAgent kind=ROOM, member_agent_ids, server turn-taking).
+ * Group chats ("rooms": kind=room, member ids, server turn-taking).
  * A room is a bot row with kind='room' and a members list. It never runs its own agent loop:
  * a user message is dispatched to the members who should answer (@mentioned ones, else all,
  * capped), each member runs its normal loop with the group context and replies into the room

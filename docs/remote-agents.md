@@ -68,7 +68,7 @@ fill result leaves the filled field readable through shared browser controls.
 
 From the Bot HQ checkout, install dependencies with `npm ci`. Set
 `OWNER_SESSION_COOKIE` to the full Owner cookie header value
-(`grokbot_session=<value>`). Use HTTPS when benchmarking a remote HQ:
+(`bothq_session=<value>`). Use HTTPS when benchmarking a remote HQ:
 
 ```sh
 node scripts/screen-bench.mjs --hq-url https://hq.example.com --bot-id "$BOT_ID" --seconds 10

@@ -69,7 +69,7 @@ db.exec(`
 
 const app = new Hono().route('/mcp', mcpApi).route('/api/meeting', meetingApi).route('/api', api);
 const bearer = (botId) => `Bearer ${mcpToken(botId)}`;
-const cookie = 'grokbot_session=browser';
+const cookie = 'bothq_session=browser';
 const meeting = { url: 'https://meet.example.test/standup?token=invite', platform: 'jitsi' };
 const say = (speaker, text, at = 2000) => ({ speaker, text, at });
 const gate = (call_id, transcript, last_agent_turn_at = null) => ({ call_id, transcript, last_agent_turn_at });

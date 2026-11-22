@@ -22,7 +22,7 @@ test('linked Bots render collapsed and Archive and Unarchive update the sidebar 
   try {
     let origin;
     for await (const line of lines) {
-      const port = line.match(/\[grokbot\] server on http:\/\/localhost:(\d+)/)?.[1];
+      const port = line.match(/\[bothq\] server on http:\/\/localhost:(\d+)/)?.[1];
       if (port) {
         origin = 'http://127.0.0.1:' + port;
         break;

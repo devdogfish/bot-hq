@@ -68,7 +68,7 @@ async function start(config) {
   hq = spawn(process.execPath, ['server/dist/index.js'], {
     env: {
       ...process.env, DEV_LOGIN: '1', HQ_HOST: '127.0.0.1', PORT: '0',
-      ALLOWED_EMAILS: '', HQ_LOCAL_ENGINES: '0', GROKBOT_NO_SCHEDULER: '1',
+      ALLOWED_EMAILS: '', HQ_LOCAL_ENGINES: '0', BOTHQ_NO_SCHEDULER: '1',
       HQ_DATA_DIR: root, DB_PATH: join(root, 'test.db'), APP_URL: 'http://localhost',
       SESSION_SECRET: 'fixture-local-session-secret', HQ_DRAFT_GATEWAYS: JSON.stringify(config),
     },

@@ -151,7 +151,7 @@ test('monitors shared gateways across restarts and connection changes with bound
   async function start() {
     child = fork(new URL('../server/dist/index.js', import.meta.url), [], {
       env: { ...process.env, DB_PATH: dbPath, HQ_DATA_DIR: dir, SESSION_SECRET: 'health-test',
-        HQ_HOST: '127.0.0.1', PORT: '0', GROKBOT_NO_SCHEDULER: '0', HQ_LOCAL_ENGINES: '0',
+        HQ_HOST: '127.0.0.1', PORT: '0', BOTHQ_NO_SCHEDULER: '0', HQ_LOCAL_ENGINES: '0',
         HQ_AGENT_HEALTH_TARGETS: '' },
       execArgv: ['--import', `data:text/javascript;base64,${Buffer.from(preload).toString('base64')}`],
       stdio: ['ignore', 'ignore', 'inherit', 'ipc'],

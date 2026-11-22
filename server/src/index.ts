@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
-import { env } from './env.js';
+import { env, renamedEnv } from './env.js';
 import { api } from './routes.js';
 import { attachVncRelay } from './vnc.js';
 import { initRoutines } from './routines.js';
@@ -58,10 +58,10 @@ if (fs.existsSync(webDist)) {
   app.get('*', (c) => c.html(fs.readFileSync(path.join(webDist, 'index.html'), 'utf8')));
 }
 
-const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => console.log(`[grokbot] server on http://localhost:${info.port}`));
+const server = serve({ fetch: app.fetch, port: env.port, hostname: env.host }, (info) => console.log(`[bothq] server on http://localhost:${info.port}`));
 attachVncRelay(server as unknown as Server);
-// GROKBOT_NO_SCHEDULER=1 for extra dev/test servers sharing a database copy.
-const schedulerEnabled = process.env.GROKBOT_NO_SCHEDULER !== '1';
+// BOTHQ_NO_SCHEDULER=1 (or the older GROKBOT_NO_SCHEDULER=1) for extra dev/test servers sharing a database copy.
+const schedulerEnabled = renamedEnv('NO_SCHEDULER') !== '1';
 if (schedulerEnabled) {
   initRoutines(enqueue, isBotBusy);
   initProactive(enqueue);
@@ -74,7 +74,7 @@ if (schedulerEnabled) {
       void worker.then(stop => stop?.()).catch(() => console.error('[gmail-push] Could not close the Pub/Sub worker.'));
     });
   }
-} else console.log('[grokbot] scheduler disabled (GROKBOT_NO_SCHEDULER=1)');
+} else console.log('[bothq] scheduler disabled (BOTHQ_NO_SCHEDULER=1)');
 initEngines();
 // Recover accepted webhook work even when periodic scheduling is disabled.
 resumeEventRoutines();
