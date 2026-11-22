@@ -112,7 +112,7 @@
   --color-danger: #CF2B35;
   --shadow-pill: #F5F5F51A 0 0 0 0.5px;
   --shadow-composer: #F5F5F51A 0 0 0 0.5px;
-  --shadow-composer-soft: #00000066 0px 8px 28px -10px;
+  --shadow-composer-soft: #000000B3 0px 10px 30px -8px, #F5F5F50F 0px 0px 0px 0.5px;
   --shadow-card: #F5F5F51A 0 0 0 0.5px;
   --shadow-modal: #000000 0 0 0 0;
   --shadow-popover: #F5F5F51A 0 0 0 0.5px;
