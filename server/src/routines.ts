@@ -20,6 +20,7 @@ export function initRoutines(enqueue: EnqueueTurn, isBusy = (_botId: string) => 
 }
 
 export function validateRoutineSchedule(schedule: string, timezone: string) {
+  try { new Intl.DateTimeFormat('en', { timeZone: timezone || 'UTC' }); } catch { throw new Error('Unknown timezone.'); }
   if (schedule.startsWith('event:')) {
     const name = schedule.slice('event:'.length);
     if (!name.trim()) throw new Error('Event name is required.');
