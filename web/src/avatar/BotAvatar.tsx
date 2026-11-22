@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { AvatarColor, AvatarShape, Bot } from '@shared/types';
 import { palette } from '../lib/colors';
 import { Icon } from '../components/Icon';
@@ -26,11 +27,14 @@ interface Props {
   ring?: boolean;
   className?: string;
   title?: string;
+  /** Soft lighting for a larger, floating avatar: a top-left highlight and a faint lower shade on the shape itself. */
+  depth?: boolean;
 }
 
 const OVERDRAW = 55.2 / 36;
 
-export function BotAvatar({ shape, color, size, star, ring, className, title }: Props) {
+export function BotAvatar({ shape, color, size, star, ring, className, title, depth }: Props) {
+  const lightId = `bot-light-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const def = shapeDef(shape);
   const draw = size * OVERDRAW;
   const off = (draw - size) / 2;
@@ -45,6 +49,19 @@ export function BotAvatar({ shape, color, size, star, ring, className, title }: 
         {ring && <path d={def.outline} fill="#FFFFFF" stroke="#FFFFFF" strokeWidth={px * 2 * 2.4} strokeLinejoin="round" />}
         <path d={def.outline} fill="#FFFFFF" />
         <path d={def.d} fill={fill} fillRule="evenodd" />
+        {depth && (
+          <>
+            <defs>
+              <radialGradient id={lightId} cx="32%" cy="26%" r="78%">
+                <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.34" />
+                <stop offset="45%" stopColor="#FFFFFF" stopOpacity="0.06" />
+                <stop offset="78%" stopColor="#000000" stopOpacity="0" />
+                <stop offset="100%" stopColor="#000000" stopOpacity="0.22" />
+              </radialGradient>
+            </defs>
+            <path d={def.d} fill={`url(#${lightId})`} fillRule="evenodd" />
+          </>
+        )}
       </svg>
       {star && (
         <span className="bot-avatar__star" style={{ width: size * 0.2667, height: size * 0.2667 }}>
@@ -55,6 +72,6 @@ export function BotAvatar({ shape, color, size, star, ring, className, title }: 
   );
 }
 
-export function BotAvatarFor({ bot, size, star, className }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'name'> & { isPrimary?: boolean }; size: number; star?: boolean; className?: string }) {
-  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} size={size} star={star} className={className} title={bot.name} />;
+export function BotAvatarFor({ bot, size, star, className, depth }: { bot: Pick<Bot, 'avatarShape' | 'avatarColor' | 'name'> & { isPrimary?: boolean }; size: number; star?: boolean; className?: string; depth?: boolean }) {
+  return <BotAvatar shape={bot.avatarShape} color={bot.avatarColor} size={size} star={star} className={className} title={bot.name} depth={depth} />;
 }
