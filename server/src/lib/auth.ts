@@ -11,13 +11,34 @@ const COOKIE = 'bothq_session';
 const LEGACY_COOKIE = 'grokbot_session';
 const sessionToken = (c: Context) => getCookie(c, COOKIE) ?? getCookie(c, LEGACY_COOKIE);
 const TTL_MS = 30 * 24 * 3600 * 1000;
+/** A session is renewed at most once a day, so pages that poll do not write on every request. */
+const RENEW_AFTER_MS = 24 * 3600 * 1000;
 
 export type AuthVars = { Variables: { user: User } };
 
 export function createSession(c: Context, userId: string) {
   const t = token();
   db.prepare('INSERT INTO auth_sessions(token,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(t, userId, now(), now() + TTL_MS);
+  setSessionCookie(c, t);
+}
+
+function setSessionCookie(c: Context, t: string) {
   setCookie(c, COOKIE, t, { httpOnly: true, sameSite: 'Lax', secure: env.appUrl.startsWith('https:'), path: '/', maxAge: TTL_MS / 1000 });
+}
+
+/**
+ * Sliding sign-in: a visit moves a live session's end to 30 days from now, so only 30 days without
+ * opening Bot HQ sign a browser out. Expired or signed-out sessions are never revived. A session from
+ * the old cookie name moves to the current one.
+ */
+export function renewSession(c: Context) {
+  const t = sessionToken(c);
+  if (!t) return;
+  const at = now();
+  const r = db
+    .prepare('UPDATE auth_sessions SET expires_at=? WHERE token=? AND expires_at>? AND expires_at<?')
+    .run(at + TTL_MS, t, at, at + TTL_MS - RENEW_AFTER_MS);
+  if (r.changes) setSessionCookie(c, t);
 }
 
 export function destroySession(c: Context) {
@@ -47,6 +68,7 @@ export function userFromCookieHeader(cookieHeader: string | undefined): User | n
 export const requireUser: MiddlewareHandler<AuthVars> = async (c, next) => {
   const u = userFromToken(sessionToken(c));
   if (!u) return c.json({ error: 'unauthenticated' }, 401);
+  renewSession(c);
   c.set('user', u);
   await next();
 };
