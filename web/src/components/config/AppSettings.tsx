@@ -97,7 +97,7 @@ function GeneralSection() {
 
 /** Sound set for send, receive and reactions. Saved to the Owner's account. */
 function SoundsSection() {
-  const current = useStore((s) => s.user?.soundSet ?? 'glass');
+  const current = useStore((s) => s.user?.soundSet ?? 'imessage');
   const setSoundSet = useStore((s) => s.setSoundSet);
   const [error, setError] = useState<string | null>(null);
   const pick = (id: typeof current) => {

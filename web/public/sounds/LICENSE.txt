@@ -1,8 +1,0 @@
-Sounds in this folder are trimmed, faded and level-matched copies of files from
-Kenney's "Interface Sounds" pack (https://kenney.nl/assets/interface-sounds),
-released under Creative Commons Zero (CC0): http://creativecommons.org/publicdomain/zero/1.0/
-
-glass/   send = glass_002, receive = glass_005, reaction = glass_006
-pluck/   send = drop_002,  receive = pluck_001, reaction = pluck_002
-tick/    send = select_001, receive = tick_004, reaction = toggle_004
-tap/     send = click_001, receive = select_008, reaction = tick_002

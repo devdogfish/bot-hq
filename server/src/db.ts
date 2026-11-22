@@ -182,7 +182,9 @@ function addColumn(table: string, col: string, ddl: string) {
   if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${ddl}`);
 }
 addColumn('bots', 'voice', "TEXT NOT NULL DEFAULT 'luna'");
-addColumn('users', 'sound_set', "TEXT NOT NULL DEFAULT 'glass'");
+addColumn('users', 'sound_set', "TEXT NOT NULL DEFAULT 'imessage'");
+// The Kenney sets were retired for the iMessage-style set; None stays None.
+db.prepare("UPDATE users SET sound_set='imessage' WHERE sound_set NOT IN ('imessage','none')").run();
 addColumn('bots', 'voice_speed', 'REAL NOT NULL DEFAULT 1');
 addColumn('bots', 'voice_language', "TEXT NOT NULL DEFAULT 'auto'");
 addColumn('bots', 'voice_provider', "TEXT NOT NULL DEFAULT 'xai'");
