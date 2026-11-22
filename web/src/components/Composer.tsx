@@ -5,7 +5,7 @@ import { ArrowUp, AudioLines, Mic, Plus, Square } from 'lucide-react';
 import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { useDictation } from '../voice/dictation';
-import { markSent } from '../lib/sendFlight';
+import { cancelSent, markSent } from '../lib/sendFlight';
 import { playSound } from '../lib/sounds';
 
 const MAX_H = 200;
@@ -61,14 +61,16 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     const t = text.trim();
     if (!t || sending || blocked) return;
     setSending(true); setError(null);
+    // Like Messages, the text leaves the input the moment you send; it comes back if the send fails.
+    if (ref.current) markSent(bot.id, t, ref.current);
+    playSound('send');
+    setText('');
+    drafts.delete(bot.id);
     try {
-      const rect = ref.current?.getBoundingClientRect();
-      if (rect) markSent(bot.id, t, rect);
-      playSound('send');
       await api.send(bot.id, t, mode);
-      if (drafts.get(bot.id) === text) drafts.delete(bot.id);
-      setText((current) => current === text ? '' : current);
     } catch (e) {
+      cancelSent(bot.id, t);
+      setText((current) => current || text);
       setError((e as Error).message || 'Message failed to send');
     } finally {
       setSending(false);
