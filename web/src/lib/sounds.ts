@@ -2,7 +2,7 @@ import type { SoundSet } from '@shared/types';
 import { useStore } from '../store';
 
 /**
- * Short sounds (web/public/sounds/README.md): the Owner's own click when they send, "Hollow" when an
+ * Short sounds (web/public/sounds/README.md): the Owner's own click when they send, "Intuition" when an
  * Agent's reply arrives, "Accomplished" instead when that reply ends a long piece of work, and a bubble pop
  * when a tapback lands. They play quietly, only while the tab is visible, never under
  * prefers-reduced-motion, and never when the Owner picked None.
@@ -15,7 +15,7 @@ const celebrated = new Map<string, number>();
 
 /**
  * Which sound an Agent's reply gets: Accomplished for the first reply of a turn that ran a minute or
- * more, nothing for later replies of that same turn, Hollow otherwise.
+ * more, nothing for later replies of that same turn, Intuition otherwise.
  */
 export function replySound(botId: string, startedAt: number | null | undefined, now = Date.now()): SoundRole | null {
   if (startedAt && celebrated.get(botId) === startedAt) return null;
@@ -32,7 +32,7 @@ export const SOUND_SET_OPTIONS: { id: SoundSet; label: string; hint: string }[] 
 ];
 
 /** The file for each moment. */
-const FILES: Record<SoundRole, string> = { send: 'send/send', receive: 'hollow/receive', done: 'accomplished/done', reaction: 'bubble/pop' };
+const FILES: Record<SoundRole, string> = { send: 'send/send', receive: 'intuition/receive', done: 'accomplished/done', reaction: 'bubble/pop' };
 
 /** AAC where the browser plays it (Safari, Chrome, Edge), MP3 everywhere else. */
 const EXT = typeof Audio !== 'undefined' && new Audio().canPlayType('audio/mp4; codecs="mp4a.40.2"') ? 'm4a' : 'mp3';
