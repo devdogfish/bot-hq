@@ -28,6 +28,10 @@ const meetingOwnerNames = (process.env.HQ_MEETING_OWNER_NAMES ?? '').split(',').
 
 export const env = {
   host: process.env.HQ_HOST ?? '127.0.0.1',
+  /** Tailscale login (e.g. `name@github`) whose devices are signed in as the Owner without a link; see signInTailnetOwner. */
+  tailscaleOwnerLogin: process.env.HQ_TAILSCALE_OWNER_LOGIN?.trim() || '',
+  /** The Bot HQ account those devices sign in to. */
+  tailscaleOwnerEmail: process.env.HQ_TAILSCALE_OWNER_EMAIL?.trim().toLowerCase() || '',
   port: Number(process.env.PORT ?? 8787),
   appUrl: process.env.APP_URL ?? 'http://localhost:5173',
   xaiKey: process.env.XAI_API_KEY ?? '',

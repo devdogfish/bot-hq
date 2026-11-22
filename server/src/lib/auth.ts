@@ -16,10 +16,11 @@ const RENEW_AFTER_MS = 24 * 3600 * 1000;
 
 export type AuthVars = { Variables: { user: User } };
 
-export function createSession(c: Context, userId: string) {
+export function createSession(c: Context, userId: string): string {
   const t = token();
   db.prepare('INSERT INTO auth_sessions(token,user_id,created_at,expires_at) VALUES (?,?,?,?)').run(t, userId, now(), now() + TTL_MS);
   setSessionCookie(c, t);
+  return t;
 }
 
 function setSessionCookie(c: Context, t: string) {
@@ -54,6 +55,22 @@ export function userFromToken(t: string | undefined): User | null {
     .prepare('SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>?')
     .get(t, now()) as any;
   return r ? { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url, soundSet: r.sound_set === 'none' ? 'none' : 'hollow_bubble' } : null;
+}
+
+const LOOPBACK = new Set(['127.0.0.1', '::1', 'localhost']);
+
+/**
+ * Tailnet sign-in for the Owner's own devices. On Atlas the server listens on loopback only, so every
+ * request arrives through Tailscale Serve, which sets Tailscale-User-Login for devices owned by a
+ * person, replaces any value the client sent, and sets none for tagged devices such as the Agents.
+ * When it names HQ_TAILSCALE_OWNER_LOGIN, that browser gets a normal session for the Owner's account,
+ * with no sign-in link. Off unless both settings are present and the server listens on loopback.
+ */
+export function signInTailnetOwner(c: Context): User | null {
+  if (!env.tailscaleOwnerLogin || !env.tailscaleOwnerEmail || !LOOPBACK.has(env.host)) return null;
+  if (c.req.header('tailscale-user-login') !== env.tailscaleOwnerLogin) return null;
+  const row = db.prepare('SELECT id FROM users WHERE lower(email)=?').get(env.tailscaleOwnerEmail) as { id: string } | undefined;
+  return row ? userFromToken(createSession(c, row.id)) : null;
 }
 
 export function userFromCookieHeader(cookieHeader: string | undefined): User | null {
