@@ -6,23 +6,25 @@
 .chat--empty { align-items: center; justify-content: center; }
 
 .chat__header {
-  position: absolute; left: 0; right: 0; top: 0; height: 100px; z-index: 5;
-  display: flex; align-items: flex-start; justify-content: center; padding: 8px 12px 0 8px;
-  background: linear-gradient(180deg, var(--color-bg-chrome) 0%, var(--color-bg-chrome) 80%, transparent 100%);
+  position: absolute; left: 0; right: 0; top: 0; z-index: 5;
+  display: flex; align-items: flex-start; justify-content: center; padding: 10px 12px 0 8px;
   pointer-events: none;
 }
 .chat__header > * { pointer-events: auto; }
 .chat__pill-anchor { position: relative; max-width: calc(100% - 240px); display: inline-flex; }
-/* Copies the Alfred header: avatar on top, the Agent's name, and a quieter live line under it. */
+/* Copies the Alfred header: just the avatar floating at the top, the first name under it, and a quiet
+   "Thinking…" line while the Agent works. No bar, pill, border or hover chrome. */
 .chat__pill {
-  display: inline-flex; flex-direction: column; align-items: center; gap: 2px; max-width: 100%; min-width: 0;
-  padding: 2px 10px 4px; border-radius: 14px; background: transparent;
-  transition: background-color 120ms var(--ease-out);
+  display: inline-flex; flex-direction: column; align-items: center; gap: 3px; max-width: 100%; min-width: 0;
+  padding: 0 4px; border-radius: 12px; background: none; border: 0; box-shadow: none; cursor: pointer;
 }
-.chat__pill:hover, .chat__pill[aria-expanded='true'] { background: var(--color-bg-hover); }
-.chat__pill-text { display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%; }
-.chat__pill-name { max-width: 100%; font-size: 13px; font-weight: 500; line-height: 17px; letter-spacing: 0.1px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat__pill-status { max-width: 100%; font-size: 11px; line-height: 14px; letter-spacing: 0.1px; color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat__pill:focus { outline: none; }
+.chat__pill:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 3px; }
+.chat__pill-text { display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%;
+  /* No bar behind it: a soft halo in the chat colour keeps the words readable over scrolled content. */
+  text-shadow: 0 0 3px var(--color-bg-chrome), 0 0 6px var(--color-bg-chrome), 0 0 10px var(--color-bg-chrome), 0 0 14px var(--color-bg-chrome); }
+.chat__pill-name { max-width: 100%; font-size: 12px; font-weight: 500; line-height: 15px; letter-spacing: 0.1px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat__pill-status { max-width: 100%; font-size: 11px; line-height: 13px; letter-spacing: 0.1px; color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat__pill-status:empty { display: none; }
 .chat__pill.is-working .chat__pill-status { animation: thinking-pulse 1.6s ease-in-out infinite; }
 .chat__pill.is-waiting .chat__pill-status { color: var(--color-warn-text); }

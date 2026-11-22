@@ -11,6 +11,9 @@ import { StepsHistory, Transcript } from './Transcript';
 import { isWaitingForYou } from '../lib/phrases';
 import { VoiceCallBar } from './VoiceCallBar';
 
+/** The Alfred header shows only the first name: "James", not "James Diaz · Personal Assistant". */
+const firstName = (name: string) => name.trim().split(/\s+/)[0] || name;
+
 export function ChatView() {
   const bot = useSelectedBot();
   const transcript = useStore((s) => (bot ? s.transcripts[bot.id] : undefined));
@@ -41,7 +44,7 @@ export function ChatView() {
   const waiting = isWaitingForYou(live);
   const working = !!live?.isRunning && !waiting;
   // Alfred-style header: the Agent's name with a quieter live line under it.
-  const headerStatus = waiting ? 'Needs you' : working ? 'Thinking…' : pauseStatus;
+  const headerStatus = waiting ? 'Needs you' : working ? 'Thinking...' : pauseStatus;
   const hasSteps = rows.some((r) => r.body.type === 'tool-call');
   const togglePause = () => {
     const paused = !bot.paused;
@@ -59,10 +62,10 @@ export function ChatView() {
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} pausePending={pendingPause !== undefined} />
       <header className="chat__header">
         <span className="chat__pill-anchor">
-          <button ref={menuButton} type="button" className={`chat__pill${working ? ' is-working' : ''}${waiting ? ' is-waiting' : ''}`} onClick={() => { setStepsOpen(false); setMenu(!menu); }} aria-haspopup="menu" aria-expanded={menu}>
-            <BotAvatarFor bot={bot} size={28} />
+          <button ref={menuButton} type="button" className={`chat__pill${working ? ' is-working' : ''}${waiting ? ' is-waiting' : ''}`} onClick={() => { setStepsOpen(false); setMenu(!menu); }} aria-haspopup="menu" aria-expanded={menu} aria-label={displayName(bot)}>
+            <BotAvatarFor bot={bot} size={36} />
             <span className="chat__pill-text">
-              <span className="chat__pill-name">{displayName(bot)}</span>
+              <span className="chat__pill-name">{firstName(bot.name)}</span>
               <span className="chat__pill-status" role="status" aria-live="polite">{bot.kind === 'room' && !working && !waiting ? '' : headerStatus}</span>
             </span>
           </button>
