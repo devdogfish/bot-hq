@@ -4,7 +4,7 @@ import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { isWaitingForYou } from '../lib/phrases';
 import { clock, dividerLabel, duration } from '../lib/time';
 import { useStore } from '../store';
-import { ThinkingBlock } from './ActivityLine';
+import { takeFlight } from '../lib/sendFlight';
 import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
@@ -91,10 +91,32 @@ function cornerClass(i: number, n: number) {
   return ' is-mid';
 }
 
+/** iMessage's send curve: a quick rise that settles softly. */
+const FLIGHT_EASING = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
+const FLIGHT_MS = 420;
+
 const Bubble = memo(function Bubble({ row, side, pos }: { row: Row; side: 'left' | 'right'; pos: string }) {
   const b = row.body as MessageBody;
+  const wrap = useRef<HTMLDivElement>(null);
+  // A message just sent from the composer rises from the input into its place.
+  useLayoutEffect(() => {
+    const el = wrap.current?.firstElementChild as HTMLElement | null;
+    if (side !== 'right' || !el || !b.text) return;
+    const from = takeFlight(row.botId, b.text);
+    if (!from || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const scroller = el.closest('.transcript');
+    if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    const to = el.getBoundingClientRect();
+    const dx = from.right - to.right;
+    const dy = from.bottom - to.bottom;
+    if (dy <= 0) return;
+    el.animate(
+      [{ transform: `translate(${dx}px, ${dy}px) scale(0.96)`, opacity: 0.6 }, { transform: 'none', opacity: 1 }],
+      { duration: FLIGHT_MS, easing: FLIGHT_EASING },
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className={`bubble-wrap is-${side}`}>
+    <div ref={wrap} className={`bubble-wrap is-${side}`}>
       <div className={`bubble is-${side === 'right' ? 'user' : 'agent'}${pos}${b.streaming ? ' is-streaming' : ''}`}>
         {b.draftOnly && <span className="bubble__draft">Draft only</span>}
         {side === 'right' || b.draftOnly ? <div className="bubble__plain">{b.text}</div> : <Markdown text={b.text || ' '} />}
@@ -174,7 +196,7 @@ function StepRow({ call }: { call: ToolCallBody }) {
  * A run of tool calls, folded into one chip. While the turn runs it shows what the bot is doing right
  * now and the step count; afterwards it reads "Worked for 2m 10s · 7 steps". Click to see every step.
  */
-function Steps({ item, active, open: unfinished, extra }: {
+function Steps({ item, active, open: unfinished, extra, defaultOpen = false }: {
   item: Extract<Item, { kind: 'steps' }>;
   /** The bot is working on this run of steps right now. */
   active: boolean;
@@ -182,8 +204,9 @@ function Steps({ item, active, open: unfinished, extra }: {
   open: boolean;
   /** Steps the server has counted that have no row yet. */
   extra: number;
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const calls = item.rows.map((r) => r.body as ToolCallBody);
   const n = calls.length + (unfinished ? extra : 0);
   const count = `${n} ${n === 1 ? 'step' : 'steps'}`;
@@ -221,36 +244,13 @@ function SystemRow({ row }: { row: Row }) {
   return null;
 }
 
-interface Props { bot: Bot; rows: Row[]; live: LiveState | undefined; loaded: boolean }
+interface Props { bot: Bot; rows: Row[]; loaded: boolean }
 
-export function Transcript({ bot, rows, live, loaded }: Props) {
+export function Transcript({ bot, rows, loaded }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const items = useMemo(() => buildItems(rows), [rows]);
-
-  const running = !!live?.isRunning;
-  const waiting = isWaitingForYou(live);
-  const last = rows[rows.length - 1];
-  const streamingNow = last?.body.type === 'message' && last.body.role === 'assistant' && !!last.body.streaming;
-  const showActivity = (running && !streamingNow) || waiting;
-
-  // The chip that is still growing: the last thing in the transcript while the turn runs.
-  const lastItem = items[items.length - 1];
-  const openKey = (running || waiting) && lastItem?.kind === 'steps' ? lastItem.key : null;
-  const activeKey = running && !waiting ? openKey : null;
-  // `live.steps` counts the whole turn; anything beyond the rows we hold for this turn has no row yet.
-  const turnSteps = useMemo(() => {
-    let n = 0;
-    for (let i = rows.length - 1; i >= 0; i--) {
-      const b = rows[i].body;
-      if (b.type === 'message' && b.role === 'user') break;
-      if (b.type === 'tool-call') n++;
-    }
-    return n;
-  }, [rows]);
-  const serverSteps = running ? live?.steps ?? 0 : 0;
-  const extraSteps = Math.max(0, serverSteps - turnSteps);
 
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.
   useLayoutEffect(() => {
@@ -286,7 +286,7 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
             case 'divider':
               return <div key={it.key} className="divider">{dividerLabel(it.ts)}</div>;
             case 'steps':
-              return <Steps key={it.key} item={it} active={it.key === activeKey} open={it.key === openKey} extra={extraSteps} />;
+              return null; // Steps live behind the header (StepsHistory), not in the chat.
             case 'row':
               return <SystemRow key={it.key} row={it.row} />;
             case 'routine-failures':
@@ -302,7 +302,6 @@ export function Transcript({ bot, rows, live, loaded }: Props) {
               );
           }
         })}
-        {showActivity && live && <ThinkingBlock bot={bot} live={live} rows={rows} steps={openKey ? 0 : serverSteps} />}
       </div>
     </div>
       {showJump && (
@@ -320,6 +319,38 @@ function EmptyChat({ bot }: { bot: Bot }) {
       <BotAvatarFor bot={bot} size={72} />
       <div className="empty-chat__title">{bot.name}</div>
       <div className="empty-chat__sub">{bot.description || (bot.mode === 'teammate' ? 'A Bot for the whole team. Hand it a task and it will see it through.' : 'Your personal assistant. Hand it a task and it will see it through.')}</div>
+    </div>
+  );
+}
+
+/**
+ * Every run of tool calls in this conversation, newest first, for the header's steps popover. The run
+ * still growing while the turn works shows what the Agent is doing now.
+ */
+export function StepsHistory({ rows, live }: { rows: Row[]; live: LiveState | undefined }) {
+  const items = useMemo(() => buildItems(rows), [rows]);
+  const runs = items.filter((it): it is Extract<Item, { kind: 'steps' }> => it.kind === 'steps');
+  const running = !!live?.isRunning;
+  const waiting = isWaitingForYou(live);
+  const lastItem = items[items.length - 1];
+  const openKey = (running || waiting) && lastItem?.kind === 'steps' ? lastItem.key : null;
+  const activeKey = running && !waiting ? openKey : null;
+  const turnSteps = useMemo(() => {
+    let n = 0;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const b = rows[i].body;
+      if (b.type === 'message' && b.role === 'user') break;
+      if (b.type === 'tool-call') n++;
+    }
+    return n;
+  }, [rows]);
+  const extra = Math.max(0, (running ? live?.steps ?? 0 : 0) - turnSteps);
+  if (runs.length === 0) return <div className="steps-history__empty">No steps yet in this conversation.</div>;
+  return (
+    <div className="steps-history">
+      {[...runs].reverse().map((it, i) => (
+        <Steps key={it.key} item={it} active={it.key === activeKey} open={it.key === openKey} extra={extra} defaultOpen={i === 0} />
+      ))}
     </div>
   );
 }
