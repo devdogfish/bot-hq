@@ -7,29 +7,35 @@
 
 .chat__header {
   position: absolute; left: 0; right: 0; top: 0; z-index: 5;
-  display: flex; align-items: flex-start; justify-content: center; padding: 10px 12px 0 8px;
+  display: flex; align-items: flex-start; justify-content: center; padding: 8px 12px 0 8px;
   pointer-events: none;
 }
 /* Like Messages: a short fade from the chat colour so scrolled messages slip under the avatar instead of
    colliding with it. It never takes clicks; only the avatar, name and header buttons do. */
 .chat__header::before {
-  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 108px; z-index: -1; pointer-events: none;
-  background: linear-gradient(180deg, var(--color-bg-chrome) 0%, var(--color-bg-chrome) 74%, transparent 100%);
+  content: ''; position: absolute; left: 0; right: 0; top: 0; height: 148px; z-index: -1; pointer-events: none;
+  background: linear-gradient(180deg, var(--color-bg-chrome) 0%, var(--color-bg-chrome) 76%, transparent 100%);
 }
 .chat__header > * { pointer-events: auto; }
 .chat__pill-anchor { position: relative; max-width: calc(100% - 240px); display: inline-flex; }
-/* Copies the Alfred header: just the avatar floating at the top, the first name under it, and a quiet
-   "Thinking…" line while the Agent works. No bar, pill, border or hover chrome. */
+/* Copies the Alfred header: a large avatar floating at the top, the first name in its own frosted pill for
+   contrast, and a quiet "Thinking..." line under it while the Agent works. No bar or button chrome. */
 .chat__pill {
-  display: inline-flex; flex-direction: column; align-items: center; gap: 3px; max-width: 100%; min-width: 0;
-  padding: 0 4px; border-radius: 12px; background: none; border: 0; box-shadow: none; cursor: pointer;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 0; max-width: 100%; min-width: 0;
+  padding: 0; border-radius: 16px; background: none; border: 0; box-shadow: none; cursor: pointer;
 }
 .chat__pill:focus { outline: none; }
 .chat__pill:focus-visible { outline: 2px solid var(--color-border-focus); outline-offset: 3px; }
-.chat__pill-text { display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%;
-  /* No bar behind it: a soft halo in the chat colour keeps the words readable over scrolled content. */
-  text-shadow: 0 0 3px var(--color-bg-chrome), 0 0 6px var(--color-bg-chrome), 0 0 10px var(--color-bg-chrome), 0 0 14px var(--color-bg-chrome); }
-.chat__pill-name { max-width: 100%; font-size: 12px; font-weight: 500; line-height: 15px; letter-spacing: 0.1px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat__pill-text { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; max-width: 100%; margin-top: -6px; position: relative; }
+.chat__pill-name {
+  max-width: 100%; padding: 3px 10px; border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--color-bg-pane) 82%, transparent);
+  -webkit-backdrop-filter: blur(12px) saturate(1.4); backdrop-filter: blur(12px) saturate(1.4);
+  box-shadow: 0 1px 3px #0000001F, 0 0 0 0.5px var(--color-border-tertiary);
+  font-size: 13px; font-weight: 600; line-height: 16px; letter-spacing: 0.1px; color: var(--color-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root[data-theme='dark'] .chat__pill-name { background: color-mix(in srgb, #2C2C2E 80%, transparent); box-shadow: 0 1px 3px #00000066, 0 0 0 0.5px #FFFFFF1A; }
 .chat__pill-status { max-width: 100%; font-size: 11px; line-height: 13px; letter-spacing: 0.1px; color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat__pill-status:empty { display: none; }
 .chat__pill.is-working .chat__pill-status { animation: thinking-pulse 1.6s ease-in-out infinite; }
@@ -52,7 +58,7 @@
   content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 56px; z-index: 3; pointer-events: none;
   background: linear-gradient(180deg, transparent 0%, var(--color-bg-chrome) 100%);
 }
-.transcript { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: 108px 16px 60px; overflow-anchor: none; }
+.transcript { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: 148px 16px 60px; overflow-anchor: none; }
 .transcript__col { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 960px; margin: 0 auto; min-height: 100%; justify-content: flex-end; }
 .transcript__col > * { max-width: 100%; }
 
