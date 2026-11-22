@@ -6,7 +6,7 @@ import { BotAvatar, BotAvatarFor } from '../avatar/BotAvatar';
 import { isWaitingForYou } from '../lib/phrases';
 import { clock, dividerLabel, duration } from '../lib/time';
 import { useStore } from '../store';
-import { takeFlight } from '../lib/sendFlight';
+import { land, reducedMotion, retarget, SLIDE_EASING, SLIDE_MS, takeFlight } from '../lib/sendFlight';
 import { CardRow } from './cards/Cards';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
@@ -107,9 +107,8 @@ function Tapback({ reaction, liveKey }: { reaction: NonNullable<MessageBody['rea
   );
 }
 
-/** iMessage's send curve: a quick rise that settles softly. */
-const FLIGHT_EASING = 'cubic-bezier(0.2, 0.9, 0.3, 1)';
-const FLIGHT_MS = 420;
+/** Bubbles just sent from the composer, waiting for the transcript to settle its layout and fly them in. */
+const flights: { flight: NonNullable<ReturnType<typeof takeFlight>>; bubble: HTMLElement }[] = [];
 
 /** How long a touch must rest on a bubble to open its actions, like a press-and-hold in Messages. */
 const LONG_PRESS_MS = 450;
@@ -124,22 +123,15 @@ const Bubble = memo(function Bubble({ row, side, pos, onActions }: { row: Row; s
   const actionable = !b.streaming && !!b.text;
   const [arriving] = useState(() => side === 'left' && isArrival(arrivalKey(row.botId, row.seq)));
   const open = (el: HTMLElement, mode: ActionsMode) => { if (actionable) onActions(row, el, mode); };
-  // A message just sent from the composer rises from the input into its place.
+  // A message just sent from the composer turns from the typed text into this bubble. Hidden until the
+  // Transcript (whose layout effect runs after this one) has pinned the scroll and starts the flight.
   useLayoutEffect(() => {
     const el = wrap.current?.firstElementChild as HTMLElement | null;
     if (side !== 'right' || !el || !b.text) return;
-    const from = takeFlight(row.botId, b.text);
-    if (!from || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const scroller = el.closest('.transcript');
-    if (scroller) scroller.scrollTop = scroller.scrollHeight;
-    const to = el.getBoundingClientRect();
-    const dx = from.right - to.right;
-    const dy = from.bottom - to.bottom;
-    if (dy <= 0) return;
-    el.animate(
-      [{ transform: `translate(${dx}px, ${dy}px) scale(0.96)`, opacity: 0.6 }, { transform: 'none', opacity: 1 }],
-      { duration: FLIGHT_MS, easing: FLIGHT_EASING },
-    );
+    const flight = takeFlight(row.botId, b.text);
+    if (!flight) return;
+    el.style.opacity = '0';
+    flights.push({ flight, bubble: el });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div ref={wrap} className={`bubble-wrap is-${side}`}>
@@ -303,10 +295,36 @@ export function Transcript({ bot, rows, loaded, running }: Props) {
   const openActions = useCallback<OpenActions>((row, anchor, mode) => setActions({ row, anchor, mode }), []);
   const closeActions = useCallback(() => setActions(null), []);
 
+  const colRef = useRef<HTMLDivElement>(null);
+  // The last item and its distance from the bottom of the list after the previous render. When new content
+  // pushes it up, the list slides up from where it was (like Messages) instead of jumping.
+  const anchor = useRef<{ el: Element; dist: number; botId: string; count: number } | null>(null);
+
   // Keep pinned to the bottom while new content arrives, unless the user scrolled up.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
+    const col = colRef.current;
+    if (!el || !col) return;
+    // Sending always brings the conversation to the bottom, like Messages.
+    if (flights.length) stick.current = true;
+    const prev = anchor.current;
+    const slide = stick.current && prev && prev.botId === bot.id && shown.length > prev.count && prev.el.isConnected && !reducedMotion()
+      ? col.offsetHeight - (prev.el as HTMLElement).offsetTop - prev.dist
+      : 0;
+    // A slide still under way continues from where it is now.
+    const now = new DOMMatrixReadOnly(getComputedStyle(col).transform).m42;
+    if (slide) col.getAnimations().forEach((a) => a.cancel());
+    if (stick.current) el.scrollTop = el.scrollHeight;
+    // Layout is final here: send the new bubbles from the composer to their resting place.
+    const colOffset = new DOMMatrixReadOnly(getComputedStyle(col).transform).m42;
+    retarget(colOffset);
+    for (const f of flights.splice(0)) if (f.bubble.isConnected) land(f.flight, f.bubble, colOffset); else f.flight.ghost.remove();
+    const offset = slide > 0 ? slide + now : 0;
+    if (offset > 0.5) {
+      col.animate([{ transform: `translateY(${offset}px)` }, { transform: 'translateY(0)' }], { duration: SLIDE_MS, easing: SLIDE_EASING });
+    }
+    const last = col.lastElementChild as HTMLElement | null;
+    anchor.current = last ? { el: last, dist: col.offsetHeight - last.offsetTop, botId: bot.id, count: shown.length } : null;
   });
   // Jump to bottom when switching bots.
   useLayoutEffect(() => {
@@ -330,7 +348,7 @@ export function Transcript({ bot, rows, loaded, running }: Props) {
   return (
     <div className="transcript-wrap">
     <div className="transcript" ref={scrollRef} onScroll={onScroll}>
-      <div className="transcript__col">
+      <div className="transcript__col" ref={colRef}>
         {loaded && rows.length === 0 && <EmptyChat bot={bot} />}
         {items.map((it) => {
           switch (it.kind) {

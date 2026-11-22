@@ -67,7 +67,7 @@
   background: linear-gradient(180deg, transparent 0%, var(--color-bg-chrome) 100%);
 }
 .transcript { position: absolute; inset: 0; overflow-y: auto; overflow-x: hidden; padding: 112px 16px 60px; overflow-anchor: none; }
-.transcript__col { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 960px; margin: 0 auto; min-height: 100%; justify-content: flex-end; }
+.transcript__col { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 12px; max-width: 960px; margin: 0 auto; min-height: 100%; justify-content: flex-end; }
 .transcript__col > * { max-width: 100%; }
 
 .group { display: flex; flex-direction: column; gap: 4px; width: 100%; }
@@ -224,6 +224,15 @@
 .empty-chat { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: auto; padding: 40px 24px; text-align: center; align-self: center; }
 .empty-chat__title { font-size: 17px; font-weight: 500; line-height: 24px; letter-spacing: 0.17px; margin-top: 12px; }
 .empty-chat__sub { max-width: 380px; font-size: 14px; line-height: 20px; color: var(--color-text-secondary); }
+
+/* The typed text on its way from the input to its bubble (lib/sendFlight). */
+.send-ghost {
+  position: fixed; z-index: 50; pointer-events: none; box-sizing: border-box; overflow: hidden;
+  padding: 7px 12px; border-radius: var(--radius-bubble); transform-origin: right center;
+  font-size: var(--text-message); line-height: 22px; letter-spacing: 0.15px; white-space: pre-wrap; overflow-wrap: anywhere;
+  box-shadow: var(--bubble-ring); will-change: transform, width, opacity;
+}
+.send-ghost__text { display: block; }
 
 /* ---------- composer ---------- */
 .composer-area { flex-shrink: 0; padding: 0 16px 16px; position: relative; }
