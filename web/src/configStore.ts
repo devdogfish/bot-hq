@@ -24,9 +24,10 @@ interface ConfigUI {
   bump(key: string): void;
 }
 
-const LS_THEME = 'grokbot.theme';
+const LS_THEME = 'bothq.theme';
+const LS_THEME_LEGACY = 'grokbot.theme';
 const readTheme = (): Theme => {
-  try { const t = localStorage.getItem(LS_THEME); return t === 'light' || t === 'dark' ? t : 'system'; } catch { return 'system'; }
+  try { const t = localStorage.getItem(LS_THEME) ?? localStorage.getItem(LS_THEME_LEGACY); return t === 'light' || t === 'dark' ? t : 'system'; } catch { return 'system'; }
 };
 
 const darkQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
@@ -61,7 +62,7 @@ applyTheme(readTheme());
 darkQuery?.addEventListener?.('change', () => { if (useConfigUI.getState().theme === 'system') applyTheme('system'); });
 
 // store.ts forwards events it doesn't handle itself as a DOM event.
-window.addEventListener('grokbot:event', (e) => {
+window.addEventListener('bothq:event', (e) => {
   const ev = (e as CustomEvent<ServerEvent>).detail;
   const { bump } = useConfigUI.getState();
   if (ev.type === 'tasks') { bump('tasks'); bump(`tasks:${ev.botId}`); }

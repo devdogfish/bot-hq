@@ -1,5 +1,5 @@
 {
-  "name": "grokbot",
+  "name": "bot-hq",
   "private": true,
   "description": "Bot HQ: a team of remote Hermes Agents with local screens and xAI voice.",
   "workspaces": ["server", "web"],
@@ -8,7 +8,7 @@
     "dev": "npm run dev -w server & npm run dev -w web",
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",
-    "test": "npm run build -w server && node --experimental-strip-types --test tests/agent-health.mjs tests/bot-archive.mjs tests/computer-keys.mjs tests/events.mjs tests/hermes-approvals.mjs tests/jitsi-invite.mjs tests/model-choice.mjs tests/owner-email-*.mjs tests/owner-secrets-flow.mjs tests/personal-assistant-flow.mjs tests/personal-gmail-transport.mjs tests/reset-queue.mjs tests/routine-autopause.mjs tests/routine-chat.mjs tests/routine-schedule.mjs tests/screen-bench.mjs",
+    "test": "npm run build -w server && node --experimental-strip-types --test tests/agent-health.mjs tests/bot-archive.mjs tests/computer-keys.mjs tests/events.mjs tests/hermes-approvals.mjs tests/identity.mjs tests/jitsi-invite.mjs tests/model-choice.mjs tests/owner-email-*.mjs tests/owner-secrets-flow.mjs tests/personal-assistant-flow.mjs tests/personal-gmail-transport.mjs tests/reset-queue.mjs tests/routine-autopause.mjs tests/routine-chat.mjs tests/routine-schedule.mjs tests/screen-bench.mjs",
     "test:bot-archive-browser": "npm run build && node --test tests/bot-archive-browser.mjs",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
   },

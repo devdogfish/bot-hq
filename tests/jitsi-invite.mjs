@@ -39,7 +39,7 @@ const invite = (body, headers = { origin, authorization: auth }) =>
 const lastText = (botId) => listRows(botId, { limit: 10 }).filter((r) => r.kind === 'message').at(-1)?.body.text;
 
 test('the signed-in Owner reads the token for the Jitsi origin', async () => {
-  const res = await app.request('/api/jitsi/token', { headers: { cookie: 'grokbot_session=browser' } });
+  const res = await app.request('/api/jitsi/token', { headers: { cookie: 'bothq_session=browser' } });
   assert.deepEqual(await res.json(), { token: jitsiInviteToken('owner'), origins: ['https://meet.example.test', 'https://gate.example.test:8443'] });
   assert.equal((await app.request('/api/jitsi/token')).status, 401);
 });

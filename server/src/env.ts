@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +7,17 @@ function req(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env ${name}`);
   return v;
+}
+
+/** BOTHQ_<name>, or GROKBOT_<name> as set up before the project was renamed. */
+export function renamedEnv(name: string): string | undefined {
+  return process.env[`BOTHQ_${name}`] ?? process.env[`GROKBOT_${name}`];
+}
+
+/** Default database file. One made before the rename (data/grokbot.db) keeps being used. */
+function defaultDbPath(dir: string): string {
+  const legacy = path.join(dir, 'grokbot.db');
+  return fs.existsSync(legacy) ? legacy : path.join(dir, 'bothq.db');
 }
 
 const hermesHome = process.env.HERMES_HOME_PRIMARY ?? process.env.HERMES_HOME ?? path.join(os.homedir(), '.hermes');
@@ -27,7 +39,9 @@ export const env = {
   meetingOwnerNames: meetingOwnerNames.length ? meetingOwnerNames : ['Owner'],
   sessionSecret: req('SESSION_SECRET'),
   devLogin: process.env.DEV_LOGIN === '1',
-  dbPath: process.env.DB_PATH ?? path.join(dataDir, 'grokbot.db'),
+  dbPath: process.env.DB_PATH ?? defaultDbPath(dataDir),
+  /** The company the Agents work for, named in every channel's "who you are" (e.g. Dawnshift). */
+  teamName: (process.env.BOTHQ_TEAM_NAME ?? '').trim(),
 
   // ---- Hermes engine ----
   /** The `hermes` CLI used to start a gateway for each extra bot. */

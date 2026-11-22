@@ -317,7 +317,7 @@ test('two processes race for one ID and a fresh HQ recovers the accepted payload
   await once(gateway, 'listening');
   t.after(() => gateway.close());
   const childEnv = {
-    ...process.env, DB_PATH: join(dir, 'hq.db'), PORT: '0', HQ_HOST: '127.0.0.1', GROKBOT_NO_SCHEDULER: '1',
+    ...process.env, DB_PATH: join(dir, 'hq.db'), PORT: '0', HQ_HOST: '127.0.0.1', BOTHQ_NO_SCHEDULER: '1',
   };
   await exec(process.execPath, ['--input-type=module', '-e', `
     const { db } = await import('./server/dist/db.js');
