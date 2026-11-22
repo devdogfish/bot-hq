@@ -10,8 +10,7 @@ import { createRoom, postToRoom } from './rooms.js';
 import type { ActivityKind } from '../types.js';
 import { OWNER_EMAIL_TOOL } from './owner-email-policy.js';
 import { SECURE_INPUT_KINDS, SECURE_INPUT_TOOL } from '../secure-input.js';
-import { reactToMessage } from './reactions.js';
-import { REACTION_KINDS } from '../types.js';
+import { REACT_TOOL, REACT_TOOL_DESCRIPTION, REACT_TOOL_PARAMETERS, reactToMessage } from './reactions.js';
 
 export interface ToolCtx {
   userId: string;
@@ -300,12 +299,9 @@ export const TOOLS: ToolDef[] = [
     },
   },
   {
-    name: 'react_to_message',
-    description: "Put an iMessage-style tapback on one of the Owner's messages, when a quick reaction says it better than words (thanks, approval, a joke, a surprise). One reaction per message; a new one replaces the old, and 'none' removes it. Targets the Owner's latest message unless message_text picks an earlier one. A reaction does not replace a reply the Owner needs.",
-    parameters: obj({
-      reaction: { type: 'string', enum: [...REACTION_KINDS, 'none'] },
-      message_text: { type: 'string', description: "A few words from the Owner's message to react to. Leave out for their latest message." },
-    }, ['reaction']),
+    name: REACT_TOOL,
+    description: REACT_TOOL_DESCRIPTION,
+    parameters: REACT_TOOL_PARAMETERS,
     activity: 'working',
     label: 'Reacting',
     impl: async (a, ctx) => {

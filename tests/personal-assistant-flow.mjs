@@ -29,6 +29,7 @@ const { db } = await import('../server/dist/db.js');
 const { mcpToken } = await import('../server/dist/engine.js');
 const { enqueue, isBotBusy } = await import('../server/dist/agent/loop.js');
 const { PersonalGmail } = await import('../server/dist/agent/personal-gmail.js');
+const { PERSONAL_TOOLS } = await import('../server/dist/agent/personal-assistant.js');
 const { initSubagents } = await import('../server/dist/agent/subagents.js');
 const { initRooms } = await import('../server/dist/agent/rooms.js');
 initSubagents();
@@ -138,6 +139,17 @@ test('a private James turn gates Gmail, captures scoped facts, and requires exac
   }
   assert(!(await rpc(personal.id, 'tools/list')).tools.some(({ name }) => name === 'send_to_bot'));
   assert.match(await call('send_to_bot', {}), /Unknown/);
+  // Tool policy: business Agents get no personal tools; James gets only personal tools plus tapbacks.
+  const personalNames = new Set(PERSONAL_TOOLS.map(({ name }) => name));
+  const toolNames = async (botId) => (await rpc(botId, 'tools/list')).tools.map(({ name }) => name);
+  for (const bot of [tyler, other]) {
+    const names = await toolNames(bot.id);
+    assert.deepEqual(names.filter((name) => personalNames.has(name)), [], 'a business Agent got a personal tool');
+    assert(names.includes('react_to_message'));
+  }
+  const jamesNames = await toolNames(personal.id);
+  assert(jamesNames.includes('react_to_message'), 'James can react');
+  assert.deepEqual(jamesNames.filter((name) => !personalNames.has(name)), ['react_to_message'], 'James got a business tool');
   assert.deepEqual(JSON.parse(await call('read_personal_gmail', message)), { status: 'unavailable' });
   assert.equal(enqueue(personal.id, { type: 'routine', routineId: 'x', name: 'Digest', prompt: 'Read mail' }), false);
   assert.equal(readCalls.length, 0);
@@ -198,6 +210,19 @@ test('a private James turn gates Gmail, captures scoped facts, and requires exac
     await until(() => !isBotBusy(personal.id));
   }
   assert.deepEqual(sends, [{ reply: target, body: 'I can make that.' }]);
+
+  // James's tapback lands only on the Owner's latest message in his own private chat.
+  const ownerRows = async (botId) => (await request('/bots/' + botId + '/rows')).rows
+    .filter(({ body }) => body.type === 'message' && body.role === 'user');
+  const businessBefore = JSON.stringify(await ownerRows(tyler.id));
+  assert.equal(await call('react_to_message', { reaction: 'heart' }), 'Reaction set.');
+  const latest = (await ownerRows(personal.id)).at(-1);
+  assert.equal(latest.body.text, 'Check my personal email and reply.');
+  assert.equal(latest.body.reaction.kind, 'heart');
+  assert.equal(JSON.stringify(await ownerRows(tyler.id)), businessBefore, 'a business chat changed');
+  assert.match((await rpc(personal.id, 'tools/call', { name: 'react_to_message', arguments: { reaction: 'wink' } })).content[0].text, /Unknown reaction/);
+  assert.equal(await call('react_to_message', { reaction: 'none' }), 'Reaction set.');
+  assert.equal((await ownerRows(personal.id)).at(-1).body.reaction, undefined);
 
   t.mock.method(PersonalGmail.prototype, 'changeMessage', async (id, action, label, eligible) => {
     assert(eligible());

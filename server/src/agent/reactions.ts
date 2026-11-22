@@ -2,6 +2,18 @@ import { db } from '../db.js';
 import { getBotRow, updateRow } from '../store.js';
 import { REACTION_KINDS, type MessageBody, type ReactionKind } from '../types.js';
 
+export const REACT_TOOL = 'react_to_message';
+export const REACT_TOOL_DESCRIPTION = "Put an iMessage-style tapback on one of the Owner's messages, when a quick reaction says it better than words (thanks, approval, a joke, a surprise). One reaction per message; a new one replaces the old, and 'none' removes it. Targets the Owner's latest message unless message_text picks an earlier one. A reaction does not replace a reply the Owner needs.";
+export const REACT_TOOL_PARAMETERS = {
+  type: 'object',
+  properties: {
+    reaction: { type: 'string', enum: [...REACTION_KINDS, 'none'] },
+    message_text: { type: 'string', description: "A few words from the Owner's message to react to. Leave out for their latest message." },
+  },
+  required: ['reaction'],
+  additionalProperties: false,
+};
+
 /** How far back an Agent can reach for a message to react to. */
 const LOOKBACK = 40;
 

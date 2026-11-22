@@ -8,6 +8,10 @@ import { ownerEmailRole } from './agent/owner-email.js';
 import { isPersonalAssistant, personalAssistantPaired, personalToolList, PERSONAL_TOOLS } from './agent/personal-assistant.js';
 import { JOBS_MONITOR_TOOL, jobsMonitorCommand } from './jobs-monitor.js';
 import { SECURE_INPUT_TOOL } from './secure-input.js';
+import { REACT_TOOL, REACT_TOOL_DESCRIPTION, REACT_TOOL_PARAMETERS, reactToMessage } from './agent/reactions.js';
+
+/** James gets his personal tools plus tapbacks, which only ever touch his own private chat with the Owner. */
+const PERSONAL_REACT_TOOL = { name: REACT_TOOL, description: REACT_TOOL_DESCRIPTION, inputSchema: REACT_TOOL_PARAMETERS };
 
 /**
  * The app's tools, served to the Hermes engines over MCP (streamable HTTP, JSON answers only).
@@ -31,6 +35,11 @@ async function callTool(botId: string | null, rawName: string, args: any): Promi
   if (bot.paused) return text(PAUSED, true);
   if (rawName === JOBS_MONITOR_TOOL) return text(JSON.stringify(jobsMonitorCommand(botId, args)));
   if (isPersonalAssistant(botId)) {
+    if (rawName.toLowerCase() === REACT_TOOL) {
+      if (!personalAssistantPaired(botId)) return text(JSON.stringify({ status: 'unavailable' }));
+      const r = reactToMessage(botId, String(args?.reaction ?? ''), typeof args?.message_text === 'string' ? args.message_text : undefined);
+      return r.ok ? text('Reaction set.') : text(`Tool error: ${r.error}`, true);
+    }
     try {
       const tool = PERSONAL_TOOLS.find((tool) => tool.name === rawName);
       if (tool) return text(JSON.stringify(await personalTool(botId, tool.name, args)));
@@ -95,7 +104,7 @@ async function handle(msg: any, botId: string | null): Promise<object | null> {
     case 'tools/list':
       if (botId && getBotRow(botId)?.paused) return rpcError(id, -32002, PAUSED);
       if (botId && isPersonalAssistant(botId)) {
-        return { jsonrpc: '2.0', id, result: { tools: personalAssistantPaired(botId) ? personalToolList() : [] } };
+        return { jsonrpc: '2.0', id, result: { tools: personalAssistantPaired(botId) ? [...personalToolList(), PERSONAL_REACT_TOOL] : [] } };
       }
       return { jsonrpc: '2.0', id, result: { tools: TOOLS
         .filter((t) => t.name !== OWNER_EMAIL_TOOL || ownerEmailRole(botId))
