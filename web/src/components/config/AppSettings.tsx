@@ -97,7 +97,7 @@ function GeneralSection() {
 
 /** Sound set for send, receive and reactions. Saved to the Owner's account. */
 function SoundsSection() {
-  const current = useStore((s) => s.user?.soundSet ?? 'bubble');
+  const current = useStore((s) => s.user?.soundSet ?? 'hollow_bubble');
   const setSoundSet = useStore((s) => s.setSoundSet);
   const [error, setError] = useState<string | null>(null);
   const pick = (id: typeof current) => {
@@ -125,6 +125,7 @@ function SoundsSection() {
         ))}
       </div>
       <div className="cfg-field__hint">Sounds play only while Bot HQ is on screen, and never with Reduce motion on.</div>
+      <div className="cfg-field__hint">Sounds: <a href="https://notificationsounds.com/sound-effects/hollow-582" target="_blank" rel="noreferrer noopener">notificationsounds.com</a> (CC BY 4.0) and Pixabay.</div>
     </section>
   );
 }
