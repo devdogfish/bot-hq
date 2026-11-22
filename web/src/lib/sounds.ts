@@ -2,14 +2,14 @@ import type { SoundSet } from '@shared/types';
 import { useStore } from '../store';
 
 /**
- * Short iMessage-style sounds for send, receive and tapbacks: three Pixabay files the Owner picked, trimmed
- * and level-matched (web/public/sounds/README.md). They play quietly, only while the tab is visible, never
- * under prefers-reduced-motion, and never when the Owner picked None.
+ * One short bubble pop (Pixabay, web/public/sounds/README.md) when an Agent's reply arrives or a tapback
+ * lands. Sending is silent. It plays quietly, only while the tab is visible, never under
+ * prefers-reduced-motion, and never when the Owner picked None.
  */
-export type SoundRole = 'send' | 'receive' | 'reaction';
+export type SoundRole = 'receive' | 'reaction';
 
 export const SOUND_SET_OPTIONS: { id: SoundSet; label: string; hint: string }[] = [
-  { id: 'imessage', label: 'iMessage-style', hint: 'Swoosh, ping and a soft pop' },
+  { id: 'bubble', label: 'Bubble', hint: 'A soft pop for replies and reactions' },
   { id: 'none', label: 'None', hint: 'No sounds' },
 ];
 
@@ -21,9 +21,9 @@ const MIN_GAP_MS = 120;
 const cache = new Map<string, HTMLAudioElement>();
 const lastPlayed: Partial<Record<SoundRole, number>> = {};
 
-function play(set: SoundSet, role: SoundRole) {
+function play(set: SoundSet) {
   if (set === 'none') return;
-  const src = `/sounds/${set}/${role}.${EXT}`;
+  const src = `/sounds/${set}/pop.${EXT}`; // replies and reactions share the one pop
   let base = cache.get(src);
   if (!base) { base = new Audio(src); base.preload = 'auto'; cache.set(src, base); }
   const a = base.cloneNode() as HTMLAudioElement;
@@ -38,10 +38,10 @@ export function playSound(role: SoundRole) {
   const t = Date.now();
   if (t - (lastPlayed[role] ?? 0) < MIN_GAP_MS) return;
   lastPlayed[role] = t;
-  play(useStore.getState().user?.soundSet ?? 'imessage', role);
+  play(useStore.getState().user?.soundSet ?? 'bubble');
 }
 
-/** Settings preview: send, receive and reaction of one set, a beat apart, regardless of visibility rules. */
+/** Settings preview: the pop, regardless of visibility rules. */
 export function previewSoundSet(set: SoundSet) {
-  (['send', 'receive', 'reaction'] as SoundRole[]).forEach((role, i) => setTimeout(() => play(set, role), i * 420));
+  play(set);
 }

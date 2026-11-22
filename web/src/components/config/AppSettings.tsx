@@ -97,7 +97,7 @@ function GeneralSection() {
 
 /** Sound set for send, receive and reactions. Saved to the Owner's account. */
 function SoundsSection() {
-  const current = useStore((s) => s.user?.soundSet ?? 'imessage');
+  const current = useStore((s) => s.user?.soundSet ?? 'bubble');
   const setSoundSet = useStore((s) => s.setSoundSet);
   const [error, setError] = useState<string | null>(null);
   const pick = (id: typeof current) => {
@@ -117,7 +117,7 @@ function SoundsSection() {
               <span className="sound-set__hint">{o.hint}</span>
             </button>
             {o.id !== 'none' && (
-              <button type="button" className="sound-set__play icon-btn icon-btn--plain" onClick={() => previewSoundSet(o.id)} aria-label={`Play ${o.label}`} title="Play send, receive and reaction">
+              <button type="button" className="sound-set__play icon-btn icon-btn--plain" onClick={() => previewSoundSet(o.id)} aria-label={`Play ${o.label}`} title="Play">
                 <Play size={14} strokeWidth={2} aria-hidden />
               </button>
             )}

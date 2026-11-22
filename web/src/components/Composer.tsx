@@ -6,7 +6,6 @@ import { Menu } from './Menu';
 import { endCall, isCallActive, startCall, useVoice } from '../voice/call';
 import { useDictation } from '../voice/dictation';
 import { markSent } from '../lib/sendFlight';
-import { playSound } from '../lib/sounds';
 
 const MAX_H = 200;
 const drafts = new Map<string, string>();
@@ -64,7 +63,6 @@ export function Composer({ bot, running, pausePending }: { bot: Bot; running: bo
     try {
       const rect = ref.current?.getBoundingClientRect();
       if (rect) markSent(bot.id, t, rect);
-      playSound('send');
       await api.send(bot.id, t, mode);
       if (drafts.get(bot.id) === text) drafts.delete(bot.id);
       setText((current) => current === text ? '' : current);

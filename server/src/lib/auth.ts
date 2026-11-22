@@ -32,7 +32,7 @@ export function userFromToken(t: string | undefined): User | null {
   const r = db
     .prepare('SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires_at>?')
     .get(t, now()) as any;
-  return r ? { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url, soundSet: r.sound_set === 'none' ? 'none' : 'imessage' } : null;
+  return r ? { id: r.id, email: r.email, name: r.name, avatarUrl: r.avatar_url, soundSet: r.sound_set === 'none' ? 'none' : 'bubble' } : null;
 }
 
 export function userFromCookieHeader(cookieHeader: string | undefined): User | null {
