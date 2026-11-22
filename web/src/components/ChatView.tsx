@@ -57,7 +57,7 @@ export function ChatView() {
 
   return (
     <main className="chat" style={botVars(bot.avatarColor)}>
-      <Transcript bot={bot} rows={rows} loaded={!!transcript?.loaded} />
+      <Transcript bot={bot} rows={rows} loaded={!!transcript?.loaded} running={!!live?.isRunning} />
       <VoiceCallBar />
       <Composer key={bot.id} bot={bot} running={!!live?.isRunning} pausePending={pendingPause !== undefined} />
       <header className="chat__header">

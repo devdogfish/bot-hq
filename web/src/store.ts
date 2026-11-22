@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { Bot, ComputerState, LiveState, Routine, Row, ServerEvent, SoundSet, User } from '@shared/types';
 import { playSound, replySound } from './lib/sounds';
 import { noteLiveReaction, reactionKey } from './lib/liveReactions';
+import { arrivalKey, noteArrival } from './lib/arrivals';
 import { ApiError, api } from './lib/api';
 
 export type ModalKind = 'create' | 'search' | 'group' | null;
@@ -209,8 +210,14 @@ export const useStore = create<State>((set, get) => ({
       const bySeq = { ...base.bySeq };
       for (const r of rows) {
         const cur = bySeq[r.seq];
-        // A new reply from the Agent in the open chat gets the receive sound (live events only, not loads).
-        if (!cur && live && botId === s.selectedBotId && r.body.type === 'message' && r.body.role === 'assistant') receive = true;
+        // Agent replies arrive whole: the moment a message stops streaming (or lands already complete), it
+        // appears with the arrival motion and, in the open chat, the reply sound. Live events only, not loads.
+        const done = r.body.type === 'message' && r.body.role === 'assistant' && !r.body.streaming && !!r.body.text.trim();
+        const wasPending = !cur || (cur.body.type === 'message' && !!cur.body.streaming);
+        if (live && done && wasPending) {
+          noteArrival(arrivalKey(botId, r.seq));
+          if (botId === s.selectedBotId) receive = true;
+        }
         // A tapback that just landed animates in, and sounds in the open chat.
         const reaction = r.body.type === 'message' ? r.body.reaction : undefined;
         const before = cur?.body.type === 'message' ? cur.body.reaction : undefined;
